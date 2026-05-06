@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'sachinmane24@gmail.com' && isEmailVerified();
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Trades Collection ---
+    match /trades/{tradeId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(tradeId) && isValidTrade(request.resource.data);
+      allow update: if false; // Trades are immutable logs
+      allow delete: if isAdmin();
+
+      function isValidTrade(data) {
+        return data.keys().hasAll(['timestamp', 'score', 'gamma', 'oi_bias', 'trap', 'pnl', 'win'])
+          && data.keys().size() == 7
+          && data.timestamp is string && data.timestamp.size() <= 100
+          && data.score is number
+          && data.gamma is number
+          && data.oi_bias is number
+          && data.trap is bool
+          && data.pnl is number
+          && data.win is bool;
+      }
+    }
+  }
+}

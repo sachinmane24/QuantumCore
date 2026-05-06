@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "Trade": {
+      "title": "Trade",
+      "description": "A record of a completed trade for strategy analysis.",
+      "type": "object",
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of the trade."
+        },
+        "score": {
+          "type": "number",
+          "description": "Strategy score at the time of trade."
+        },
+        "gamma": {
+          "type": "number",
+          "description": "Gamma value at the time of trade."
+        },
+        "oi_bias": {
+          "type": "number",
+          "description": "OI Bias value at the time of trade."
+        },
+        "trap": {
+          "type": "boolean",
+          "description": "Whether a trap was detected."
+        },
+        "pnl": {
+          "type": "number",
+          "description": "Profit or loss from the trade."
+        },
+        "win": {
+          "type": "boolean",
+          "description": "Whether the trade was a win."
+        }
+      },
+      "required": [
+        "timestamp",
+        "score",
+        "pnl",
+        "win"
+      ]
+    }
+  },
+  "firestore": {
+    "/trades/{tradeId}": {
+      "schema": "Trade",
+      "description": "Collection of all executed trades."
+    }
+  }
+}

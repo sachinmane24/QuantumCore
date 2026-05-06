@@ -46,7 +46,7 @@ class ExecutionEngine {
     console.log(`Executed ${bias} strategy. Positions:`, this.activePositions);
   }
 
-  updatePnL() {
+  async updatePnL() {
     if (this.activePositions.length === 0) return;
     
     // Simulate real-time PnL movement
@@ -54,15 +54,15 @@ class ExecutionEngine {
     this.pnl += movement;
 
     // Check Rolling 
-    this.checkRolling();
+    await this.checkRolling();
 
     // Check Risk Management
     if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
-      this.exitAll('SL/Target Hit');
+      await this.exitAll('SL/Target Hit');
     }
   }
 
-  private checkRolling() {
+  private async checkRolling() {
     if (this.activePositions.length === 0) return;
     if (this.rollsToday >= config.MAX_ROLLS) return;
     const now = Date.now();
@@ -80,14 +80,14 @@ class ExecutionEngine {
       console.log('Rolling Position...');
       this.rollsToday++;
       this.lastRollTime = now;
-      this.exitAll('Rolling');
-      this.executeTrade(sellPos.type === 'PE' ? 'BULLISH' : 'BEARISH');
+      await this.exitAll('Rolling');
+      await this.executeTrade(sellPos.type === 'PE' ? 'BULLISH' : 'BEARISH');
     }
   }
 
-  exitAll(reason: string) {
+  async exitAll(reason: string) {
     if (this.activePositions.length > 0) {
-      tradeLogger.logTrade({
+      await tradeLogger.logTrade({
         timestamp: new Date().toISOString(),
         score: this.lastTradeScore?.total || 0,
         gamma: this.lastTradeScore?.gamma || 0,

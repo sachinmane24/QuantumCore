@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import fs from 'fs';
-import path from 'path';
+import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
+import firebaseConfig from '../../firebase-applet-config.json' assert { type: 'json' };
 
 export interface TradeLogEntry {
+  id?: string;
   timestamp: string;
   score: number;
   gamma: number;
@@ -16,51 +18,42 @@ export interface TradeLogEntry {
   win: boolean;
 }
 
-const LOG_FILE = path.join(process.cwd(), 'data', 'trade_log.csv');
+// Initializing Firebase Admin if not already initialized
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+
+// Accessing the specific Firestore database instance
+const db = getFirestore(firebaseConfig.firestoreDatabaseId);
+const tradesCollection = db.collection('trades');
 
 class TradeLogger {
-  constructor() {
-    this.ensureDirectory();
-    this.ensureHeader();
-  }
-
-  private ensureDirectory() {
-    const dir = path.dirname(LOG_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+  async logTrade(entry: TradeLogEntry) {
+    try {
+      console.log("[LOGGER] Logging trade to Firestore:", entry.timestamp);
+      await tradesCollection.add({
+        ...entry,
+        // Ensure server-side consistency for timestamps if possible, 
+        // but here we use the ISO string provided by the engine.
+      });
+    } catch (err) {
+      console.error("[LOGGER] Failed to log trade to Firestore:", err);
     }
   }
 
-  private ensureHeader() {
-    if (!fs.existsSync(LOG_FILE)) {
-      const header = 'timestamp,score,gamma,oi_bias,trap,pnl,win\n';
-      fs.writeFileSync(LOG_FILE, header);
+  async getLogs(): Promise<TradeLogEntry[]> {
+    try {
+      const snapshot = await tradesCollection.orderBy('timestamp', 'desc').limit(100).get();
+      return snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as TradeLogEntry[];
+    } catch (err) {
+      console.error("[LOGGER] Failed to fetch trade logs from Firestore:", err);
+      return [];
     }
-  }
-
-  logTrade(entry: TradeLogEntry) {
-    const row = `${entry.timestamp},${entry.score},${entry.gamma},${entry.oi_bias},${entry.trap},${entry.pnl},${entry.win}\n`;
-    fs.appendFileSync(LOG_FILE, row);
-  }
-
-  getLogs(): TradeLogEntry[] {
-    if (!fs.existsSync(LOG_FILE)) return [];
-    
-    const content = fs.readFileSync(LOG_FILE, 'utf-8');
-    const lines = content.trim().split('\n').slice(1); // Skip header
-
-    return lines.map(line => {
-      const [timestamp, score, gamma, oi_bias, trap, pnl, win] = line.split(',');
-      return {
-        timestamp,
-        score: Number(score),
-        gamma: Number(gamma),
-        oi_bias: Number(oi_bias),
-        trap: trap === 'true',
-        pnl: Number(pnl),
-        win: win === 'true'
-      };
-    });
   }
 }
 

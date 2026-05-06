@@ -84,7 +84,7 @@ async function startServer() {
 
       // 2. State Update
       try {
-        executionEngine.updatePnL();
+        await executionEngine.updatePnL();
       } catch (err) {
         console.error("[SYSTEM] PnL update failed:", err);
       }
@@ -281,8 +281,9 @@ async function startServer() {
     });
   });
 
-  apiRouter.get("/trade-logs", (req, res) => {
-    res.json(tradeLogger.getLogs());
+  apiRouter.get("/trade-logs", async (req, res) => {
+    const logs = await tradeLogger.getLogs();
+    res.json(logs);
   });
 
   apiRouter.post("/execute", (req, res) => {
@@ -291,8 +292,8 @@ async function startServer() {
     res.json({ status: "success" });
   });
 
-  apiRouter.post("/exit", (req, res) => {
-    executionEngine.exitAll("User Manual Exit");
+  apiRouter.post("/exit", async (req, res) => {
+    await executionEngine.exitAll("User Manual Exit");
     res.json({ status: "success" });
   });
 
