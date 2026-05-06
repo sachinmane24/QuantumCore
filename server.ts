@@ -179,6 +179,36 @@ async function startServer() {
     });
   });
 
+  apiRouter.get("/backtest/historical", async (req, res) => {
+    const { from, to, interval = "minute" } = req.query;
+    
+    if (!accessToken || !kiteInstance) {
+      return res.status(401).json({ error: "Kite Connect not authorized. Please log in first." });
+    }
+    
+    try {
+      // Instrument token for NSE:NIFTY 50 is 256265
+      const instrumentToken = 256265; 
+      console.log(`[BACKTEST] Fetching historical data from ${from} to ${to}`);
+      
+      const candles = await kiteInstance.getHistoricalData(
+        instrumentToken, 
+        interval.toString(), 
+        from?.toString(), 
+        to?.toString()
+      );
+      
+      res.json({
+        symbol: "NIFTY 50",
+        instrument_token: instrumentToken,
+        candles
+      });
+    } catch (err) {
+      console.error("[BACKTEST] Zerodha historical fetch failed:", err);
+      res.status(500).json({ error: "Failed to fetch historical data from Zerodha. Ensure you have the 'Historical Data' add-on active." });
+    }
+  });
+
   // Data Routes
   apiRouter.get("/market-data", (req, res) => {
     res.json({

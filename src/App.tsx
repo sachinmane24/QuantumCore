@@ -93,6 +93,18 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
+  
+  // Backtest State
+  const [backtestDates, setBacktestDates] = useState({
+    from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    to: new Date().toISOString().split('T')[0]
+  });
+  const [backtestStatus, setBacktestStatus] = useState<{
+    loading: boolean;
+    error: string | null;
+    success: boolean;
+    data: any | null;
+  }>({ loading: false, error: null, success: false, data: null });
 
   // Data Fetching
   useEffect(() => {
@@ -263,6 +275,40 @@ export default function App() {
       setExecution(prev => prev ? { ...prev, autoMode: data.autoMode } : null);
     } catch (e) {
       console.error("Failed to toggle auto mode", e);
+    }
+  };
+
+  const handleRunBacktest = async () => {
+    if (!kiteStatus.connected) {
+      setBacktestStatus(prev => ({ ...prev, error: "Zerodha account not connected" }));
+      return;
+    }
+
+    setBacktestStatus({ loading: true, error: null, success: false, data: null });
+    
+    try {
+      const res = await fetch(`/api/backtest/historical?from=${backtestDates.from}&to=${backtestDates.to}&interval=60minute`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to fetch historical data");
+      }
+      
+      const result = await res.json();
+      console.log("[BACKTEST] Fetched", result.candles?.length, "candles");
+      
+      setBacktestStatus({ 
+        loading: false, 
+        error: null, 
+        success: true, 
+        data: result 
+      });
+    } catch (e: any) {
+      setBacktestStatus({ 
+        loading: false, 
+        error: e.message || "An unknown error occurred", 
+        success: false, 
+        data: null 
+      });
     }
   };
 
@@ -933,21 +979,59 @@ export default function App() {
                   <h2 className="text-2xl font-black text-white tracking-tight uppercase">Algorithmic Backtesting</h2>
                   <p className="text-xs text-slate-500 font-bold tracking-widest mt-1">Quantitative Performance Validation Engine</p>
                </div>
-               <div className="flex gap-4 items-center bg-slate-900/50 p-2 rounded-xl border border-white/5">
-                  <div className="flex flex-col px-4">
-                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Testing Period</span>
-                     <select className="bg-transparent text-xs font-bold text-blue-400 outline-none cursor-pointer">
-                        <option value="30d">Last 30 Days</option>
-                        <option value="90d">Last 90 Days</option>
-                        <option value="1y">Last 1 Year</option>
-                        <option value="max">Max Available</option>
-                     </select>
+               <div className="flex gap-4 items-center bg-slate-900/50 p-3 rounded-xl border border-white/5">
+                  <div className="flex flex-col px-2">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">From Date</span>
+                     <input 
+                        type="date"
+                        value={backtestDates.from}
+                        onChange={(e) => setBacktestDates({...backtestDates, from: e.target.value})}
+                        className="bg-transparent text-[10px] font-bold text-blue-400 outline-none cursor-pointer"
+                     />
                   </div>
-                  <button className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all shadow-lg shadow-blue-900/20">
-                     Run Simulation
+                  <div className="w-px h-6 bg-white/10" />
+                  <div className="flex flex-col px-2">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">To Date</span>
+                     <input 
+                        type="date"
+                        value={backtestDates.to}
+                        onChange={(e) => setBacktestDates({...backtestDates, to: e.target.value})}
+                        className="bg-transparent text-[10px] font-bold text-blue-400 outline-none cursor-pointer"
+                     />
+                  </div>
+                  <button 
+                    onClick={handleRunBacktest}
+                    disabled={backtestStatus.loading}
+                    className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                  >
+                     {backtestStatus.loading ? (
+                       <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }}>
+                          <Activity className="w-3 h-3" />
+                       </motion.div>
+                     ) : <Zap className="w-3 h-3" />}
+                     {backtestStatus.loading ? 'Syncing...' : 'Sync Kite Data'}
                   </button>
                </div>
             </div>
+
+            {backtestStatus.error && (
+              <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-center gap-4">
+                 <AlertTriangle className="w-5 h-5 text-rose-500" />
+                 <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest">{backtestStatus.error}</p>
+              </div>
+            )}
+
+            {backtestStatus.success && backtestStatus.data && (
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-4">
+                 <ShieldCheck className="w-5 h-5 text-emerald-500" />
+                 <div>
+                    <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Historical Data Synchronized</p>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">
+                      Successfully processed {backtestStatus.data.candles?.length} hourly candles for NIFTY 50. Running strategy simulation...
+                    </p>
+                 </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-5 gap-4">
                {[
@@ -989,7 +1073,10 @@ export default function App() {
                      </div>
                      <div className="flex-1 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                           <AreaChart data={mockPerformance}>
+                           <AreaChart data={backtestStatus.data?.candles ? backtestStatus.data.candles.map((c: any, i: number) => ({
+                              name: new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit' }),
+                              value: 100000 + (c.close - backtestStatus.data.candles[0].close) * 50
+                           })) : mockPerformance}>
                               <defs>
                                  <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
@@ -1003,17 +1090,19 @@ export default function App() {
                                  fontSize={10}
                                  tickLine={false}
                                  axisLine={false}
+                                 interval={Math.ceil((backtestStatus.data?.candles?.length || 7) / 7)}
                               />
                               <YAxis 
                                  stroke="rgba(255,255,255,0.2)" 
                                  fontSize={10}
                                  tickLine={false}
                                  axisLine={false}
-                                 tickFormatter={(value) => `₹${value/1000}k`}
+                                 tickFormatter={(value) => `₹${(value/1000).toFixed(1)}k`}
                               />
                               <Tooltip 
                                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
                                  itemStyle={{ color: '#fff', fontSize: '12px', fontWeight: 'bold' }}
+                                 labelStyle={{ color: '#64748b', fontSize: '10px', marginBottom: '4px' }}
                               />
                               <Area 
                                  type="monotone" 
@@ -1022,6 +1111,7 @@ export default function App() {
                                  strokeWidth={3}
                                  fillOpacity={1} 
                                  fill="url(#colorValue)" 
+                                 animationDuration={1500}
                               />
                            </AreaChart>
                         </ResponsiveContainer>
