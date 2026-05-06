@@ -8,6 +8,7 @@ RUN npm install
 COPY . .
 
 # Build the frontend
+ENV NODE_ENV=production
 RUN npm run build
 
 EXPOSE 3000
