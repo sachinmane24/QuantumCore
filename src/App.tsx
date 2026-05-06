@@ -419,7 +419,7 @@ export default function App() {
         <header className="h-16 border-b border-terminal-line px-8 flex items-center justify-between bg-black/20 backdrop-blur-xl shrink-0 z-10">
           <div className="flex items-center space-x-12">
             <div>
-              <h1 className="text-xs font-black tracking-[0.3em] uppercase leading-none text-white">Quantum Core v5.1</h1>
+              <h1 className="text-xs font-black tracking-[0.3em] uppercase leading-none text-white">Quantum Core v5.2</h1>
               <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1 font-bold">Terminal Interface Engine (Stable)</p>
             </div>
           

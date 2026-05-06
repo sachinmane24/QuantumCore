@@ -32,7 +32,7 @@ async function startServer() {
     // Request Logger with Versioning
     app.use((req, res, next) => {
       const timestamp = new Date().toISOString();
-      console.log(`[V5-DIAG] ${timestamp} - ${req.method} ${req.url}`);
+      console.log(`[V5.2-DIAG] ${timestamp} - ${req.method} ${req.url}`);
       next();
     });
 
@@ -319,7 +319,7 @@ async function startServer() {
   }
 
   app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`[V5] Quantum Server listening on port ${PORT}`);
+    console.log(`[V5.2] Quantum Server listening on port ${PORT}`);
   });
 
   } catch (err) {
