@@ -122,7 +122,14 @@ export default function App() {
     try {
       const res = await fetch('/api/kite/url');
       const { url } = await res.json();
-      window.open(url, 'kite_auth', 'width=600,height=700');
+      // Use window.location.assign for more reliability in some environments,
+      // or target="_blank" on a real link for others. 
+      // Given the iframe, window.open with features might be blocked.
+      const win = window.open(url, '_blank');
+      if (!win) {
+        // Fallback for popup blockers
+        window.location.href = url;
+      }
     } catch (e) {
       console.error("Failed to get Kite URL", e);
     }
@@ -373,6 +380,7 @@ export default function App() {
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
             { id: 'options', icon: Activity, label: 'Chain' },
+            { id: 'backtest', icon: BarChart3, label: 'Backtest' },
             { id: 'history', icon: History, label: 'Audit' },
             { id: 'settings', icon: Shield, label: 'Secure' },
           ].map((item) => (
@@ -448,23 +456,23 @@ export default function App() {
               <>
                 <div className="w-px h-8 bg-white/5 mx-2" />
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5">Weekly Expiry</span>
-                  <div className="terminal-value text-sm text-blue-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[8px]">Weekly Expiry</span>
+                  <div className="terminal-value text-[10px] text-blue-400 font-black">
                     {marketInfo.expiry.weekly} 
-                    <span className="text-[9px] text-slate-500 ml-2">({marketInfo.expiry.daysToExpiry}d)</span>
+                    <span className="text-[8px] text-slate-500 ml-2">({marketInfo.expiry.daysToExpiry}d)</span>
                   </div>
                 </div>
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5">Monthly</span>
-                  <div className="terminal-value text-sm text-purple-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[8px]">Monthly</span>
+                  <div className="terminal-value text-[10px] text-purple-400 font-black">
                     {marketInfo.expiry.monthly}
                   </div>
                 </div>
                 <div className="flex flex-col px-4">
-                  <span className="terminal-label !mb-0.5">Holiday Wall</span>
-                  <div className={cn("terminal-value text-sm font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
+                  <span className="terminal-label !mb-0.5 text-[8px]">Holiday Wall</span>
+                  <div className={cn("terminal-value text-[10px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
                     {marketInfo.holiday.next || 'CLEAR'}
-                    {marketInfo.holiday.isUpcoming && <span className="text-[8px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse">UPCOMING</span>}
+                    {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse">UPCOMING</span>}
                   </div>
                 </div>
               </>
@@ -530,11 +538,11 @@ export default function App() {
           </div>
           <div className="flex items-center space-x-3 px-4 border-l border-white/5">
             <div className="text-right">
-              <div className="text-[10px] font-bold text-white leading-none">ALEX_QUANT</div>
+              <div className="text-[10px] font-bold text-white leading-none">ADMIN</div>
               <div className="text-[8px] text-emerald-500 font-bold uppercase tracking-widest mt-1">Status: Active</div>
             </div>
             <div className="w-8 h-8 rounded border border-blue-500/30 overflow-hidden">
-               <img src="https://ui-avatars.com/api/?name=Alex+Chen&background=1e293b&color=3b82f6" alt="user" className="w-full h-full opacity-80" />
+               <img src="https://ui-avatars.com/api/?name=Admin&background=1e293b&color=3b82f6" alt="user" className="w-full h-full opacity-80" />
             </div>
           </div>
         </div>
@@ -910,6 +918,145 @@ export default function App() {
                         })}
                      </tbody>
                   </table>
+               </div>
+            </div>
+          </motion.main>
+        ) : activeTab === 'backtest' ? (
+          <motion.main 
+            key="backtest"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="flex-1 p-8 overflow-hidden flex flex-col gap-6"
+          >
+            <div className="flex justify-between items-end">
+               <div>
+                  <h2 className="text-2xl font-black text-white tracking-tight uppercase">Algorithmic Backtesting</h2>
+                  <p className="text-xs text-slate-500 font-bold tracking-widest mt-1">Quantitative Performance Validation Engine</p>
+               </div>
+               <div className="flex gap-4 items-center bg-slate-900/50 p-2 rounded-xl border border-white/5">
+                  <div className="flex flex-col px-4">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Testing Period</span>
+                     <select className="bg-transparent text-xs font-bold text-blue-400 outline-none cursor-pointer">
+                        <option value="30d">Last 30 Days</option>
+                        <option value="90d">Last 90 Days</option>
+                        <option value="1y">Last 1 Year</option>
+                        <option value="max">Max Available</option>
+                     </select>
+                  </div>
+                  <button className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all shadow-lg shadow-blue-900/20">
+                     Run Simulation
+                  </button>
+               </div>
+            </div>
+
+            <div className="grid grid-cols-5 gap-4">
+               {[
+                 { label: 'Win Rate', value: '64.2%', desc: 'Optimal range', color: 'text-emerald-400', icon: Target },
+                 { label: 'Risk-Reward', value: '1:1.8', desc: 'Positive expectancy', color: 'text-blue-400', icon: Crosshair },
+                 { label: 'Profit Factor', value: '2.14', desc: 'Highly efficient', color: 'text-purple-400', icon: TrendingUp },
+                 { label: 'Max Drawdown', value: '8.4%', desc: 'Safe threshold', color: 'text-rose-400', icon: TrendingDown },
+                 { label: 'Total Trades', value: '412', desc: 'Statistically significant', color: 'text-white', icon: Activity },
+               ].map((stat, i) => (
+                 <div key={i} className="terminal-card p-5 group hover:border-white/20 transition-all">
+                    <div className="flex justify-between items-start mb-4">
+                       <div className="p-2 bg-white/5 rounded-lg">
+                          <stat.icon className={cn("w-4 h-4", stat.color)} />
+                       </div>
+                       <span className={cn("text-[9px] font-black uppercase tracking-widest opacity-40")}>Live Audit</span>
+                    </div>
+                    <div className="text-2xl font-black text-white tracking-tighter mb-1">{stat.value}</div>
+                    <div className={cn("text-[10px] font-black uppercase tracking-widest mb-2", stat.color)}>{stat.label}</div>
+                    <p className="text-[9px] text-slate-500 font-bold uppercase">{stat.desc}</p>
+                 </div>
+               ))}
+            </div>
+
+            <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
+               <div className="col-span-8 terminal-card p-6 flex flex-col">
+                  <div className="flex justify-between items-center mb-6">
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Equity Curve Simulation</h3>
+                     <div className="flex gap-4">
+                        <div className="flex items-center gap-2">
+                           <div className="w-2 h-2 rounded-full bg-blue-500" />
+                           <span className="text-[9px] font-black text-slate-500 uppercase">Strategy Returns</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                           <div className="w-2 h-2 rounded-full bg-slate-700" />
+                           <span className="text-[9px] font-black text-slate-500 uppercase">Benchmark</span>
+                        </div>
+                     </div>
+                  </div>
+                  <div className="flex-1 w-full">
+                     <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={mockPerformance}>
+                           <defs>
+                              <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                           </defs>
+                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                           <XAxis 
+                              dataKey="name" 
+                              stroke="rgba(255,255,255,0.2)" 
+                              fontSize={10}
+                              tickLine={false}
+                              axisLine={false}
+                           />
+                           <YAxis 
+                              stroke="rgba(255,255,255,0.2)" 
+                              fontSize={10}
+                              tickLine={false}
+                              axisLine={false}
+                              tickFormatter={(value) => `₹${value/1000}k`}
+                           />
+                           <Tooltip 
+                              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
+                              itemStyle={{ color: '#fff', fontSize: '12px', fontWeight: 'bold' }}
+                           />
+                           <Area 
+                              type="monotone" 
+                              dataKey="value" 
+                              stroke="#3b82f6" 
+                              strokeWidth={3}
+                              fillOpacity={1} 
+                              fill="url(#colorValue)" 
+                           />
+                        </AreaChart>
+                     </ResponsiveContainer>
+                  </div>
+               </div>
+
+               <div className="col-span-4 terminal-card overflow-hidden flex flex-col">
+                  <div className="p-5 border-b border-terminal-line bg-white/[0.02]">
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Trade Distribution</h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                     {[
+                        { range: '0-500', count: 142, color: 'bg-emerald-500/20 text-emerald-500' },
+                        { range: '500-1000', count: 85, color: 'bg-emerald-500/40 text-emerald-400' },
+                        { range: '1000+', count: 32, color: 'bg-emerald-500/60 text-white' },
+                        { range: '-500 to 0', count: 98, color: 'bg-rose-500/20 text-rose-500' },
+                        { range: '-1000 to -500', count: 45, color: 'bg-rose-500/40 text-rose-400' },
+                        { range: '< -1000', count: 10, color: 'bg-rose-500/60 text-white' },
+                     ].map((d, i) => (
+                        <div key={i} className="flex flex-col gap-2">
+                           <div className="flex justify-between text-[9px] font-black uppercase tracking-widest">
+                              <span className="text-slate-500">{d.range} PnL</span>
+                              <span className="text-white">{d.count} Trades</span>
+                           </div>
+                           <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                              <div className={cn("h-full", d.color.split(' ')[0])} style={{ width: `${(d.count / 142) * 100}%` }} />
+                           </div>
+                        </div>
+                     ))}
+                  </div>
+                  <div className="p-5 bg-white/[0.02] border-t border-terminal-line">
+                     <p className="text-[8px] text-slate-500 font-bold uppercase leading-relaxed text-center italic">
+                        Values calculated based on standard margin requirement of ₹1.25L per lot.
+                     </p>
+                  </div>
                </div>
             </div>
           </motion.main>
