@@ -96,7 +96,7 @@ export default function App() {
   
   // Backtest State
   const [backtestDates, setBacktestDates] = useState({
-    from: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    from: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     to: new Date().toISOString().split('T')[0]
   });
   const [backtestStatus, setBacktestStatus] = useState<{
@@ -427,7 +427,7 @@ export default function App() {
             { id: 'options', icon: Activity, label: 'Chain' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
             { id: 'history', icon: History, label: 'Audit' },
-            { id: 'settings', icon: Shield, label: 'Settings' },
+            { id: 'settings', icon: Shield, label: 'Settings', alert: !kiteStatus.hasConfig },
           ].map((item) => (
             <button
               key={item.id}
@@ -440,6 +440,9 @@ export default function App() {
               )}
             >
               <item.icon className="w-5 h-5" />
+              {item.alert && !kiteStatus.hasConfig && (
+                <div className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full animate-pulse" />
+              )}
               {activeTab === item.id && (
                 <motion.div 
                   layoutId="activeTab"
@@ -863,6 +866,37 @@ export default function App() {
                      </div>
                   </div>
                 )}
+              </section>
+
+              <section className="terminal-card bg-emerald-600/[0.03] border-emerald-500/20 p-6 flex flex-col gap-4">
+                 <div className="flex items-center gap-3">
+                    <div className="p-2 bg-emerald-600/10 rounded-lg">
+                       <Brain className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Tactical Strategy Advisory</h3>
+                 </div>
+                 <div className="space-y-4">
+                    <div className="space-y-1">
+                       <div className="text-[9px] font-black text-white uppercase tracking-widest opacity-60">Primary Recommendation</div>
+                       <p className="text-[10px] text-slate-300 font-bold leading-relaxed">
+                          {strategy?.score.bias === 'BULLISH' 
+                            ? "Aggressive Bullish Bias. Recommend PE Credit Spreads for optimal Theta yield." 
+                            : strategy?.score.bias === 'BEARISH' 
+                              ? "Confirmed Bearish Breakdown. Initiate CE Credit Spreads at next resistance."
+                              : "Neutral Range Detected. Avoid directionals, prioritize Iron Fly strategies."}
+                       </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                       <div className="bg-white/5 p-2 rounded border border-white/5">
+                          <span className="text-[8px] text-slate-500 font-black uppercase">Edge Window</span>
+                          <div className="text-[10px] text-blue-400 font-bold">14:15 - 15:30 IST</div>
+                       </div>
+                       <div className="bg-white/5 p-2 rounded border border-white/5">
+                          <span className="text-[8px] text-slate-500 font-black uppercase">Volatility Edge</span>
+                          <div className="text-[10px] text-emerald-400 font-bold">IV Expansion Alert</div>
+                       </div>
+                    </div>
+                 </div>
               </section>
 
               <section className="terminal-card bg-white/[0.01] overflow-hidden flex flex-col h-[280px]">
@@ -1289,6 +1323,15 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
+                   <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl mb-4">
+                      <h5 className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                         <Info className="w-3 h-3" />
+                         How to configure API Keys?
+                      </h5>
+                      <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
+                         Direct entry is disabled for security. Open <span className="text-white font-bold">Settings (⚙️)</span> in the editor, go to <span className="text-white font-bold">Environment Variables</span>, and add <span className="text-blue-400 font-bold">KITE_API_KEY</span> and <span className="text-blue-400 font-bold">KITE_API_SECRET</span>.
+                      </p>
+                   </div>
                    <p className="text-xs text-slate-400 leading-relaxed">
                       To enable real-time institutional data, you must provide your KiteConnect API credentials in the environment settings. 
                       Navigate to <span className="text-blue-400 font-bold">Settings</span> menu in this editor and declare the following variables:
