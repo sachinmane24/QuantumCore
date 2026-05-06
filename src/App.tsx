@@ -198,7 +198,7 @@ export default function App() {
     fetchData();
     const interval = setInterval(fetchData, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isLoggedIn]);
 
   const handleExecute = async (bias: 'BULLISH' | 'BEARISH') => {
     await fetch('/api/execute', {
