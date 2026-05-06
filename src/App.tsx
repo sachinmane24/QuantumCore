@@ -123,8 +123,12 @@ export default function App() {
       const res = await fetch('/api/kite/url');
       const { url } = await res.json();
       
-      // Using _top to break out of iframe and handle Kite login reliably
-      window.open(url, '_top');
+      // Breaking out of iframe to the top window is the most reliable login method
+      if (window.top) {
+        window.top.location.href = url;
+      } else {
+        window.location.href = url;
+      }
     } catch (e) {
       console.error("Failed to get Kite URL", e);
     }
