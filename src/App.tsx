@@ -122,14 +122,10 @@ export default function App() {
     try {
       const res = await fetch('/api/kite/url');
       const { url } = await res.json();
-      // Use window.location.assign for more reliability in some environments,
-      // or target="_blank" on a real link for others. 
-      // Given the iframe, window.open with features might be blocked.
-      const win = window.open(url, '_blank');
-      if (!win) {
-        // Fallback for popup blockers
-        window.location.href = url;
-      }
+      
+      // Using window.location.href is more reliable than window.open in many restricted environments
+      // and avoids the 'about:blank' issue with popup blockers.
+      window.location.href = url;
     } catch (e) {
       console.error("Failed to get Kite URL", e);
     }
@@ -414,7 +410,7 @@ export default function App() {
           </button>
           <div className="w-10 h-10 rounded-xl border border-terminal-line overflow-hidden p-0.5">
             <img 
-              src="https://ui-avatars.com/api/?name=Alex+Chen&background=1e293b&color=3b82f6" 
+              src="https://ui-avatars.com/api/?name=Admin&background=1e293b&color=3b82f6" 
               alt="user" 
               className="w-full h-full rounded-lg opacity-80" 
             />
@@ -456,23 +452,23 @@ export default function App() {
               <>
                 <div className="w-px h-8 bg-white/5 mx-2" />
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[8px]">Weekly Expiry</span>
-                  <div className="terminal-value text-[10px] text-blue-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
+                  <div className="terminal-value text-[11px] text-blue-400 font-black">
                     {marketInfo.expiry.weekly} 
-                    <span className="text-[8px] text-slate-500 ml-2">({marketInfo.expiry.daysToExpiry}d)</span>
+                    <span className="text-[9px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
                   </div>
                 </div>
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[8px]">Monthly</span>
-                  <div className="terminal-value text-[10px] text-purple-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Monthly</span>
+                  <div className="terminal-value text-[11px] text-purple-400 font-black">
                     {marketInfo.expiry.monthly}
                   </div>
                 </div>
                 <div className="flex flex-col px-4">
-                  <span className="terminal-label !mb-0.5 text-[8px]">Holiday Wall</span>
-                  <div className={cn("terminal-value text-[10px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
+                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Holiday Wall</span>
+                  <div className={cn("terminal-value text-[11px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
                     {marketInfo.holiday.next || 'CLEAR'}
-                    {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse">UPCOMING</span>}
+                    {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse leading-none py-0.5">UPCOMING</span>}
                   </div>
                 </div>
               </>
