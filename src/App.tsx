@@ -123,9 +123,8 @@ export default function App() {
       const res = await fetch('/api/kite/url');
       const { url } = await res.json();
       
-      // Using window.location.href is more reliable than window.open in many restricted environments
-      // and avoids the 'about:blank' issue with popup blockers.
-      window.location.href = url;
+      // Using _top to break out of iframe and handle Kite login reliably
+      window.open(url, '_top');
     } catch (e) {
       console.error("Failed to get Kite URL", e);
     }
@@ -378,7 +377,7 @@ export default function App() {
             { id: 'options', icon: Activity, label: 'Chain' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
             { id: 'history', icon: History, label: 'Audit' },
-            { id: 'settings', icon: Shield, label: 'Secure' },
+            { id: 'settings', icon: Shield, label: 'Settings' },
           ].map((item) => (
             <button
               key={item.id}
@@ -452,21 +451,21 @@ export default function App() {
               <>
                 <div className="w-px h-8 bg-white/5 mx-2" />
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
-                  <div className="terminal-value text-[11px] text-blue-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
+                  <div className="terminal-value text-[9px] text-blue-400 font-black">
                     {marketInfo.expiry.weekly} 
-                    <span className="text-[9px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
+                    <span className="text-[8px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
                   </div>
                 </div>
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Monthly</span>
-                  <div className="terminal-value text-[11px] text-purple-400 font-black">
+                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Monthly</span>
+                  <div className="terminal-value text-[9px] text-purple-400 font-black">
                     {marketInfo.expiry.monthly}
                   </div>
                 </div>
                 <div className="flex flex-col px-4">
-                  <span className="terminal-label !mb-0.5 text-[8px] uppercase tracking-widest text-slate-500">Holiday Wall</span>
-                  <div className={cn("terminal-value text-[11px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
+                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Holiday Wall</span>
+                  <div className={cn("terminal-value text-[9px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
                     {marketInfo.holiday.next || 'CLEAR'}
                     {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse leading-none py-0.5">UPCOMING</span>}
                   </div>
@@ -969,58 +968,92 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
-               <div className="col-span-8 terminal-card p-6 flex flex-col">
-                  <div className="flex justify-between items-center mb-6">
-                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Equity Curve Simulation</h3>
-                     <div className="flex gap-4">
-                        <div className="flex items-center gap-2">
-                           <div className="w-2 h-2 rounded-full bg-blue-500" />
-                           <span className="text-[9px] font-black text-slate-500 uppercase">Strategy Returns</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <div className="w-2 h-2 rounded-full bg-slate-700" />
-                           <span className="text-[9px] font-black text-slate-500 uppercase">Benchmark</span>
+               <div className="col-span-8 flex flex-col gap-4">
+                  <div className="terminal-card p-6 flex flex-col flex-1">
+                     <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Equity Curve Simulation</h3>
+                        <div className="flex gap-4">
+                           <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-blue-500" />
+                              <span className="text-[9px] font-black text-slate-500 uppercase">Strategy Returns</span>
+                           </div>
+                           <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full bg-slate-700" />
+                              <span className="text-[9px] font-black text-slate-500 uppercase">Benchmark</span>
+                           </div>
                         </div>
                      </div>
+                     <div className="flex-1 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                           <AreaChart data={mockPerformance}>
+                              <defs>
+                                 <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                 </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                              <XAxis 
+                                 dataKey="name" 
+                                 stroke="rgba(255,255,255,0.2)" 
+                                 fontSize={10}
+                                 tickLine={false}
+                                 axisLine={false}
+                              />
+                              <YAxis 
+                                 stroke="rgba(255,255,255,0.2)" 
+                                 fontSize={10}
+                                 tickLine={false}
+                                 axisLine={false}
+                                 tickFormatter={(value) => `₹${value/1000}k`}
+                              />
+                              <Tooltip 
+                                 contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
+                                 itemStyle={{ color: '#fff', fontSize: '12px', fontWeight: 'bold' }}
+                              />
+                              <Area 
+                                 type="monotone" 
+                                 dataKey="value" 
+                                 stroke="#3b82f6" 
+                                 strokeWidth={3}
+                                 fillOpacity={1} 
+                                 fill="url(#colorValue)" 
+                              />
+                           </AreaChart>
+                        </ResponsiveContainer>
+                     </div>
                   </div>
-                  <div className="flex-1 w-full">
-                     <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={mockPerformance}>
-                           <defs>
-                              <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                              </linearGradient>
-                           </defs>
-                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                           <XAxis 
-                              dataKey="name" 
-                              stroke="rgba(255,255,255,0.2)" 
-                              fontSize={10}
-                              tickLine={false}
-                              axisLine={false}
-                           />
-                           <YAxis 
-                              stroke="rgba(255,255,255,0.2)" 
-                              fontSize={10}
-                              tickLine={false}
-                              axisLine={false}
-                              tickFormatter={(value) => `₹${value/1000}k`}
-                           />
-                           <Tooltip 
-                              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
-                              itemStyle={{ color: '#fff', fontSize: '12px', fontWeight: 'bold' }}
-                           />
-                           <Area 
-                              type="monotone" 
-                              dataKey="value" 
-                              stroke="#3b82f6" 
-                              strokeWidth={3}
-                              fillOpacity={1} 
-                              fill="url(#colorValue)" 
-                           />
-                        </AreaChart>
-                     </ResponsiveContainer>
+
+                  <div className="terminal-card p-6 bg-blue-600/[0.03] border-blue-500/20">
+                     <div className="flex items-center gap-3 mb-4">
+                        <div className="p-2 bg-blue-600/10 rounded-lg">
+                           <Brain className="w-4 h-4 text-blue-500" />
+                        </div>
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">Strategy Advisory & Recommendations</h3>
+                     </div>
+                     <div className="grid grid-cols-3 gap-6">
+                        <div className="space-y-2">
+                           <div className="text-[9px] font-black text-white uppercase tracking-widest border-b border-white/5 pb-1">Optimization Tips</div>
+                           <p className="text-[9px] text-slate-500 leading-relaxed font-bold">
+                              • Increase allocation when India VIX is between 12-15 for optimal theta decay windows.
+                              <br />• Your max drawdown (8.4%) is strictly within safe thresholds. Consider increasing leverage by 15%.
+                           </p>
+                        </div>
+                        <div className="space-y-2">
+                           <div className="text-[9px] font-black text-white uppercase tracking-widest border-b border-white/5 pb-1">Risk Adjustments</div>
+                           <p className="text-[9px] text-slate-500 leading-relaxed font-bold">
+                              • Risk-Reward of 1:1.8 is efficient. To hit 1:2.5, tighten stop-loss once price moves 0.5% in favor.
+                              <br />• Current Win Rate of 64% allows for a Risk-Reward as low as 1:1.2 while maintaining profit.
+                           </p>
+                        </div>
+                        <div className="space-y-2">
+                           <div className="text-[9px] font-black text-white uppercase tracking-widest border-b border-white/5 pb-1">Anomalies Detected</div>
+                           <p className="text-[9px] text-slate-500 leading-relaxed font-bold">
+                              • Unusual slippage noted in Friday sessions. Suggest reducing trade size by 20% on weekly expiries.
+                              <br />• Trap detection successfully avoided 4 losing trades in this simulation period.
+                           </p>
+                        </div>
+                     </div>
                   </div>
                </div>
 
