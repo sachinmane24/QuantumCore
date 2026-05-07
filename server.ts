@@ -40,6 +40,7 @@ async function startServer() {
   let kiteInstance: any = null;
   let accessToken: string | null = null;
   let niftyInstruments: any[] = [];
+  let allExpiries: string[] = [];
 
   if (apiKey) {
     kiteInstance = new KiteConnect({ api_key: apiKey });
@@ -79,8 +80,8 @@ async function startServer() {
           const atmStrike = Math.round(spotPrice / 50) * 50;
 
           if (niftyInstruments.length > 0) {
-            // Find 5 strikes around ATM
-            for (let i = -2; i <= 2; i++) {
+            // Find 10 strikes around ATM
+            for (let i = -5; i <= 5; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
               const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
@@ -98,12 +99,12 @@ async function startServer() {
             
             let chainData = [];
             if (optionSymbols.length > 0) {
-              const strikes = Array.from(new Set(niftyInstruments.filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`)).map(ins => ins.strike)));
-              strikes.sort((a, b) => a - b);
+              const fetchStrikes = Array.from(new Set(niftyInstruments.filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`)).map(ins => ins.strike)));
+              fetchStrikes.sort((a, b) => a - b);
               
-              for (const strike of strikes) {
-                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE' && optionSymbols.includes(`NFO:${ins.tradingsymbol}`));
-                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE' && optionSymbols.includes(`NFO:${ins.tradingsymbol}`));
+              for (const strike of fetchStrikes) {
+                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
                 
                 const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
                 const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
@@ -112,12 +113,12 @@ async function startServer() {
                   chainData.push({
                     strike,
                     ce_oi: ceQuote?.oi || 0,
-                    ce_oi_change: ceQuote?.oi_day_high - ceQuote?.oi_day_low || 0, // Approximation
+                    ce_oi_change: ceQuote?.oi_day_high - ceQuote?.oi_day_low || 0,
                     pe_oi: peQuote?.oi || 0,
                     pe_oi_change: peQuote?.oi_day_high - peQuote?.oi_day_low || 0,
                     ce_price: ceQuote?.last_price || 0,
                     pe_price: peQuote?.last_price || 0,
-                    iv: 12, // Kite quote doesn't have IV directly
+                    iv: 12,
                     delta: 0.5,
                   });
                 }
@@ -125,6 +126,10 @@ async function startServer() {
             }
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
+            // Log every ~5 mins if interval is 1s (300 ticks)
+            if (Math.floor(Date.now() / 1000) % 300 === 0) {
+               console.log(`[LIVE-SYNC] Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes. Expiries: ${allExpiries.slice(0,2)}`);
+            }
           }
         } catch (err) {
           console.error("Real-time data sync failed:", err);
@@ -221,16 +226,21 @@ async function startServer() {
       try {
         console.log("[SYSTEM] Fetching NFO instruments for NIFTY...");
         const instruments = await kiteInstance.getInstruments(["NFO"]);
-        niftyInstruments = instruments.filter((ins: any) => 
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+
+        const niftyAll = instruments.filter((ins: any) => 
           ins.name === 'NIFTY' && 
           ins.segment === 'NFO-OPT' &&
-          new Date(ins.expiry) >= new Date()
+          new Date(ins.expiry) >= startOfToday
         );
-        // Sort by expiry and pick the nearest one
-        const expiries = Array.from(new Set(niftyInstruments.map((i: any) => i.expiry))).sort();
-        const nearestExpiry = expiries[0];
-        niftyInstruments = niftyInstruments.filter((i: any) => i.expiry === nearestExpiry);
-        console.log(`[SYSTEM] Cached ${niftyInstruments.length} NIFTY instruments for expiry ${nearestExpiry}`);
+        
+        allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort();
+        const nearestExpiry = allExpiries[0];
+        niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
+        
+        console.log(`[SYSTEM] Cached ${niftyInstruments.length} NIFTY instruments for nearest expiry ${nearestExpiry}`);
+        console.log(`[SYSTEM] Detected expiries: ${allExpiries.slice(0, 3).join(', ')}...`);
       } catch (e) {
         console.error("Failed to fetch instruments:", e);
       }
@@ -366,38 +376,58 @@ async function startServer() {
     const today = now.toISOString().split('T')[0];
     const nextHoliday = holidays.find(h => h >= today);
     
-    // Simple Next Thursday Weekly Expiry
-    const getNextThursday = (d: Date) => {
-      const day = d.getDay();
-      const diff = (day <= 4) ? (4 - day) : (11 - day);
-      const next = new Date(d);
-      next.setDate(d.getDate() + diff);
-      return next.toISOString().split('T')[0];
-    };
-
-    const getMonthlyThursday = (d: Date) => {
-      const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      const day = lastDay.getDay();
-      const diff = (day >= 4) ? (day - 4) : (day + 3);
-      const result = new Date(lastDay);
-      result.setDate(lastDay.getDate() - diff);
+    // If we have real expiries from Zerodha, use them
+    let weeklyExpiry = "";
+    let monthlyExpiry = "";
+    
+    if (allExpiries.length > 0) {
+      weeklyExpiry = allExpiries[0];
+      // Find the last expiry of the current month
+      const currentMonth = new Date().getMonth();
+      const currentMonthExpiries = allExpiries.filter(e => new Date(e).getMonth() === currentMonth);
+      monthlyExpiry = currentMonthExpiries[currentMonthExpiries.length - 1] || allExpiries[0];
       
-      if (result.getTime() < d.getTime()) {
-        const nextMonth = new Date(d.getFullYear(), d.getMonth() + 2, 0);
-        const nDay = nextMonth.getDay();
-        const nDiff = (nDay >= 4) ? (nDay - 4) : (nDay + 3);
-        const nextResult = new Date(nextMonth);
-        nextResult.setDate(nextMonth.getDate() - nDiff);
-        return nextResult.toISOString().split('T')[0];
+      // If the nearest is the last of month, monthly is the same
+      if (weeklyExpiry === monthlyExpiry && allExpiries.length > 1) {
+         // Optionally look ahead to next month for the "Monthly" label
       }
-      return result.toISOString().split('T')[0];
-    };
+    } else {
+      // Fallback calculation
+      const getNextThursday = (d: Date) => {
+        const day = d.getDay();
+        const diff = (day <= 4) ? (4 - day) : (11 - day);
+        const next = new Date(d);
+        next.setDate(d.getDate() + diff);
+        return next.toISOString().split('T')[0];
+      };
+
+      const getMonthlyThursday = (d: Date) => {
+        const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        const day = lastDay.getDay();
+        const diff = (day >= 4) ? (day - 4) : (day + 3);
+        const result = new Date(lastDay);
+        result.setDate(lastDay.getDate() - diff);
+        
+        if (result.getTime() < d.getTime()) {
+          const nextMonth = new Date(d.getFullYear(), d.getMonth() + 2, 0);
+          const nDay = nextMonth.getDay();
+          const nDiff = (nDay >= 4) ? (nDay - 4) : (nDay + 3);
+          const nextResult = new Date(nextMonth);
+          nextResult.setDate(nextMonth.getDate() - nDiff);
+          return nextResult.toISOString().split('T')[0];
+        }
+        return result.toISOString().split('T')[0];
+      };
+
+      weeklyExpiry = getNextThursday(now);
+      monthlyExpiry = getMonthlyThursday(now);
+    }
 
     res.json({
       expiry: {
-        weekly: getNextThursday(now),
-        monthly: getMonthlyThursday(now),
-        daysToExpiry: Math.ceil((new Date(getNextThursday(now)).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+        weekly: weeklyExpiry,
+        monthly: monthlyExpiry,
+        daysToExpiry: weeklyExpiry ? Math.ceil((new Date(weeklyExpiry).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : 0
       },
       holiday: {
         next: nextHoliday,

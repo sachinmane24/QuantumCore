@@ -570,8 +570,9 @@ export default function App() {
               <span className="terminal-label !mb-0.5">Nifty 50 Spot</span>
               <div className="terminal-value text-lg">
                 <span className="text-slate-200">{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                <span className={cn("text-[10px] font-bold ml-2", biasColor)}>
-                  {(strategy?.score.trend || 0) > 12 ? '+104.20' : '-12.45'}
+                <span className={cn("text-[10px] font-bold ml-2", (market?.tick?.change || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                  {(market?.tick?.change || 0) >= 0 ? '+' : ''}{(market?.tick?.last_price - (market?.tick?.ohlc?.close || market?.tick?.last_price)).toFixed(2)}
+                  <span className="ml-1 opacity-60">({market?.tick?.change.toFixed(2)}%)</span>
                 </span>
               </div>
             </div>
@@ -579,7 +580,7 @@ export default function App() {
               <span className="terminal-label !mb-0.5">India VIX</span>
               <div className="terminal-value text-lg">
                 <span className="text-slate-200">{market?.vix.toFixed(2) || '12.42'}</span>
-                <span className="text-[10px] text-rose-500 font-bold ml-2">-2.1%</span>
+                <span className="text-[10px] text-rose-500 font-bold ml-2">LIVE</span>
               </div>
             </div>
             <div className="flex flex-col text-right">
