@@ -94,6 +94,7 @@ export default function App() {
   const [manualKiteConfig, setManualKiteConfig] = useState({ key: '', secret: '' });
   const [marketInfo, setMarketInfo] = useState<MarketInfo | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [lastSync, setLastSync] = useState<Date | null>(null);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
   
@@ -228,6 +229,7 @@ export default function App() {
           }
         }
         
+        setLastSync(new Date());
         setLoading(false);
       } catch (err) {
         console.error("Fetch Data Critical Error:", err);
@@ -595,20 +597,26 @@ export default function App() {
               <span className="terminal-label !mb-0.5">PCR Ratio</span>
               <div className="terminal-value text-lg text-emerald-400">{market?.pcr || '1.18'}</div>
             </div>
+            <div className="flex flex-col text-right">
+              <span className="terminal-label !mb-0.5">Last Sync</span>
+              <div className="terminal-value text-[10px] text-slate-400 font-mono mt-1">
+                {lastSync ? lastSync.toLocaleTimeString() : '--:--:--'}
+              </div>
+            </div>
             {marketInfo && (
               <>
                 <div className="w-px h-8 bg-white/5 mx-2" />
                 <div className="flex flex-col px-4 border-r border-white/5">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
                   <div className="terminal-value text-[9px] text-blue-400 font-black">
-                    {marketInfo.expiry.weekly.split('T')[0]} 
+                    {marketInfo.expiry.weekly ? new Date(marketInfo.expiry.weekly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'} 
                     <span className="text-[8px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
                   </div>
                 </div>
                 <div className="flex flex-col px-4 border-r border-white/5">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Monthly</span>
                   <div className="terminal-value text-[9px] text-purple-400 font-black">
-                    {marketInfo.expiry.monthly.split('T')[0]}
+                    {marketInfo.expiry.monthly ? new Date(marketInfo.expiry.monthly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
                   </div>
                 </div>
                 <div className="flex flex-col px-4">

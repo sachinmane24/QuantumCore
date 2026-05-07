@@ -74,9 +74,14 @@ async function startServer() {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
           
-          // Ensure we have regular instrument refreshes if empty
-          if (niftyInstruments.length === 0) {
-            console.log("[SYSTEM] niftyInstruments empty, pulling from Kite...");
+          // Ensure we have regular instrument refreshes if empty or contains stale data
+          const nowCheck = new Date();
+          nowCheck.setHours(0,0,0,0);
+          
+          const isStale = niftyInstruments.length > 0 && new Date(niftyInstruments[0].expiry) < nowCheck;
+
+          if (niftyInstruments.length === 0 || isStale) {
+            console.log("[SYSTEM] niftyInstruments empty or stale, pulling fresh from Kite...");
             const instruments = await kiteInstance.getInstruments(["NFO"]);
             const startOfToday = new Date();
             startOfToday.setHours(0, 0, 0, 0);
@@ -85,7 +90,7 @@ async function startServer() {
               ins.segment === 'NFO-OPT' &&
               new Date(ins.expiry) >= startOfToday
             );
-            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort();
+            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort((a,b) => new Date(a).getTime() - new Date(b).getTime());
             const nearestExpiry = allExpiries[0];
             niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
             console.log(`[SYSTEM] Refreshed ${niftyInstruments.length} instruments. Nearest expiry: ${nearestExpiry}`);
@@ -111,11 +116,11 @@ async function startServer() {
           
           if (quotes["NSE:NIFTY 50"]) {
             const spot = quotes["NSE:NIFTY 50"].last_price;
-            const vix = quotes["NSE:INDIA VIX"]?.last_price;
+            const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
             
             let chainData = [];
             if (optionSymbols.length > 0) {
-              const fetchStrikes = Array.from(new Set(niftyInstruments.filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`)).map(ins => ins.strike)));
+              const fetchStrikes = Array.from(new Set(niftyInstruments.map(ins => ins.strike)));
               fetchStrikes.sort((a, b) => a - b);
               
               for (const strike of fetchStrikes) {
@@ -142,8 +147,8 @@ async function startServer() {
             }
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
-            // Log every 1 minute approx if loop is 1s (60 ticks)
-            if (Math.floor(Date.now() / 1000) % 60 === 0) {
+            // Log every 30 seconds approx if loop is 1s (30 ticks)
+            if (Math.floor(Date.now() / 1000) % 30 === 0) {
                console.log(`[LIVE-SYNC] Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes. Expiry: ${allExpiries[0]}`);
             }
           }
