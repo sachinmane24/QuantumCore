@@ -40,31 +40,41 @@ class ExecutionEngine {
     this.currentSpotAtEntry = spot;
     this.currentVixAtEntry = marketEngine.getVix();
 
+    const getLTP = (strike: number, type: 'CE' | 'PE') => {
+      const chain = marketEngine.getOptionChain();
+      const option = chain.find(o => o.strike === strike);
+      if (option) {
+        return type === 'CE' ? option.ce_price : option.pe_price;
+      }
+      // Probabilistic pricing fallback if strike not in main chain view
+      const dist = Math.abs(strike - spot);
+      return Math.max(5, 100 - (dist * 0.5));
+    };
+
     if (score.mode === 'MOMENTUM_SNIPER') {
       // Momentum Sniper: Naked Buying
-      if (bias === 'BULLISH') {
-        this.activePositions = [
-          { strike: atmStrike, type: 'CE', entryPrice: 120, qty: config.LOT_SIZE, side: 'BUY' }
-        ];
-      } else {
-        this.activePositions = [
-          { strike: atmStrike, type: 'PE', entryPrice: 120, qty: config.LOT_SIZE, side: 'BUY' }
-        ];
-      }
-      console.log(`[EXECUTION] TRIGGERED MOMENTUM SNIPER: Naked ${bias} ${atmStrike}.`);
+      const entryPrice = getLTP(atmStrike, bias === 'BULLISH' ? 'CE' : 'PE');
+      this.activePositions = [
+        { strike: atmStrike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice, qty: config.LOT_SIZE, side: 'BUY' }
+      ];
+      console.log(`[EXECUTION] TRIGGERED MOMENTUM SNIPER: Naked ${bias} ${atmStrike} @ ${entryPrice.toFixed(2)}.`);
     } else {
       // Institutional Logic: Credit Spreads
       if (bias === 'BULLISH') {
-        // Sell ATM Put, Buy OTM Put (Spread)
+        const sellPrice = getLTP(atmStrike, 'PE');
+        const buyStrike = atmStrike - 100;
+        const buyPrice = getLTP(buyStrike, 'PE');
         this.activePositions = [
-          { strike: atmStrike, type: 'PE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
-          { strike: atmStrike - 100, type: 'PE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
+          { strike: atmStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyStrike, type: 'PE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
         ];
       } else {
-        // Sell ATM Call, Buy OTM Call (Spread)
+        const sellPrice = getLTP(atmStrike, 'CE');
+        const buyStrike = atmStrike + 100;
+        const buyPrice = getLTP(buyStrike, 'CE');
         this.activePositions = [
-          { strike: atmStrike, type: 'CE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
-          { strike: atmStrike + 100, type: 'CE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
+          { strike: atmStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyStrike, type: 'CE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
         ];
       }
       console.log(`[EXECUTION] TRIGGERED INST SPREAD: ${bias} credit spread at ${atmStrike}.`);
@@ -74,9 +84,21 @@ class ExecutionEngine {
   async updatePnL() {
     if (this.activePositions.length === 0) return;
     
-    // Simulate real-time PnL movement
-    const movement = (Math.random() - 0.5) * 500;
-    this.pnl += movement;
+    const chain = marketEngine.getOptionChain();
+    let currentPnL = 0;
+
+    this.activePositions.forEach(pos => {
+      const option = chain.find(o => o.strike === pos.strike);
+      if (option) {
+        const currentPrice = pos.type === 'CE' ? option.ce_price : option.pe_price;
+        const diff = pos.side === 'BUY' 
+          ? (currentPrice - pos.entryPrice) 
+          : (pos.entryPrice - currentPrice);
+        currentPnL += diff * pos.qty;
+      }
+    });
+
+    this.pnl = Math.round(currentPnL);
 
     // Check Rolling 
     await this.checkRolling();
@@ -121,6 +143,21 @@ class ExecutionEngine {
       if (hours < 11) phase = 'MARKET OPEN';
       else if (hours >= 14) phase = 'RE-SETTLEMENT';
 
+      const buyLegs = this.activePositions.filter(p => p.side === 'BUY');
+      const sellLegs = this.activePositions.filter(p => p.side === 'SELL');
+      
+      const buyPrice = buyLegs.length > 0 ? buyLegs.reduce((sum, p) => sum + p.entryPrice, 0) : 0;
+      const sellPrice = sellLegs.length > 0 ? sellLegs.reduce((sum, p) => sum + p.entryPrice, 0) : 0;
+      
+      let totalInvestment = 0;
+      if (sellLegs.length > 0) {
+        // Option Selling / Spreads Margin Heuristic: ~1.2L per lot for Hedged Spreads
+        totalInvestment = (buyLegs.length > 0 ? 120000 : 160000);
+      } else {
+        // Option Buying: Premium Paid
+        totalInvestment = buyPrice * config.LOT_SIZE;
+      }
+
       await tradeLogger.logTrade({
         timestamp: new Date().toISOString(),
         score: this.lastTradeScore?.total || 0,
@@ -134,7 +171,10 @@ class ExecutionEngine {
         spot: this.currentSpotAtEntry || 0,
         phase: phase,
         duration: durationSeconds,
-        entryTime: new Date(this.currentEntryTime).toISOString()
+        entryTime: new Date(this.currentEntryTime).toISOString(),
+        buyPrice: buyPrice,
+        sellPrice: sellPrice,
+        totalInvestment: totalInvestment
       });
     }
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);

@@ -471,7 +471,7 @@ async function startServer() {
       const score = strategyEngine.calculateScore();
       const aiProb = await aiEngine.predictWinProbability(score, []).catch(e => {
         console.error("[AI] Prediction failed:", e);
-        return 50; // Neutral fallback
+        return 0.5; // Neutral fallback (fractional)
       });
       res.json({ score, aiProb });
     } catch (err) {

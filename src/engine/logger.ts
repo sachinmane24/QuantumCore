@@ -22,6 +22,9 @@ export interface TradeLogEntry {
   phase?: string;
   duration?: number; // Holding time in seconds
   entryTime?: string;
+  buyPrice?: number;
+  sellPrice?: number;
+  totalInvestment?: number;
 }
 
 // Initializing Firebase Admin if not already initialized

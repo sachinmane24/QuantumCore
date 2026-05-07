@@ -81,6 +81,13 @@ interface TradeLogEntry {
   trap: boolean;
   pnl: number;
   win: boolean;
+  bias?: 'BULLISH' | 'BEARISH';
+  vix?: number;
+  phase?: string;
+  buyPrice?: number;
+  sellPrice?: number;
+  totalInvestment?: number;
+  duration?: number;
 }
 
 export default function App() {
@@ -544,10 +551,52 @@ export default function App() {
     );
   }
 
-  const atmChain = market?.chain.find(c => c.strike === Math.round((market?.spot || 0) / 50) * 50);
-  const displayDelta = atmChain?.delta || 0.50;
-  const displayTheta = -Math.round((market?.vix || 12) * 35);
-  const displayVega = (market?.vix || 12.8);
+  const calculatePortfolioGreeks = () => {
+    if (!execution?.positions?.length) {
+      const biasDelta = strategy?.score.bias === 'BEARISH' ? -0.50 : 
+                       strategy?.score.bias === 'BULLISH' ? 0.50 : 0.05;
+      return {
+        delta: biasDelta,
+        theta: -Math.round((market?.vix || 12) * 35),
+        vega: (market?.vix || 12.8)
+      };
+    }
+
+    let netDelta = 0;
+    let netTheta = 0;
+    let netVega = 0;
+
+    execution.positions.forEach(pos => {
+      const chain = market?.chain.find(c => c.strike === pos.strike);
+      const ivProxy = (market?.vix || 15) / 100;
+      
+      // Dynamic Delta calculation
+      const baseDelta = chain?.delta || 0.5;
+      const deltaSign = (pos.type === 'CE' ? 1 : -1) * (pos.side === 'BUY' ? 1 : -1);
+      netDelta += baseDelta * deltaSign;
+
+      // Dynamic Theta (Simplified)
+      const baseTheta = -((pos.entryPrice * ivProxy) / 10);
+      const thetaSign = (pos.side === 'BUY' ? 1 : -1);
+      netTheta += baseTheta * thetaSign;
+
+      // Dynamic Vega (Simplified)
+      const baseVega = pos.entryPrice * 0.05;
+      const vegaSign = (pos.side === 'BUY' ? 1 : -1);
+      netVega += baseVega * vegaSign;
+    });
+
+    return {
+      delta: netDelta,
+      theta: Math.round(netTheta * 100),
+      vega: netVega
+    };
+  };
+
+  const greeks = calculatePortfolioGreeks();
+  const displayDelta = greeks.delta;
+  const displayTheta = greeks.theta;
+  const displayVega = greeks.vega;
 
   const pnlColor = (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400";
   const biasColor = strategy?.score.bias === 'BULLISH' ? "text-emerald-400" : strategy?.score.bias === 'BEARISH' ? "text-rose-400" : "text-slate-400";
@@ -798,7 +847,7 @@ export default function App() {
                     <div className="text-right">
                       <span className="terminal-label !mb-0 text-[8px]">Confidence</span>
                       <div className="text-2xl font-black tracking-tighter text-blue-400">
-                        {((strategy?.aiProb || 0) * 100).toFixed(1)}%
+                        {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
                       </div>
                     </div>
                   </div>
@@ -971,15 +1020,29 @@ export default function App() {
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden group">
                      <span className="terminal-label !mb-0 text-[8px]">Delta (Δ)</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-emerald-400 tracking-tighter">+{displayDelta.toFixed(2)}</span>
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Bullish</span>
+                        <span className={cn(
+                          "text-xl font-black tracking-tighter",
+                          displayDelta > 0.05 ? "text-emerald-400" : displayDelta < -0.05 ? "text-rose-400" : "text-slate-400"
+                        )}>
+                          {displayDelta > 0 ? '+' : ''}{displayDelta.toFixed(2)}
+                        </span>
+                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                          {displayDelta > 0.05 ? 'Bullish' : displayDelta < -0.05 ? 'Bearish' : 'Neutral'}
+                        </span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
                      <span className="terminal-label !mb-0 text-[8px]">Theta (θ)</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-rose-400 tracking-tighter">{displayTheta}</span>
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Decay</span>
+                        <span className={cn(
+                          "text-xl font-black tracking-tighter",
+                          displayTheta > 0 ? "text-emerald-400" : "text-rose-400"
+                        )}>
+                          {displayTheta > 0 ? '+' : ''}{displayTheta}
+                        </span>
+                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                          {displayTheta > 0 ? 'Collect' : 'Decay'}
+                        </span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
@@ -1572,7 +1635,8 @@ export default function App() {
                            <th className="p-5 border-b border-terminal-line">Asset / Bias</th>
                            <th className="p-5 border-b border-terminal-line">Signal Score</th>
                            <th className="p-5 border-b border-terminal-line">Phase / VIX</th>
-                           <th className="p-5 border-b border-terminal-line">Relational Sync</th>
+                           <th className="p-5 border-b border-terminal-line">Execution Detail</th>
+                           <th className="p-5 border-b border-terminal-line text-right">Investment</th>
                            <th className="p-5 border-b border-terminal-line text-right">Profit/Loss</th>
                            <th className="p-5 border-b border-terminal-line text-right">Duration</th>
                         </tr>
@@ -1611,11 +1675,20 @@ export default function App() {
                                  </div>
                               </td>
                               <td className="p-5">
-                                 <span className={cn(
-                                   "text-[9px] font-bold uppercase",
-                                   log.trap ? "text-rose-500" : "text-emerald-500"
-                                 )}>
-                                    {log.trap ? 'Trap Filter Active' : 'Clean Orderflow'}
+                                 <div className="flex flex-col gap-1">
+                                    <div className="flex gap-2 items-center">
+                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-8">BUY:</span>
+                                       <span className="text-[10px] terminal-value text-emerald-400">{log.buyPrice ? `₹${log.buyPrice.toFixed(1)}` : '---'}</span>
+                                    </div>
+                                    <div className="flex gap-2 items-center">
+                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-8">SELL:</span>
+                                       <span className="text-[10px] terminal-value text-rose-400">{log.sellPrice ? `₹${log.sellPrice.toFixed(1)}` : '---'}</span>
+                                    </div>
+                                 </div>
+                              </td>
+                              <td className="p-5 text-right">
+                                 <span className="terminal-value text-[11px] text-white">
+                                    {log.totalInvestment ? `₹${(log.totalInvestment / 1000).toFixed(1)}k` : '---'}
                                  </span>
                               </td>
                               <td className={cn("p-5 text-right terminal-value text-[13px]", log.win ? "text-emerald-400" : "text-rose-400")}>
