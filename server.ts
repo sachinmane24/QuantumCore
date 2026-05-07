@@ -69,13 +69,62 @@ async function startServer() {
       }
 
       // 1. Data Sync
-      if (config.DATA_SOURCE === 'LIVE' && kiteInstance && accessToken && currentTimeInMinutes < marketCloseTime) {
+      if (config.DATA_SOURCE === 'LIVE' && kiteInstance && accessToken) {
         try {
-          const symbols = ["NSE:NIFTY 50"];
-          const quotes = await kiteInstance.getQuotes(symbols);
+          const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
+          
+          // Try to fetch several ATM options if we have instruments
+          let optionSymbols: string[] = [];
+          const spotPrice = marketEngine.getSpotPrice();
+          const atmStrike = Math.round(spotPrice / 50) * 50;
+
+          if (niftyInstruments.length > 0) {
+            // Find 5 strikes around ATM
+            for (let i = -2; i <= 2; i++) {
+              const strike = atmStrike + (i * 50);
+              const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+              const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
+              if (ce) optionSymbols.push(`NFO:${ce.tradingsymbol}`);
+              if (pe) optionSymbols.push(`NFO:${pe.tradingsymbol}`);
+            }
+          }
+
+          const fetchSymbols = [...symbols, ...optionSymbols];
+          const quotes = await kiteInstance.getQuotes(fetchSymbols);
+          
           if (quotes["NSE:NIFTY 50"]) {
             const spot = quotes["NSE:NIFTY 50"].last_price;
-            marketEngine.updateData(spot, marketEngine.getOptionChain());
+            const vix = quotes["NSE:INDIA VIX"]?.last_price;
+            
+            let chainData = [];
+            if (optionSymbols.length > 0) {
+              const strikes = Array.from(new Set(niftyInstruments.filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`)).map(ins => ins.strike)));
+              strikes.sort((a, b) => a - b);
+              
+              for (const strike of strikes) {
+                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE' && optionSymbols.includes(`NFO:${ins.tradingsymbol}`));
+                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE' && optionSymbols.includes(`NFO:${ins.tradingsymbol}`));
+                
+                const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
+                const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
+                
+                if (ceQuote || peQuote) {
+                  chainData.push({
+                    strike,
+                    ce_oi: ceQuote?.oi || 0,
+                    ce_oi_change: ceQuote?.oi_day_high - ceQuote?.oi_day_low || 0, // Approximation
+                    pe_oi: peQuote?.oi || 0,
+                    pe_oi_change: peQuote?.oi_day_high - peQuote?.oi_day_low || 0,
+                    ce_price: ceQuote?.last_price || 0,
+                    pe_price: peQuote?.last_price || 0,
+                    iv: 12, // Kite quote doesn't have IV directly
+                    delta: 0.5,
+                  });
+                }
+              }
+            }
+
+            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
           }
         } catch (err) {
           console.error("Real-time data sync failed:", err);
@@ -168,6 +217,24 @@ async function startServer() {
       accessToken = response.access_token;
       kiteInstance.setAccessToken(accessToken);
 
+      // Background Fetch Instruments
+      try {
+        console.log("[SYSTEM] Fetching NFO instruments for NIFTY...");
+        const instruments = await kiteInstance.getInstruments(["NFO"]);
+        niftyInstruments = instruments.filter((ins: any) => 
+          ins.name === 'NIFTY' && 
+          ins.segment === 'NFO-OPT' &&
+          new Date(ins.expiry) >= new Date()
+        );
+        // Sort by expiry and pick the nearest one
+        const expiries = Array.from(new Set(niftyInstruments.map((i: any) => i.expiry))).sort();
+        const nearestExpiry = expiries[0];
+        niftyInstruments = niftyInstruments.filter((i: any) => i.expiry === nearestExpiry);
+        console.log(`[SYSTEM] Cached ${niftyInstruments.length} NIFTY instruments for expiry ${nearestExpiry}`);
+      } catch (e) {
+        console.error("Failed to fetch instruments:", e);
+      }
+
       res.send(`
         <html>
           <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 20px;">
@@ -239,6 +306,8 @@ async function startServer() {
   apiRouter.get("/market-data", (req, res) => {
     res.json({
       spot: marketEngine.getSpotPrice(),
+      vix: marketEngine.getVix(),
+      pcr: marketEngine.getPCR(),
       tick: marketEngine.getLatestTick(),
       chain: marketEngine.getOptionChain(),
     });

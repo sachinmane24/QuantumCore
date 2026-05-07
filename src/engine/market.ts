@@ -40,7 +40,7 @@ export interface OptionChainData {
 class MarketEngine {
   private ticks: Map<number, Tick> = new Map();
   private optionChain: OptionChainData[] = [];
-  private spotPrice: number = 22500; // Default mock spot
+  private spotPrice: number = 24330; // Updated to match current market levels
   private mockInterval: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -63,6 +63,28 @@ class MarketEngine {
     }
   }
 
+  private generateChain(spot: number): OptionChainData[] {
+    const atmStrike = Math.round(spot / 50) * 50;
+    const chain: OptionChainData[] = [];
+    for (let i = -5; i <= 5; i++) {
+      const strike = atmStrike + (i * 50);
+      chain.push({
+        strike,
+        ce_oi: 5000000 - (i * 500000) + (Math.random() * 100000),
+        ce_oi_change: (Math.random() - 0.4) * 40000,
+        pe_oi: 5000000 + (i * 500000) + (Math.random() * 100000),
+        pe_oi_change: (Math.random() - 0.6) * 40000,
+        ce_price: Math.max(1, 100 - (strike - spot) * 0.4),
+        pe_price: Math.max(1, 100 + (strike - spot) * 0.4),
+        iv: 12 + Math.random() * 4,
+        delta: Math.max(-1, Math.min(1, (spot - strike) / 100)),
+        theta: -10 - (Math.random() * 5),
+        vega: 5 + (Math.random() * 2),
+      });
+    }
+    return chain;
+  }
+
   private startMockData() {
     this.mockInterval = setInterval(() => {
       // Mock spot price movement
@@ -80,8 +102,8 @@ class MarketEngine {
         volume: 1000000 + Math.random() * 50000,
         buy_quantity: 500000,
         sell_quantity: 480000,
-        ohlc: { open: 22400, high: 22600, low: 22350, close: 22500 },
-        change: ((this.spotPrice - 22400) / 22400) * 100,
+        ohlc: { open: this.spotPrice - 30, high: this.spotPrice + 20, low: this.spotPrice - 40, close: this.spotPrice },
+        change: 0.15,
         oi: 12000000,
         oi_day_high: 13000000,
         oi_day_low: 11000000,
@@ -89,27 +111,7 @@ class MarketEngine {
       };
       this.ticks.set(mockTick.instrument_token, mockTick);
 
-      // Generate Option Chain
-      const atmStrike = Math.round(this.spotPrice / 50) * 50;
-      const chain: OptionChainData[] = [];
-      for (let i = -5; i <= 5; i++) {
-        const strike = atmStrike + (i * 50);
-        const dist = Math.abs(strike - this.spotPrice);
-        chain.push({
-          strike,
-          ce_oi: 5000000 - (i * 500000) + (Math.random() * 100000),
-          ce_oi_change: (Math.random() - 0.4) * 50000,
-          pe_oi: 5000000 + (i * 500000) + (Math.random() * 100000),
-          pe_oi_change: (Math.random() - 0.6) * 50000,
-          ce_price: Math.max(1, 100 - (strike - this.spotPrice) * 0.4),
-          pe_price: Math.max(1, 100 + (strike - this.spotPrice) * 0.4),
-          iv: 12 + Math.random() * 4,
-          delta: Math.max(-1, Math.min(1, (this.spotPrice - strike) / 100)),
-          theta: -10 - (Math.random() * 5),
-          vega: 5 + (Math.random() * 2),
-        });
-      }
-      this.optionChain = chain;
+      this.optionChain = this.generateChain(this.spotPrice);
     }, 1000);
   }
 
@@ -121,13 +123,53 @@ class MarketEngine {
     return this.spotPrice;
   }
 
+  getVix(): number {
+    return this.ticks.get(264969)?.last_price || 12.42; // Token for INDIA VIX is 264969
+  }
+
+  getPCR(): number {
+    let callOi = 0;
+    let putOi = 0;
+    this.optionChain.forEach(c => {
+      callOi += c.ce_oi || 0;
+      putOi += c.pe_oi || 0;
+    });
+    return callOi > 0 ? Number((putOi / callOi).toFixed(2)) : 1.0;
+  }
+
   getOptionChain(): OptionChainData[] {
     return this.optionChain;
   }
 
-  updateData(spotPrice: number, chain: OptionChainData[]) {
+  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number) {
     this.spotPrice = spotPrice;
-    this.optionChain = chain;
+    if (chain && chain.length > 0) {
+      this.optionChain = chain;
+    } else {
+      this.optionChain = this.generateChain(spotPrice);
+    }
+    
+    // Update VIX tick if provided
+    if (vix) {
+      const vixTick: Tick = {
+        tradable: true,
+        mode: 'full',
+        instrument_token: 264969,
+        last_price: vix,
+        last_quantity: 0,
+        average_price: vix,
+        volume: 0,
+        buy_quantity: 0,
+        sell_quantity: 0,
+        ohlc: { open: vix, high: vix + 0.1, low: vix - 0.1, close: vix },
+        change: -0.05,
+        oi: 0,
+        oi_day_high: 0,
+        oi_day_low: 0,
+        timestamp: new Date()
+      };
+      this.ticks.set(264969, vixTick);
+    }
     
     // Also update NIFTY tick
     const tick: Tick = {
@@ -137,11 +179,11 @@ class MarketEngine {
       last_price: spotPrice,
       last_quantity: 0,
       average_price: spotPrice,
-      volume: 0,
-      buy_quantity: 0,
-      sell_quantity: 0,
-      ohlc: { open: spotPrice, high: spotPrice, low: spotPrice, close: spotPrice },
-      change: 0,
+      volume: 12500000,
+      buy_quantity: 6000000,
+      sell_quantity: 6500000,
+      ohlc: { open: spotPrice, high: spotPrice + 10, low: spotPrice - 10, close: spotPrice },
+      change: 0.25,
       oi: 0,
       oi_day_high: 0,
       oi_day_low: 0,

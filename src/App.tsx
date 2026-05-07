@@ -23,6 +23,8 @@ import { config } from './engine/config.ts';
 interface MarketData {
   spot: number;
   tick: any;
+  vix: number;
+  pcr: number;
   chain: Array<{
     strike: number;
     ce_oi: number;
@@ -573,16 +575,16 @@ export default function App() {
                 </span>
               </div>
             </div>
-            <div className="flex flex-col">
+            <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">India VIX</span>
               <div className="terminal-value text-lg">
-                <span className="text-slate-200">12.42</span>
+                <span className="text-slate-200">{market?.vix.toFixed(2) || '12.42'}</span>
                 <span className="text-[10px] text-rose-500 font-bold ml-2">-2.1%</span>
               </div>
             </div>
-            <div className="flex flex-col">
+            <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">PCR Ratio</span>
-              <div className="terminal-value text-lg text-emerald-400">1.18</div>
+              <div className="terminal-value text-lg text-emerald-400">{market?.pcr || '1.18'}</div>
             </div>
             {marketInfo && (
               <>
@@ -691,7 +693,7 @@ export default function App() {
             className="flex-1 grid grid-cols-12 gap-4 p-4 overflow-y-auto custom-scrollbar bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/10 via-transparent to-transparent"
           >
             {/* Same as before but with expanded Option Chain */}
-            <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-fit sticky top-0">
+            <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8 overflow-y-auto custom-scrollbar pr-2">
               <section className="terminal-card flex flex-col group hover:border-blue-500/30">
                 <div className="p-5 border-b border-terminal-line flex justify-between items-center bg-white/[0.02]">
                   <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Strategy Matrix</h3>
@@ -937,7 +939,7 @@ export default function App() {
               </section>
             </div>
 
-            <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8">
+            <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8 overflow-y-auto custom-scrollbar pl-2">
               {/* Positons & Execution Column */}
               <section className="terminal-card bg-gradient-to-br from-blue-600/10 to-transparent border-blue-500/30 p-8 flex flex-col justify-between shrink-0">
                 <div className="text-center">
