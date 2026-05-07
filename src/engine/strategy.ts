@@ -30,10 +30,12 @@ class StrategyEngine {
     const atmStrike = Math.round(spot / 50) * 50;
     const diff = spot - atmStrike;
     let trendScore = 12.5;
-    if (diff > 5) trendScore = 25; // MAX MOMENTUM
+    let trendDirection = 1; // 1 for Bullish, -1 for Bearish
+    
+    if (diff > 5) trendScore = 25; 
     else if (diff > 0) trendScore = 15;
-    else if (diff < -5) trendScore = 25; // MAX MOMENTUM (Downside)
-    else if (diff < 0) trendScore = 8;
+    else if (diff < -5) { trendScore = 25; trendDirection = -1; }
+    else if (diff < 0) { trendScore = 8; trendDirection = -1; }
 
     // 2. OI Bias - 20 points
     let callOi = 0;
@@ -52,6 +54,8 @@ class StrategyEngine {
     const oiChangeBias = putOiChange - callOiChange;
     
     let oiBiasScore = 10;
+    let oiDirection = oiChangeBias >= 0 ? 1 : -1;
+
     if (pcr > 1.3 || Math.abs(oiChangeBias) > 500000) oiBiasScore = 20;
     else if (pcr > 1.1 || Math.abs(oiChangeBias) > 200000) oiBiasScore = 15;
     else if (pcr < 0.7 || Math.abs(oiChangeBias) < -500000) oiBiasScore = 20;
@@ -93,8 +97,8 @@ class StrategyEngine {
 
     return {
       total: Math.round(total),
-      trend: Math.round(trendScore),
-      oiBias: Math.round(oiBiasScore),
+      trend: Math.round(trendScore * trendDirection), // SIGNED
+      oiBias: Math.round(oiBiasScore * oiDirection), // SIGNED
       gamma: Math.round(gammaScore),
       trap: Math.round(trapScore),
       timeFilter: Math.round(timeFilterScore),

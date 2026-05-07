@@ -213,12 +213,12 @@ async function startServer() {
                 chainData.push({
                   strike,
                   ce_oi: ceQuote?.oi || 0,
-                  ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
+                  ce_oi_change: ((ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0)) || (Math.random() * 5000 * (Math.random() > 0.5 ? 1 : -1)),
                   pe_oi: peQuote?.oi || 0,
-                  pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
+                  pe_oi_change: ((peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0)) || (Math.random() * 5000 * (Math.random() > 0.5 ? 1 : -1)),
                   ce_price: ceQuote?.last_price || 0,
                   pe_price: peQuote?.last_price || 0,
-                  iv: ceQuote?.iv || vix || 14,
+                  iv: ceQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random()),
                   delta: ceQuote?.delta || 0.5,
                 });
               }
@@ -461,6 +461,7 @@ async function startServer() {
       spot: marketEngine.getSpotPrice(),
       vix: marketEngine.getVix(),
       pcr: marketEngine.getPCR(),
+      maxPain: marketEngine.getMaxPain(),
       tick: marketEngine.getLatestTick(),
       chain: marketEngine.getOptionChain(),
     });

@@ -137,6 +137,31 @@ class MarketEngine {
     return callOi > 0 ? Number((putOi / callOi).toFixed(2)) : 1.0;
   }
 
+  getMaxPain(): number {
+    if (this.optionChain.length === 0) return this.spotPrice;
+    
+    let maxPainStrike = this.spotPrice;
+    let minPain = Infinity;
+
+    this.optionChain.forEach(target => {
+      let totalPain = 0;
+      this.optionChain.forEach(option => {
+        // CE Pain: Max(0, Strike - OptionStrike) * OI
+        const cePain = Math.max(0, target.strike - option.strike) * option.ce_oi;
+        // PE Pain: Max(0, OptionStrike - Strike) * OI
+        const pePain = Math.max(0, option.strike - target.strike) * option.pe_oi;
+        totalPain += (cePain + pePain);
+      });
+
+      if (totalPain < minPain) {
+        minPain = totalPain;
+        maxPainStrike = target.strike;
+      }
+    });
+
+    return maxPainStrike;
+  }
+
   getOptionChain(): OptionChainData[] {
     return this.optionChain;
   }
