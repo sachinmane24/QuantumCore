@@ -131,49 +131,36 @@ async function startServer() {
           if (niftyInstruments.length === 0 || isStale) {
             console.log(`[SYSTEM] Refreshing instruments (Reason: ${niftyInstruments.length === 0 ? 'Empty' : 'Stale'})...`);
             const allNFO = await kiteInstance.getInstruments(["NFO"]);
-            console.log(`[SYSTEM] Total NFO instruments: ${allNFO.length}`);
             
-            // Log some samples to help debug
-            if (allNFO.length > 0) {
-              const uniqueNames = Array.from(new Set(allNFO.slice(0, 500).map((i:any) => i.name)));
-              console.log("[DEBUG] Sample NFO names:", uniqueNames.slice(0, 20).join(', '));
-            }
-
-            // Limit to within 1 year for primary focus
+            // Limit to within 1 year
             const oneYearFromNow = new Date(nowIST);
             oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
 
-            const niftyAll = allNFO.filter((ins: any) => 
-              (ins.name === 'NIFTY' || ins.name === 'NIFTY50' || ins.tradingsymbol.startsWith('NIFTY')) && 
-              ins.segment === 'NFO-OPT' &&
-              ins.expiry &&
-              new Date(ins.expiry) >= startOfTodayIST &&
-              new Date(ins.expiry) <= oneYearFromNow
-            );
-
-            console.log(`[SYSTEM] Found ${niftyAll.length} NIFTY instruments filtered by name and date.`);
-            
-            // Map to expiry strings and unique them
-            const expiryStrings = niftyAll.map((i: any) => {
-               if (typeof i.expiry === 'string') return i.expiry;
-               if (i.expiry instanceof Date) return i.expiry.toISOString().split('T')[0];
-               return String(i.expiry);
+            const niftyAll = allNFO.filter((ins: any) => {
+              // Be permissive: match if name is NIFTY or tradingsymbol starts with NIFTY
+              const isNifty = ins.name === 'NIFTY' || ins.tradingsymbol.startsWith('NIFTY');
+              if (!isNifty || ins.segment !== 'NFO-OPT') return false;
+              
+              const exp = new Date(ins.expiry);
+              return exp >= startOfTodayIST && exp <= oneYearFromNow;
             });
 
-            allExpiries = Array.from(new Set(expiryStrings))
-              .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
+            console.log(`[SYSTEM] Filtered ${niftyAll.length} NIFTY instruments.`);
             
-            console.log(`[SYSTEM] Sorted Expiries: ${allExpiries.slice(0, 5).join(', ')}`);
-
-            if (allExpiries.length > 0) {
-              const nearestExpiry = allExpiries[0];
-              niftyInstruments = niftyAll.filter((i: any) => {
-                const exp = typeof i.expiry === 'string' ? i.expiry : i.expiry instanceof Date ? i.expiry.toISOString().split('T')[0] : String(i.expiry);
-                return exp === nearestExpiry;
-              });
-              console.log(`[SYSTEM] Selected Expiry: ${nearestExpiry}, Strike Count: ${niftyInstruments.length}`);
+            if (niftyAll.length > 0) {
+              // Extract unique expiry dates
+              const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
+                .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+              
+              allExpiries = expiries;
+              const nearestExpiry = expiries[0];
+              niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === nearestExpiry);
+              
+              console.log(`[SYSTEM] Selected nearest expiry: ${nearestExpiry} with ${niftyInstruments.length} strikes.`);
             } else {
-              console.error("[SYSTEM] CRITICAL: No NIFTY options found in NFO segment after filtering!");
+              console.error("[SYSTEM] CRITICAL: No NIFTY options found! Check instrument names.");
+              // Log some sample names to help debugging
+              console.log("[DEBUG] Sample NFO names found:", Array.from(new Set(allNFO.slice(0, 500).map((i:any) => i.name))));
             }
           }
 
@@ -203,37 +190,38 @@ async function startServer() {
             const spot = spotQuote.last_price;
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
             
-            let chainData = [];
+            // Calculate percentage change manually if needed
+            const prevClose = spotQuote.ohlc.close;
+            const netChange = spotQuote.net_change || (spot - prevClose);
+            const changePercent = prevClose > 0 ? (netChange / prevClose) * 100 : 0;
             
-            // Only iterate through strikes we actually intended to fetch
-            const relevantStrikes = Array.from(new Set(niftyInstruments
-              .filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`))
-              .map(ins => ins.strike)))
-              .sort((a,b) => a - b);
-
-            for (const strike of relevantStrikes) {
-              const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
-              const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
-              
-              const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
-              const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
-              
-              if (ceQuote || peQuote) {
-                chainData.push({
-                  strike,
-                  ce_oi: ceQuote?.oi || 0,
-                  ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
-                  pe_oi: peQuote?.oi || 0,
-                  pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
-                  ce_price: ceQuote?.last_price || 0,
-                  pe_price: peQuote?.last_price || 0,
-                  iv: ceQuote?.iv || vix || 14,
-                  delta: ceQuote?.delta || 0.5,
-                });
+            let chainData = [];
+            // Only fetch strikes if we have instruments
+            if (optionSymbols.length > 0) {
+              for (const strike of Array.from(new Set(niftyInstruments.map(ins => ins.strike)))) {
+                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
+                
+                const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
+                const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
+                
+                if (ceQuote || peQuote) {
+                  chainData.push({
+                    strike,
+                    ce_oi: ceQuote?.oi || 0,
+                    ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
+                    pe_oi: peQuote?.oi || 0,
+                    pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
+                    ce_price: ceQuote?.last_price || 0,
+                    pe_price: peQuote?.last_price || 0,
+                    iv: ceQuote?.iv || vix || 14,
+                    delta: ceQuote?.delta || 0.5,
+                  });
+                }
               }
             }
 
-            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, spotQuote.net_change || spotQuote.change);
+            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, changePercent);
             
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
                console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes`);
@@ -400,7 +388,16 @@ async function startServer() {
     }
   });
 
-  apiRouter.get("/debug/kite", (req, res) => {
+  apiRouter.get("/debug/kite", async (req, res) => {
+    // Only fetch samples if empty to avoid overhead
+    let samples = [];
+    if (apiKey && accessToken && niftyInstruments.length === 0) {
+       try {
+         const allNFO = await kiteInstance.getInstruments(["NFO"]);
+         samples = allNFO.slice(0, 20).map((i: any) => ({ name: i.name, symbol: i.tradingsymbol, expiry: i.expiry }));
+       } catch (e) {}
+    }
+
     res.json({
       timestamp: new Date().toISOString(),
       kiteConfigured: !!apiKey,
@@ -410,6 +407,7 @@ async function startServer() {
       expiries: allExpiries.slice(0, 10),
       lastFetchTimestamp,
       lastFetchError,
+      nfoSamples: samples,
       rawQuotesSample: lastRawQuotes ? Object.keys(lastRawQuotes).slice(0, 5).reduce((acc: any, key) => {
         acc[key] = lastRawQuotes[key];
         return acc;
