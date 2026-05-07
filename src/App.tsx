@@ -89,6 +89,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
+  const [manualKiteConfig, setManualKiteConfig] = useState({ key: '', secret: '' });
   const [marketInfo, setMarketInfo] = useState<MarketInfo | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
@@ -143,6 +144,24 @@ export default function App() {
       }
     } catch (e) {
       console.error("Failed to get Kite URL", e);
+    }
+  };
+
+  const handleSaveKiteConfig = async () => {
+    try {
+      const res = await fetch('/api/kite/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(manualKiteConfig)
+      });
+      const data = await res.json();
+      if (data.success) {
+        const statusRes = await fetch('/api/kite/status');
+        const statusData = await statusRes.json();
+        setKiteStatus(statusData);
+      }
+    } catch (e) {
+      console.error("Failed to save kite config", e);
     }
   };
 
@@ -1311,7 +1330,7 @@ export default function App() {
                 <p className="text-xs text-slate-500 font-bold tracking-widest mt-1">Quantum Core Security & Integration</p>
              </div>
 
-             <section className="terminal-card p-8 space-y-6">
+              <section className="terminal-card p-8 space-y-6">
                 <div className="flex items-center gap-4 border-b border-terminal-line pb-6">
                    <div className="w-12 h-12 bg-blue-600/10 rounded-xl flex items-center justify-center border border-blue-500/20">
                       <Zap className="text-blue-500 w-6 h-6" />
@@ -1322,50 +1341,72 @@ export default function App() {
                    </div>
                 </div>
 
-                <div className="space-y-4">
-                   <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl mb-4">
-                      <h5 className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                         <Info className="w-3 h-3" />
-                         How to configure API Keys?
-                      </h5>
-                      <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
-                         Direct entry is disabled for security. Open <span className="text-white font-bold">Settings (⚙️)</span> in the editor, go to <span className="text-white font-bold">Environment Variables</span>, and add <span className="text-blue-400 font-bold">KITE_API_KEY</span> and <span className="text-blue-400 font-bold">KITE_API_SECRET</span>.
-                      </p>
-                   </div>
-                   <p className="text-xs text-slate-400 leading-relaxed">
-                      To enable real-time institutional data, you must provide your KiteConnect API credentials in the environment settings. 
-                      Navigate to <span className="text-blue-400 font-bold">Settings</span> menu in this editor and declare the following variables:
-                   </p>
-                   <div className="bg-black/40 p-4 rounded-lg font-mono text-[10px] space-y-4 border border-white/5">
-                      <div className="flex justify-between items-center">
-                         <div>
-                            <span className="text-slate-500 block">Variable Name</span>
-                            <span className="text-blue-400 font-bold">KITE_API_KEY</span>
+                <div className="space-y-6">
+                   <div className="grid grid-cols-1 gap-4">
+                      <div className="flex flex-col gap-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Zerodha API Key</label>
+                         <div className="relative">
+                            <input 
+                               type="password"
+                               value={manualKiteConfig.key}
+                               onChange={(e) => setManualKiteConfig({...manualKiteConfig, key: e.target.value})}
+                               placeholder={kiteStatus.hasConfig ? "••••••••••••••••" : "Enter API Key"}
+                               className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-xs font-mono text-blue-400 outline-none focus:border-blue-500/50 transition-all"
+                            />
+                            {kiteStatus.hasConfig && (
+                               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                  <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+                                  <span className="text-[8px] font-black text-emerald-500 uppercase">Configured</span>
+                               </div>
+                            )}
                          </div>
-                         <span className={kiteStatus.hasConfig ? "text-emerald-500" : "text-rose-500"}>{kiteStatus.hasConfig ? "DETECTED" : "MISSING"}</span>
                       </div>
-                      <div className="flex justify-between items-center">
-                         <div>
-                            <span className="text-slate-500 block">Variable Name</span>
-                            <span className="text-blue-400 font-bold">KITE_API_SECRET</span>
-                         </div>
-                         <span className={kiteStatus.hasConfig ? "text-emerald-500" : "text-rose-500"}>{kiteStatus.hasConfig ? "DETECTED" : "MISSING"}</span>
+                      <div className="flex flex-col gap-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Zerodha API Secret</label>
+                         <input 
+                            type="password"
+                            value={manualKiteConfig.secret}
+                            onChange={(e) => setManualKiteConfig({...manualKiteConfig, secret: e.target.value})}
+                            placeholder={kiteStatus.hasConfig ? "••••••••••••••••" : "Enter API Secret"}
+                            className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-xs font-mono text-blue-400 outline-none focus:border-blue-500/50 transition-all"
+                         />
                       </div>
                    </div>
-                   {!kiteStatus.connected && (
-                     <button 
-                        onClick={handleKiteConnect}
-                        disabled={!kiteStatus.hasConfig}
-                        className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-black rounded-lg uppercase tracking-[0.2em] text-[10px] transition-all shadow-lg shadow-blue-900/20"
-                     >
-                        Initiate Terminal Handshake
-                     </button>
+
+                   {(manualKiteConfig.key || manualKiteConfig.secret) && (
+                      <button 
+                         onClick={handleSaveKiteConfig}
+                         className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black rounded-lg uppercase tracking-widest text-[9px] transition-all"
+                      >
+                         Update Configuration
+                      </button>
                    )}
-                   {kiteStatus.connected && (
-                     <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-center">
-                        <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest">Connection Live - Data Synchronized</span>
-                     </div>
-                   )}
+
+                   <div className="space-y-4 pt-4 border-t border-terminal-line">
+                      <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                         <h5 className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                            <Info className="w-3 h-3" />
+                            Configuration Options
+                         </h5>
+                         <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
+                            You can either enter keys above or declare <span className="text-white font-bold">KITE_API_KEY</span> and <span className="text-white font-bold">KITE_API_SECRET</span> in the editor settings. Manual entry is prioritized for the current session.
+                         </p>
+                      </div>
+
+                      {!kiteStatus.connected ? (
+                        <button 
+                           onClick={handleKiteConnect}
+                           disabled={!kiteStatus.hasConfig}
+                           className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-black rounded-lg uppercase tracking-[0.2em] text-[10px] transition-all shadow-lg shadow-blue-900/20"
+                        >
+                           Initiate Terminal Handshake
+                        </button>
+                      ) : (
+                        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-center">
+                           <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest">Connection Live - Data Synchronized</span>
+                        </div>
+                      )}
+                   </div>
                 </div>
              </section>
 

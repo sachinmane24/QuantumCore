@@ -17,8 +17,8 @@ import { aiEngine } from "./src/engine/aiModel.ts";
 import { config, setDataMode, setExecutionMode, setAutoMode } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
 
-const apiKey = process.env.KITE_API_KEY;
-const apiSecret = process.env.KITE_API_SECRET;
+let apiKey = process.env.KITE_API_KEY;
+let apiSecret = process.env.KITE_API_SECRET;
 
 async function startServer() {
   try {
@@ -123,6 +123,22 @@ async function startServer() {
   app.get("/ping", (req, res) => res.send("pong"));
 
   const apiRouter = express.Router();
+
+  apiRouter.post("/kite/config", (req, res) => {
+    const { key, secret } = req.body;
+    if (key) apiKey = key;
+    if (secret) apiSecret = secret;
+    
+    if (key) {
+      kiteInstance = new KiteConnect({ api_key: key });
+      console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
+    }
+    
+    res.json({ 
+      success: true, 
+      hasConfig: !!(apiKey && apiSecret) 
+    });
+  });
 
   // Kite Auth Routes
   apiRouter.get("/kite/url", (req, res) => {
