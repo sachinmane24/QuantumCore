@@ -143,9 +143,9 @@ async function startServer() {
 
             if (niftyAll.length > 0) {
               const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
-                .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+                .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
 
-              allExpiries = expiries;
+              allExpiries = expiries as string[];
               
               // Filter out expiries that are clearly in the past
               const todayStr = new Date().toISOString().split('T')[0];
@@ -351,7 +351,7 @@ async function startServer() {
           new Date(ins.expiry) >= startOfToday
         );
         
-        allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort();
+        allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort() as string[];
         const nearestExpiry = allExpiries[0];
         niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
         

@@ -54,15 +54,23 @@ class StrategyEngine {
     else if (pcr < 0.9 || oiChangeBias < -100000) oiBiasScore = 5;
 
     // 3. Gamma Condition (VIX based) - 15 points
+    // Lower VIX = Stable Gamma environment (better for premium decay)
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
 
     // 4. Trap Presence (OI Change Concentration) - 20 points
+    // High divergence in OI change often precedes a sharp reversal/trap
     const trapScore = (Math.abs(oiChangeBias) > 1500000) ? 5 : 20;
 
-    // 5. Time Filter - 20 points
+    // 5. Time Filter - 20 points (Execution Timing)
+    // 09:15 to 15:30 IST is the high-liquidity window
     const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istHour = new Date(istTime).getHours();
-    const timeFilterScore = (istHour >= 9 && istHour < 15) ? 20 : 5;
+    const istDate = new Date(istTime);
+    const istHour = istDate.getHours();
+    const istMin = istDate.getMinutes();
+    const totalMin = istHour * 60 + istMin;
+    
+    // 09:15 is 555 min, 15:30 is 930 min
+    const timeFilterScore = (totalMin >= 555 && totalMin <= 930) ? 20 : 5;
 
     const total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
     

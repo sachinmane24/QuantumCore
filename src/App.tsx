@@ -9,7 +9,7 @@ import {
   ShieldCheck, LayoutDashboard, History, Zap,
   BarChart3, Brain, ArrowUpRight, ArrowDownRight,
   Shield, Target, Crosshair, Menu, Bell, Search,
-  Globe, Moon, Info, ShieldAlert
+  Globe, Moon, Info, ShieldAlert, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -104,10 +104,22 @@ export default function App() {
     localStorage.setItem('kite_config', JSON.stringify(manualKiteConfig));
   }, [manualKiteConfig]);
   const [marketInfo, setMarketInfo] = useState<MarketInfo | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return localStorage.getItem('quantum_logged_in') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('quantum_logged_in', isLoggedIn.toString());
+  }, [isLoggedIn]);
+
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
+  
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    localStorage.removeItem('quantum_logged_in');
+  };
   
   // Backtest State
   const [backtestDates, setBacktestDates] = useState({
@@ -585,6 +597,13 @@ export default function App() {
         </nav>
 
         <div className="mt-auto flex flex-col gap-6">
+          <button 
+            onClick={handleLogout}
+            className="text-slate-500 hover:text-rose-400 transition-colors"
+            title="Logout"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
           <button className="text-slate-500 hover:text-white transition-colors">
             <Bell className="w-5 h-5" />
           </button>
@@ -791,41 +810,48 @@ export default function App() {
                           val: (strategy?.score.trend || 0) >= 15 ? 'BULLISH' : (strategy?.score.trend || 0) <= 8 ? 'BEARISH' : 'NEUTRAL', 
                           color: (strategy?.score.trend || 0) >= 15 ? 'text-emerald-400' : (strategy?.score.trend || 0) <= 8 ? 'text-rose-400' : 'text-slate-400', 
                           max: 25, 
-                          current: strategy?.score.trend 
+                          current: strategy?.score.trend,
+                          desc: (strategy?.score.trend || 0) >= 15 ? 'Spot trading above ATM strike zone.' : (strategy?.score.trend || 0) <= 8 ? 'Spot trading below ATM strike zone.' : 'Spot pinned near ATM strike equilibrium.'
                         },
                         { 
                           label: 'OI Flow Context', 
                           val: (strategy?.score.oiBias || 0) >= 15 ? 'BULLISH' : (strategy?.score.oiBias || 0) <= 5 ? 'BEARISH' : 'NEUTRAL', 
                           color: (strategy?.score.oiBias || 0) >= 15 ? 'text-emerald-400' : (strategy?.score.oiBias || 0) <= 5 ? 'text-rose-400' : 'text-slate-400', 
                           max: 20, 
-                          current: strategy?.score.oiBias 
+                          current: strategy?.score.oiBias,
+                          desc: (strategy?.score.oiBias || 0) >= 15 ? 'Call shorting dominant / Put buying pressure.' : (strategy?.score.oiBias || 0) <= 5 ? 'Put shorting dominant / Call buying pressure.' : 'Symmetric OI distribution across strikes.'
                         },
                         { 
                           label: 'Gamma Proxy', 
-                          val: (strategy?.score.gamma || 0) > 10 ? 'HIGH' : (strategy?.score.gamma || 0) < 5 ? 'LOW' : 'STABLE', 
-                          color: (strategy?.score.gamma || 0) > 10 ? 'text-blue-400' : 'text-slate-500', 
+                          val: (strategy?.score.gamma || 0) > 10 ? 'STABLE' : (strategy?.score.gamma || 0) < 5 ? 'EXTREME' : 'MODERATE', 
+                          color: (strategy?.score.gamma || 0) > 10 ? 'text-blue-400' : (strategy?.score.gamma || 0) < 5 ? 'text-rose-400' : 'text-slate-500', 
                           max: 15, 
-                          current: strategy?.score.gamma 
+                          current: strategy?.score.gamma,
+                          desc: `VIX at ${market?.vix?.toFixed(1) || '--'}. ${ (strategy?.score.gamma || 0) > 10 ? 'Low vol supports theta capture.' : 'High vol increases gamma hedging risk.' }`
                         },
                         { 
                           label: 'Time Filter (θ)', 
                           val: (strategy?.score.timeFilter || 0) >= 15 ? 'OPTIMAL' : 'THETA DECAY', 
                           color: (strategy?.score.timeFilter || 0) >= 15 ? 'text-amber-400' : 'text-rose-400', 
                           max: 20, 
-                          current: strategy?.score.timeFilter 
+                          current: strategy?.score.timeFilter,
+                          desc: (strategy?.score.timeFilter || 0) >= 15 ? 'Active liquidity window (09:15-15:30 IST).' : 'Post-market / Pre-market dormancy period.'
                         },
                       ].map((item, i) => (
-                       <div key={i} className="bg-white/[0.02] border border-white/5 rounded-lg p-3 hover:bg-white/[0.04] transition-colors">
+                       <div key={i} className="bg-white/[0.02] border border-white/5 rounded-lg p-3 hover:bg-white/[0.04] transition-colors group">
                           <div className="flex justify-between items-center mb-2">
                             <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{item.label}</span>
                             <span className={cn("text-[9px] font-black underline underline-offset-4 decoration-white/10", item.color)}>{item.val}</span>
                           </div>
-                          <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                          <div className="h-1 bg-white/5 rounded-full overflow-hidden mb-2">
                             <motion.div 
                               initial={{ width: 0 }}
                               animate={{ width: `${(item.current || 0) / item.max * 100}%` }}
                               className={cn("h-full", item.color.replace('text-', 'bg-'))} 
                             />
+                          </div>
+                          <div className="text-[8px] text-slate-500 font-medium leading-relaxed opacity-60 group-hover:opacity-100 transition-opacity whitespace-pre-wrap">
+                             {item.desc}
                           </div>
                        </div>
                      ))}
