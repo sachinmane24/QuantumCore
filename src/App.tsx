@@ -972,6 +972,57 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* Option Chain Insights Bar */}
+                <div className="px-5 py-2.5 bg-white/[0.01] border-b border-white/5 grid grid-cols-4 gap-4">
+                   <div className="flex flex-col">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Total PCR (OI)</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn(
+                            "text-xs font-black",
+                            (market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
+                         )}>
+                            {(market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
+                         </span>
+                         <span className="text-[8px] text-slate-600 font-bold uppercase">Volume Weighted</span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">OI Change Bias</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn(
+                            "text-xs font-black",
+                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                         )}>
+                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
+                         </span>
+                         <span className="text-[8px] text-slate-600 font-bold uppercase">Agg. 15 Strikes</span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Max Pain (Est)</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className="text-xs font-black text-blue-400">
+                            {market?.spot ? Math.round(market.spot / 50) * 50 : '----'}
+                         </span>
+                         <span className="text-[8px] text-slate-600 font-bold uppercase">Strike</span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Flow Sentiment</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn(
+                            "text-[10px] font-black tracking-tighter uppercase",
+                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 500000 ? "text-emerald-400" : 
+                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) < -500000 ? "text-rose-400" : "text-slate-400"
+                         )}>
+                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 500000 ? 'Deeply Bullish' : 
+                             market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) < -500000 ? 'Deeply Bearish' : 'Neutral/Range'}
+                         </span>
+                      </div>
+                   </div>
+                </div>
+
                 <div className="flex-1 overflow-y-auto">
                   <table className="w-full border-collapse">
                     <thead className="sticky top-0 bg-[#0f172a] shadow-sm z-10">
