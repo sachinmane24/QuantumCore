@@ -932,7 +932,15 @@ export default function App() {
                               </span>
                               <div>
                                  <div className="text-[10px] font-black text-white">NIFTY {pos.strike} {pos.type}</div>
-                                 <div className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{pos.qty} QTY @ ₹{pos.entryPrice}</div>
+                                 <div className="flex items-center gap-2">
+                                    <div className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{pos.qty} QTY @ ₹{pos.entryPrice}</div>
+                                    <div className="w-1 h-1 rounded-full bg-white/10" />
+                                    <div className="text-[8px] font-black text-blue-400 uppercase tracking-widest">
+                                       LTP: ₹{
+                                         market?.chain.find(c => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price']?.toFixed(1) || pos.entryPrice
+                                       }
+                                    </div>
+                                 </div>
                               </div>
                            </div>
                            <div className="text-right">
@@ -1124,11 +1132,15 @@ export default function App() {
                 <div className="bg-slate-900/60 backdrop-blur border border-white/5 p-5 rounded-xl space-y-4 my-8">
                   <div className="flex justify-between items-center text-[10px]">
                      <span className="terminal-label !mb-0">Win Prob.</span>
-                     <span className="terminal-value text-emerald-400">{((strategy?.aiProb || 0) * 100).toFixed(1)}%</span>
+                     <span className="terminal-value text-emerald-400">
+                        {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
+                     </span>
                   </div>
                   <div className="flex justify-between items-center text-[10px]">
                      <span className="terminal-label !mb-0">Max Margin</span>
-                     <span className="terminal-value text-white">₹1.25L</span>
+                     <span className="terminal-value text-white">
+                        ₹{(Math.max(0.75, Math.min(2.5, 1.25 + ((strategy?.score.total || 50) - 55) * 0.02))).toFixed(2)}L
+                     </span>
                   </div>
                 </div>
 
