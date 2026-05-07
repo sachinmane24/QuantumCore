@@ -137,40 +137,45 @@ async function startServer() {
             oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
 
             const niftyAll = allNFO.filter((ins: any) => {
-              // Be permissive: match if name is NIFTY or tradingsymbol starts with NIFTY
-              const isNifty = ins.name === 'NIFTY' || ins.tradingsymbol.startsWith('NIFTY');
-              if (!isNifty || ins.segment !== 'NFO-OPT') return false;
+              // Capture all NIFTY variations: NIFTY, NIFTY 50, NIFTY50
+              const isNiftyName = ['NIFTY', 'NIFTY 50', 'NIFTY50'].includes(ins.name);
+              const isNiftySymbol = ins.tradingsymbol.startsWith('NIFTY') && !ins.tradingsymbol.startsWith('NIFTYIT');
               
-              const exp = new Date(ins.expiry);
-              return exp >= startOfTodayIST && exp <= oneYearFromNow;
+              if (!(isNiftyName || isNiftySymbol) || ins.segment !== 'NFO-OPT') return false;
+              
+              // We'll filter only for valid expiries (in string format to avoid date-offset issues with system clock)
+              return !!ins.expiry;
             });
 
-            console.log(`[SYSTEM] Filtered ${niftyAll.length} NIFTY instruments.`);
-            
             if (niftyAll.length > 0) {
-              // Extract unique expiry dates
-              const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
-                .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+              const names = Array.from(new Set(niftyAll.map(i => i.name)));
+              console.log(`[SYSTEM] Found ${niftyAll.length} NIFTY instruments.`);
               
+              // Extract unique expiry dates - sort them chronologically
+              const expiries = Array.from(new Set(niftyAll.map((i: any) => {
+                const d = new Date(i.expiry);
+                return d.toISOString().split('T')[0];
+              }))).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+              
+              // Find the first expiry that is after "now" or just the first one if all are in "past" (due to clock skew)
+              // Since the system clock might be in 2026 but market is in 2025, we take the absolute earliest
               allExpiries = expiries;
               const nearestExpiry = expiries[0];
               niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === nearestExpiry);
               
-              console.log(`[SYSTEM] Selected nearest expiry: ${nearestExpiry} with ${niftyInstruments.length} strikes.`);
+              console.log(`[SYSTEM] Selected nearest available expiry: ${nearestExpiry} (${niftyInstruments.length} strikes).`);
             } else {
-              console.error("[SYSTEM] CRITICAL: No NIFTY options found! Check instrument names.");
-              // Log some sample names to help debugging
-              console.log("[DEBUG] Sample NFO names found:", Array.from(new Set(allNFO.slice(0, 500).map((i:any) => i.name))));
+              console.error("[SYSTEM] CRITICAL: No NIFTY options found!");
             }
           }
 
           let optionSymbols: string[] = [];
-          const spotPrice = marketEngine.getSpotPrice();
-          const atmStrike = Math.round(spotPrice / 50) * 50;
+          const spotPriceFetch = marketEngine.getSpotPrice();
+          const atmStrike = Math.round(spotPriceFetch / 50) * 50;
 
           if (niftyInstruments.length > 0) {
-            // Find 12 strikes around ATM (increased range)
-            for (let i = -6; i <= 6; i++) {
+            // Find 16 strikes around ATM
+            for (let i = -8; i <= 8; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
               const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
@@ -190,41 +195,40 @@ async function startServer() {
             const spot = spotQuote.last_price;
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
             
-            // Calculate percentage change manually if needed
+            // Calculate percentage change manually
             const prevClose = spotQuote.ohlc.close;
-            const netChange = spotQuote.net_change || (spot - prevClose);
+            const netChange = spotQuote.net_change !== undefined ? spotQuote.net_change : (spot - prevClose);
             const changePercent = prevClose > 0 ? (netChange / prevClose) * 100 : 0;
             
             let chainData = [];
-            // Only fetch strikes if we have instruments
-            if (optionSymbols.length > 0) {
-              for (const strike of Array.from(new Set(niftyInstruments.map(ins => ins.strike)))) {
-                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
-                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
-                
-                const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
-                const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
-                
-                if (ceQuote || peQuote) {
-                  chainData.push({
-                    strike,
-                    ce_oi: ceQuote?.oi || 0,
-                    ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
-                    pe_oi: peQuote?.oi || 0,
-                    pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
-                    ce_price: ceQuote?.last_price || 0,
-                    pe_price: peQuote?.last_price || 0,
-                    iv: ceQuote?.iv || vix || 14,
-                    delta: ceQuote?.delta || 0.5,
-                  });
-                }
+            const uniqueStrikes = Array.from(new Set(niftyInstruments.map(ins => ins.strike))).sort((a,b) => a - b);
+            
+            for (const strike of uniqueStrikes) {
+              const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+              const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
+              
+              const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
+              const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
+              
+              if (ceQuote || peQuote) {
+                chainData.push({
+                  strike,
+                  ce_oi: ceQuote?.oi || 0,
+                  ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
+                  pe_oi: peQuote?.oi || 0,
+                  pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
+                  ce_price: ceQuote?.last_price || 0,
+                  pe_price: peQuote?.last_price || 0,
+                  iv: ceQuote?.iv || vix || 14,
+                  delta: ceQuote?.delta || 0.5,
+                });
               }
             }
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, changePercent);
             
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
-               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes`);
+               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}, Chain: ${chainData.length} strikes`);
             }
           }
  else {

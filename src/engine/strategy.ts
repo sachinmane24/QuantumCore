@@ -43,8 +43,10 @@ class StrategyEngine {
     const oiChangeBias = putOiChange - callOiChange;
     
     let oiBiasScore = 10;
-    if (pcr > 1.15 || oiChangeBias > 500000) oiBiasScore = 18;
-    else if (pcr < 0.85 || oiChangeBias < -500000) oiBiasScore = 4;
+    if (pcr > 1.1) oiBiasScore = 15;
+    if (pcr > 1.25 || oiChangeBias > 300000) oiBiasScore = 20;
+    else if (pcr < 0.9) oiBiasScore = 5;
+    else if (pcr < 0.75 || oiChangeBias < -300000) oiBiasScore = 0;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
