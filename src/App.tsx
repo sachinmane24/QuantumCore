@@ -567,7 +567,10 @@ export default function App() {
           
           <div className="hidden lg:flex space-x-10 items-center">
             <div className="flex flex-col">
-              <span className="terminal-label !mb-0.5">Nifty 50 Spot</span>
+              <span className="terminal-label !mb-0.5 flex items-center gap-2">
+                Nifty 50 Spot
+                {execution?.dataSource === 'LIVE' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+              </span>
               <div className="terminal-value text-lg">
                 <span className="text-slate-200">{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 <span className={cn("text-[10px] font-bold ml-2", (market?.tick?.change || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
@@ -580,7 +583,12 @@ export default function App() {
               <span className="terminal-label !mb-0.5">India VIX</span>
               <div className="terminal-value text-lg">
                 <span className="text-slate-200">{market?.vix.toFixed(2) || '12.42'}</span>
-                <span className="text-[10px] text-rose-500 font-bold ml-2">LIVE</span>
+                <span className={cn(
+                  "text-[10px] font-bold ml-2",
+                  execution?.dataSource === 'LIVE' ? "text-blue-400" : "text-slate-500"
+                )}>
+                  {execution?.dataSource === 'LIVE' ? 'SYNC' : 'MOCK'}
+                </span>
               </div>
             </div>
             <div className="flex flex-col text-right">
@@ -593,14 +601,14 @@ export default function App() {
                 <div className="flex flex-col px-4 border-r border-white/5">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
                   <div className="terminal-value text-[9px] text-blue-400 font-black">
-                    {marketInfo.expiry.weekly} 
+                    {marketInfo.expiry.weekly.split('T')[0]} 
                     <span className="text-[8px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
                   </div>
                 </div>
                 <div className="flex flex-col px-4 border-r border-white/5">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Monthly</span>
                   <div className="terminal-value text-[9px] text-purple-400 font-black">
-                    {marketInfo.expiry.monthly}
+                    {marketInfo.expiry.monthly.split('T')[0]}
                   </div>
                 </div>
                 <div className="flex flex-col px-4">

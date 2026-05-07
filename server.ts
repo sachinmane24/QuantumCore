@@ -74,7 +74,23 @@ async function startServer() {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
           
-          // Try to fetch several ATM options if we have instruments
+          // Ensure we have regular instrument refreshes if empty
+          if (niftyInstruments.length === 0) {
+            console.log("[SYSTEM] niftyInstruments empty, pulling from Kite...");
+            const instruments = await kiteInstance.getInstruments(["NFO"]);
+            const startOfToday = new Date();
+            startOfToday.setHours(0, 0, 0, 0);
+            const niftyAll = instruments.filter((ins: any) => 
+              ins.name === 'NIFTY' && 
+              ins.segment === 'NFO-OPT' &&
+              new Date(ins.expiry) >= startOfToday
+            );
+            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort();
+            const nearestExpiry = allExpiries[0];
+            niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
+            console.log(`[SYSTEM] Refreshed ${niftyInstruments.length} instruments. Nearest expiry: ${nearestExpiry}`);
+          }
+
           let optionSymbols: string[] = [];
           const spotPrice = marketEngine.getSpotPrice();
           const atmStrike = Math.round(spotPrice / 50) * 50;
@@ -118,7 +134,7 @@ async function startServer() {
                     pe_oi_change: peQuote?.oi_day_high - peQuote?.oi_day_low || 0,
                     ce_price: ceQuote?.last_price || 0,
                     pe_price: peQuote?.last_price || 0,
-                    iv: 12,
+                    iv: vix || 14,
                     delta: 0.5,
                   });
                 }
@@ -126,9 +142,9 @@ async function startServer() {
             }
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
-            // Log every ~5 mins if interval is 1s (300 ticks)
-            if (Math.floor(Date.now() / 1000) % 300 === 0) {
-               console.log(`[LIVE-SYNC] Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes. Expiries: ${allExpiries.slice(0,2)}`);
+            // Log every 1 minute approx if loop is 1s (60 ticks)
+            if (Math.floor(Date.now() / 1000) % 60 === 0) {
+               console.log(`[LIVE-SYNC] Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes. Expiry: ${allExpiries[0]}`);
             }
           }
         } catch (err) {
@@ -367,9 +383,9 @@ async function startServer() {
 
   apiRouter.get("/market-info", (req, res) => {
     const holidays = [
-      "2024-01-26", "2024-03-08", "2024-03-25", "2024-03-29", "2024-04-11",
-      "2024-04-17", "2024-05-01", "2024-06-17", "2024-07-17", "2024-08-15",
-      "2024-10-02", "2024-11-01", "2024-11-15", "2024-12-25"
+      "2026-01-26", "2026-03-08", "2026-03-25", "2026-03-29", "2026-04-11",
+      "2026-04-17", "2026-05-01", "2026-06-17", "2026-07-17", "2026-08-15",
+      "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
     ];
     
     const now = new Date();
@@ -381,15 +397,43 @@ async function startServer() {
     let monthlyExpiry = "";
     
     if (allExpiries.length > 0) {
-      weeklyExpiry = allExpiries[0];
-      // Find the last expiry of the current month
-      const currentMonth = new Date().getMonth();
-      const currentMonthExpiries = allExpiries.filter(e => new Date(e).getMonth() === currentMonth);
-      monthlyExpiry = currentMonthExpiries[currentMonthExpiries.length - 1] || allExpiries[0];
+      const formatExpiry = (dateStr: string) => {
+        try {
+          const d = new Date(dateStr);
+          return d.toISOString().split('T')[0];
+        } catch (e) {
+          return dateStr;
+        }
+      };
+
+      weeklyExpiry = formatExpiry(allExpiries[0]);
       
-      // If the nearest is the last of month, monthly is the same
+      // Find the last expiry of the current month
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      
+      const currentMonthExpiries = allExpiries.filter(e => {
+        const d = new Date(e);
+        return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+      });
+      
+      if (currentMonthExpiries.length > 0) {
+        monthlyExpiry = formatExpiry(currentMonthExpiries[currentMonthExpiries.length - 1]);
+      } else {
+        // If no more expiries this month, find the last of the next month
+        const nextMonth = (currentMonth + 1) % 12;
+        const nextYear = currentMonth === 11 ? currentYear + 1 : currentYear;
+        const nextMonthExpiries = allExpiries.filter(e => {
+          const d = new Date(e);
+          return d.getMonth() === nextMonth && d.getFullYear() === nextYear;
+        });
+        monthlyExpiry = formatExpiry(nextMonthExpiries[nextMonthExpiries.length - 1] || allExpiries[0]);
+      }
+      
+      // Safety: If weekly is monthly (last week of month), monthly is the next one
       if (weeklyExpiry === monthlyExpiry && allExpiries.length > 1) {
-         // Optionally look ahead to next month for the "Monthly" label
+         // This is fine, but maybe user wants "Actual Monthly Continous"
       }
     } else {
       // Fallback calculation
