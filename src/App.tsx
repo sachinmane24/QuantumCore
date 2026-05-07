@@ -125,22 +125,27 @@ export default function App() {
   useEffect(() => {
     const fetchKiteStatus = async () => {
       try {
-        // First, if we have local config, try to push it to server to ensure session is active
+        const res = await fetch('/api/kite/status');
+        const data = await res.json();
+        
+        // If server has no config but we do, sync it
         const saved = localStorage.getItem('kite_config');
-        if (saved) {
+        if (!data.hasConfig && saved) {
            const config = JSON.parse(saved);
            if (config.key && config.secret) {
+              console.log("[AUTH] Server lost config, re-syncing from localStorage...");
               await fetch('/api/kite/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: saved
               });
-              console.log("[AUTH] Auto-synced saved Kite credentials");
+              // Refresh status after sync
+              const retry = await fetch('/api/kite/status');
+              setKiteStatus(await retry.json());
+              return;
            }
         }
-
-        const res = await fetch('/api/kite/status');
-        const data = await res.json();
+        
         setKiteStatus(data);
       } catch (e) {
         console.error("Failed to fetch Kite status", e);
@@ -148,6 +153,8 @@ export default function App() {
     };
 
     fetchKiteStatus();
+    // Poll status every 30s to detect server restarts
+    const statusInterval = setInterval(fetchKiteStatus, 30000);
 
     // Listen for OAuth success
     const handleMessage = (event: MessageEvent) => {
@@ -156,7 +163,10 @@ export default function App() {
       }
     };
     window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      clearInterval(statusInterval);
+    };
   }, []);
 
   const handleKiteConnect = async () => {

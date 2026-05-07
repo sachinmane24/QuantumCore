@@ -16,12 +16,44 @@ import { executionEngine } from "./src/engine/execution.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
 import { config, setDataMode, setExecutionMode, setAutoMode } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
+import fs from "fs-extra";
 
-let apiKey = process.env.KITE_API_KEY;
-let apiSecret = process.env.KITE_API_SECRET;
+const KITE_STORE = path.join(process.cwd(), "kite_session.json");
+
+let apiKey = process.env.KITE_API_KEY || "";
+let apiSecret = process.env.KITE_API_SECRET || "";
+let accessToken: string | null = null;
+
+// Persistence Helpers
+async function saveKiteSession(data: any) {
+  try {
+    const existing = await fs.readJson(KITE_STORE).catch(() => ({}));
+    await fs.writeJson(KITE_STORE, { ...existing, ...data });
+    console.log("[STORAGE] Kite session updated.");
+  } catch (err) {
+    console.error("[STORAGE] Save failed:", err);
+  }
+}
+
+async function loadKiteSession() {
+  try {
+    if (await fs.pathExists(KITE_STORE)) {
+      const data = await fs.readJson(KITE_STORE);
+      if (data.key) apiKey = data.key;
+      if (data.secret) apiSecret = data.secret;
+      if (data.token) accessToken = data.token;
+      console.log(`[STORAGE] Session Loaded: Key=${apiKey ? 'Y' : 'N'}, Secret=${apiSecret ? 'Y' : 'N'}, Token=${accessToken ? 'Y' : 'N'}`);
+      return data;
+    }
+  } catch (err) {
+    console.error("[STORAGE] Config load failed:", err);
+  }
+  return null;
+}
 
 async function startServer() {
   try {
+    await loadKiteSession();
     const app = express();
     const PORT = process.env.PORT || 3000;
 
@@ -38,15 +70,19 @@ async function startServer() {
 
   // Kite instance (single session for this dev app)
   let kiteInstance: any = null;
-  let accessToken: string | null = null;
   let niftyInstruments: any[] = [];
   let allExpiries: string[] = [];
   let lastRawQuotes: any = null;
   let lastFetchTimestamp: string | null = null;
   let lastFetchError: string | null = null;
+  let loopCount = 0;
 
   if (apiKey) {
     kiteInstance = new KiteConnect({ api_key: apiKey });
+    if (accessToken) {
+       kiteInstance.setAccessToken(accessToken);
+       console.log("[INIT] Initialized kiteInstance with persisted accessToken");
+    }
   }
 
     // Background Trading Loop
@@ -80,6 +116,7 @@ async function startServer() {
       }
 
       // 1. Data Sync
+      loopCount++;
       if (config.DATA_SOURCE === 'LIVE' && kiteInstance && accessToken) {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
@@ -100,7 +137,7 @@ async function startServer() {
             twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
 
             const niftyAll = instruments.filter((ins: any) => 
-              ins.name === 'NIFTY' && 
+              (ins.name === 'NIFTY' || ins.name === 'NIFTY 50') && 
               ins.segment === 'NFO-OPT' &&
               ins.expiry &&
               new Date(ins.expiry) >= startOfTodayIST &&
@@ -240,7 +277,7 @@ async function startServer() {
 
   const apiRouter = express.Router();
 
-  apiRouter.post("/kite/config", (req, res) => {
+  apiRouter.post("/kite/config", async (req, res) => {
     const { key, secret } = req.body;
     if (key) apiKey = key;
     if (secret) apiSecret = secret;
@@ -251,6 +288,8 @@ async function startServer() {
       allExpiries = [];
       console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
     }
+    
+    await saveKiteSession({ key: apiKey, secret: apiSecret });
     
     res.json({ 
       success: true, 
@@ -285,6 +324,8 @@ async function startServer() {
       const response = await kiteInstance.generateSession(request_token.toString(), apiSecret);
       accessToken = response.access_token;
       kiteInstance.setAccessToken(accessToken);
+
+      await saveKiteSession({ token: accessToken });
 
       // Background Fetch Instruments
       try {
@@ -344,6 +385,7 @@ async function startServer() {
       timestamp: new Date().toISOString(),
       kiteConfigured: !!apiKey,
       sessionActive: !!accessToken,
+      loopCount,
       instrumentsCount: niftyInstruments.length,
       expiries: allExpiries.slice(0, 10),
       lastFetchTimestamp,
