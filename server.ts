@@ -170,15 +170,25 @@ async function startServer() {
 
       res.send(`
         <html>
-          <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh;">
-            <script>
-              window.opener.postMessage({ type: 'KITE_AUTH_SUCCESS', user: ${JSON.stringify(response.user_name)} }, '*');
-              window.close();
-            </script>
+          <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 20px;">
             <div style="text-align: center;">
-              <h2>Authentication Successful</h2>
-              <p>Synchronizing with Quantum Core...</p>
+              <h2 style="margin-bottom: 8px;">Authentication Successful</h2>
+              <p style="color: #64748b; font-size: 14px;">Synchronizing with Quantum Core...</p>
             </div>
+            <script>
+              setTimeout(() => {
+                try {
+                  if (window.opener) {
+                    window.opener.postMessage({ type: 'KITE_AUTH_SUCCESS', user: ${JSON.stringify(response.user_name)} }, '*');
+                    window.close();
+                  }
+                } catch (e) {
+                  console.error("Popup communication failed", e);
+                }
+                // Fallback redirect if window didn't close or wasn't a popup
+                window.location.href = '/';
+              }, 1500);
+            </script>
           </body>
         </html>
       `);
