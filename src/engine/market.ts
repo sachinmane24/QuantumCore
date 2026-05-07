@@ -141,11 +141,11 @@ class MarketEngine {
     return this.optionChain;
   }
 
-  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number) {
+  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number) {
     this.spotPrice = spotPrice;
     if (chain && chain.length > 0) {
       this.optionChain = chain;
-    } else {
+    } else if (config.DATA_SOURCE === 'MOCK') {
       this.optionChain = this.generateChain(spotPrice);
     }
     
@@ -182,8 +182,8 @@ class MarketEngine {
       volume: 12500000,
       buy_quantity: 6000000,
       sell_quantity: 6500000,
-      ohlc: { open: spotPrice, high: spotPrice + 10, low: spotPrice - 10, close: spotPrice },
-      change: 0.25,
+      ohlc: niftyOhlc || { open: spotPrice, high: spotPrice + 10, low: spotPrice - 10, close: spotPrice },
+      change: niftyChange || 0,
       oi: 0,
       oi_day_high: 0,
       oi_day_low: 0,

@@ -130,35 +130,50 @@ async function startServer() {
 
           if (niftyInstruments.length === 0 || isStale) {
             console.log(`[SYSTEM] Refreshing instruments (Reason: ${niftyInstruments.length === 0 ? 'Empty' : 'Stale'})...`);
-            const instruments = await kiteInstance.getInstruments(["NFO"]);
-            console.log(`[SYSTEM] Total NFO instruments returned: ${instruments.length}`);
+            const allNFO = await kiteInstance.getInstruments(["NFO"]);
+            console.log(`[SYSTEM] Total NFO instruments: ${allNFO.length}`);
             
-            // Limit to within 2 years to avoid very long term LEAPS showing as primary expiries
-            const twoYearsFromNow = new Date(nowIST);
-            twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
+            // Log some samples to help debug
+            if (allNFO.length > 0) {
+              const uniqueNames = Array.from(new Set(allNFO.slice(0, 500).map((i:any) => i.name)));
+              console.log("[DEBUG] Sample NFO names:", uniqueNames.slice(0, 20).join(', '));
+            }
 
-            const niftyAll = instruments.filter((ins: any) => 
-              ins.name === 'NIFTY' && 
+            // Limit to within 1 year for primary focus
+            const oneYearFromNow = new Date(nowIST);
+            oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
+
+            const niftyAll = allNFO.filter((ins: any) => 
+              (ins.name === 'NIFTY' || ins.name === 'NIFTY50' || ins.tradingsymbol.startsWith('NIFTY')) && 
               ins.segment === 'NFO-OPT' &&
               ins.expiry &&
               new Date(ins.expiry) >= startOfTodayIST &&
-              new Date(ins.expiry) <= twoYearsFromNow
+              new Date(ins.expiry) <= oneYearFromNow
             );
 
-            console.log(`[SYSTEM] Filtered NIFTY options count: ${niftyAll.length}`);
+            console.log(`[SYSTEM] Found ${niftyAll.length} NIFTY instruments filtered by name and date.`);
             
-            // Sort chronologically
-            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry)))
+            // Map to expiry strings and unique them
+            const expiryStrings = niftyAll.map((i: any) => {
+               if (typeof i.expiry === 'string') return i.expiry;
+               if (i.expiry instanceof Date) return i.expiry.toISOString().split('T')[0];
+               return String(i.expiry);
+            });
+
+            allExpiries = Array.from(new Set(expiryStrings))
               .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
             
+            console.log(`[SYSTEM] Sorted Expiries: ${allExpiries.slice(0, 5).join(', ')}`);
+
             if (allExpiries.length > 0) {
               const nearestExpiry = allExpiries[0];
-              niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
-              console.log(`[SYSTEM] Active Expiry Set: ${nearestExpiry}, Instruments: ${niftyInstruments.length}`);
+              niftyInstruments = niftyAll.filter((i: any) => {
+                const exp = typeof i.expiry === 'string' ? i.expiry : i.expiry instanceof Date ? i.expiry.toISOString().split('T')[0] : String(i.expiry);
+                return exp === nearestExpiry;
+              });
+              console.log(`[SYSTEM] Selected Expiry: ${nearestExpiry}, Strike Count: ${niftyInstruments.length}`);
             } else {
-              console.error("[SYSTEM] No valid NIFTY options found for today or future expiries.");
-              // Fallback: log a few names to see what we're missing
-              console.log("[DEBUG] Sample NFO names:", Array.from(new Set(instruments.slice(0, 100).map((i:any) => i.name))));
+              console.error("[SYSTEM] CRITICAL: No NIFTY options found in NFO segment after filtering!");
             }
           }
 
@@ -167,8 +182,8 @@ async function startServer() {
           const atmStrike = Math.round(spotPrice / 50) * 50;
 
           if (niftyInstruments.length > 0) {
-            // Find 10 strikes around ATM
-            for (let i = -5; i <= 5; i++) {
+            // Find 12 strikes around ATM (increased range)
+            for (let i = -6; i <= 6; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
               const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
@@ -184,7 +199,8 @@ async function startServer() {
           lastFetchError = null;
           
           if (quotes["NSE:NIFTY 50"]) {
-            const spot = quotes["NSE:NIFTY 50"].last_price;
+            const spotQuote = quotes["NSE:NIFTY 50"];
+            const spot = spotQuote.last_price;
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
             
             let chainData = [];
@@ -211,16 +227,16 @@ async function startServer() {
                   pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
                   ce_price: ceQuote?.last_price || 0,
                   pe_price: peQuote?.last_price || 0,
-                  iv: ceQuote?.iv || vix || 14, // Prefer Kite IV if available
+                  iv: ceQuote?.iv || vix || 14,
                   delta: ceQuote?.delta || 0.5,
                 });
               }
             }
 
-            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
-            // High-visibility logs
+            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, spotQuote.net_change || spotQuote.change);
+            
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
-               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot}, VIX: ${vix}, Chain Strikes: ${chainData.length}`);
+               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes`);
             }
           }
  else {
