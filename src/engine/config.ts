@@ -14,7 +14,7 @@ export const ConfigSchema = z.object({
   EXECUTION_MODE: z.enum(['PAPER', 'LIVE']).default('PAPER'),
   AUTO_MODE: z.boolean().default(false),
   TRADING_SYMBOL: z.string().default('NIFTY'),
-  LOT_SIZE: z.number().default(50), // Updated for Nifty current lot size
+  LOT_SIZE: z.number().default(65), // Updated for Nifty current lot size
   SL_RUPEES: z.number().default(2000),
   TARGET_RUPEES: z.number().default(4000),
   MAX_ROLLS: z.number().default(2),
@@ -34,7 +34,7 @@ export const config: Config = {
   EXECUTION_MODE: 'PAPER',
   AUTO_MODE: false,
   TRADING_SYMBOL: 'NIFTY',
-  LOT_SIZE: 50,
+  LOT_SIZE: 65,
   SL_RUPEES: 2000,
   TARGET_RUPEES: 4000,
   MAX_ROLLS: 2,
