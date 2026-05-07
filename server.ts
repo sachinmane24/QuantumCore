@@ -85,15 +85,27 @@ async function startServer() {
             const instruments = await kiteInstance.getInstruments(["NFO"]);
             const startOfToday = new Date();
             startOfToday.setHours(0, 0, 0, 0);
+            
+            // Limit to within 2 years to avoid very long term LEAPS showing as primary expiries
+            const twoYearsFromNow = new Date();
+            twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
+
             const niftyAll = instruments.filter((ins: any) => 
               ins.name === 'NIFTY' && 
               ins.segment === 'NFO-OPT' &&
-              new Date(ins.expiry) >= startOfToday
+              ins.expiry &&
+              new Date(ins.expiry) >= startOfToday &&
+              new Date(ins.expiry) <= twoYearsFromNow
             );
-            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort((a,b) => new Date(a).getTime() - new Date(b).getTime());
+            
+            // Sort chronologically
+            allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry)))
+              .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
+            
             const nearestExpiry = allExpiries[0];
             niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
-            console.log(`[SYSTEM] Refreshed ${niftyInstruments.length} instruments. Nearest expiry: ${nearestExpiry}`);
+            console.log(`[SYSTEM] Refreshed instruments. Total NIFTY expiries found: ${allExpiries.length}`);
+            console.log(`[SYSTEM] Nearest: ${nearestExpiry}, Monthly Candidates: ${allExpiries.slice(0, 5).join(', ')}`);
           }
 
           let optionSymbols: string[] = [];

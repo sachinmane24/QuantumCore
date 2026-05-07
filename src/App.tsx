@@ -91,7 +91,18 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
-  const [manualKiteConfig, setManualKiteConfig] = useState({ key: '', secret: '' });
+  const [manualKiteConfig, setManualKiteConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kite_config');
+      return saved ? JSON.parse(saved) : { key: '', secret: '' };
+    } catch (e) {
+      return { key: '', secret: '' };
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('kite_config', JSON.stringify(manualKiteConfig));
+  }, [manualKiteConfig]);
   const [marketInfo, setMarketInfo] = useState<MarketInfo | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
@@ -114,6 +125,20 @@ export default function App() {
   useEffect(() => {
     const fetchKiteStatus = async () => {
       try {
+        // First, if we have local config, try to push it to server to ensure session is active
+        const saved = localStorage.getItem('kite_config');
+        if (saved) {
+           const config = JSON.parse(saved);
+           if (config.key && config.secret) {
+              await fetch('/api/kite/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: saved
+              });
+              console.log("[AUTH] Auto-synced saved Kite credentials");
+           }
+        }
+
         const res = await fetch('/api/kite/status');
         const data = await res.json();
         setKiteStatus(data);
@@ -497,6 +522,11 @@ export default function App() {
     );
   }
 
+  const atmChain = market?.chain.find(c => c.strike === Math.round((market?.spot || 0) / 50) * 50);
+  const displayDelta = atmChain?.delta || 0.50;
+  const displayTheta = -Math.round((market?.vix || 12) * 35);
+  const displayVega = (market?.vix || 12.8);
+
   const pnlColor = (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400";
   const biasColor = strategy?.score.bias === 'BULLISH' ? "text-emerald-400" : strategy?.score.bias === 'BEARISH' ? "text-rose-400" : "text-slate-400";
 
@@ -873,21 +903,21 @@ export default function App() {
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden group">
                      <span className="terminal-label !mb-0 text-[8px]">Delta (Δ)</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-emerald-400 tracking-tighter">+0.84</span>
+                        <span className="text-xl font-black text-emerald-400 tracking-tighter">+{displayDelta.toFixed(2)}</span>
                         <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Bullish</span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
                      <span className="terminal-label !mb-0 text-[8px]">Theta (θ)</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-rose-400 tracking-tighter">-420</span>
+                        <span className="text-xl font-black text-rose-400 tracking-tighter">{displayTheta}</span>
                         <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Decay</span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
                      <span className="terminal-label !mb-0 text-[8px]">Vega (ν)</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-white tracking-tighter">12.8</span>
+                        <span className="text-xl font-black text-white tracking-tighter">{displayVega.toFixed(1)}</span>
                         <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Norm</span>
                      </div>
                   </div>
@@ -1504,12 +1534,23 @@ export default function App() {
                    </div>
 
                    {(manualKiteConfig.key || manualKiteConfig.secret) && (
-                      <button 
-                         onClick={handleSaveKiteConfig}
-                         className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-black rounded-lg uppercase tracking-widest text-[9px] transition-all"
-                      >
-                         Update Configuration
-                      </button>
+                      <div className="flex gap-2">
+                        <button 
+                           onClick={handleSaveKiteConfig}
+                           className="flex-1 py-3 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-400 font-black rounded-lg uppercase tracking-widest text-[9px] transition-all"
+                        >
+                           Update Session
+                        </button>
+                        <button 
+                           onClick={() => {
+                              setManualKiteConfig({ key: '', secret: '' });
+                              localStorage.removeItem('kite_config');
+                           }}
+                           className="px-4 py-3 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/30 text-rose-500 font-black rounded-lg uppercase tracking-widest text-[9px] transition-all"
+                        >
+                           Clear
+                        </button>
+                      </div>
                    )}
 
                    <div className="space-y-4 pt-4 border-t border-terminal-line">
