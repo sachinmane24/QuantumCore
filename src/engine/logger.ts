@@ -3,8 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  getDocs, 
+  query, 
+  orderBy, 
+  limit, 
+  serverTimestamp,
+  type Firestore
+} from 'firebase/firestore';
 import fs from 'fs-extra';
 import path from 'path';
 
@@ -26,38 +36,29 @@ export interface TradeLogEntry {
   buyPrice?: number;
   sellPrice?: number;
   totalInvestment?: number;
+  serverTimestamp?: any;
 }
 
-// Load config using fs to avoid ESM import issues
+// Load config using fs
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
 const firebaseConfig = fs.readJsonSync(configPath);
 
-console.log("[LOGGER] Initializing with Project:", firebaseConfig.projectId, "DB ID:", firebaseConfig.firestoreDatabaseId);
+console.log("[LOGGER] Initializing Firebase Client SDK...");
 
-// Initializing Firebase Admin if not already initialized
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      projectId: firebaseConfig.projectId,
-    });
-    console.log("[LOGGER] Firebase Admin initialized.");
-  } catch (e) {
-    console.error("[LOGGER] Firebase Admin initialization FAILED:", e);
-  }
-}
-
-// Accessing the specific Firestore database instance
-const db = getFirestore(firebaseConfig.firestoreDatabaseId || '(default)');
-const tradesCollection = db.collection('trades');
+const app = initializeApp(firebaseConfig);
+// Initialize Firestore with the specific database ID from config
+const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const tradesCollection = collection(db, 'trades');
 
 // Connection test
 (async () => {
   try {
-    console.log("[LOGGER] Running Firestore connection test...");
-    await tradesCollection.limit(1).get();
+    console.log("[LOGGER] Running Firestore connectivity check (v5.3)...");
+    const testQuery = query(tradesCollection, limit(1));
+    await getDocs(testQuery);
     console.log("[LOGGER] Firestore connection successful.");
   } catch (e) {
-    console.error("[LOGGER] Firestore connection test FAILED. Error:", e);
+    console.error("[LOGGER] Firestore connectivity check FAILED. Error:", e);
   }
 })();
 
@@ -65,9 +66,9 @@ class TradeLogger {
   async logTrade(entry: TradeLogEntry) {
     try {
       console.log("[LOGGER] Attempting to log trade at:", entry.timestamp);
-      const res = await tradesCollection.add({
+      const res = await addDoc(tradesCollection, {
         ...entry,
-        serverTimestamp: admin.firestore.FieldValue.serverTimestamp()
+        serverTimestamp: serverTimestamp()
       });
       console.log("[LOGGER] Trade successfully logged with ID:", res.id);
     } catch (err) {
@@ -88,7 +89,8 @@ class TradeLogger {
   async getLogs(): Promise<TradeLogEntry[]> {
     try {
       console.log("[LOGGER] Fetching logs from Firestore...");
-      const snapshot = await tradesCollection.orderBy('timestamp', 'desc').limit(100).get();
+      const q = query(tradesCollection, orderBy('timestamp', 'desc'), limit(100));
+      const snapshot = await getDocs(q);
       console.log(`[LOGGER] Fetched ${snapshot.size} logs.`);
       
       const logs = snapshot.docs.map(doc => ({
