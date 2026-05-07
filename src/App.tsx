@@ -616,7 +616,7 @@ export default function App() {
               <div className="terminal-value text-lg">
                 <span className="text-slate-200">{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 <span className={cn("text-[10px] font-bold ml-2", (market?.tick?.change || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                  {(market?.tick?.change || 0) >= 0 ? '+' : ''}{(market?.tick?.last_price - (market?.tick?.ohlc?.close || market?.tick?.last_price)).toFixed(2)}
+                  {(market?.tick?.change || 0) >= 0 ? '+' : ''}{(market?.spot - (market?.tick?.ohlc?.close || market?.spot)).toFixed(2)}
                   <span className="ml-1 opacity-60">({market?.tick?.change.toFixed(2)}%)</span>
                 </span>
               </div>

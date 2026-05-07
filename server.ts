@@ -128,54 +128,53 @@ async function startServer() {
           
           const isStale = niftyInstruments.length > 0 && new Date(niftyInstruments[0].expiry) < startOfTodayIST;
 
-          if (niftyInstruments.length === 0 || isStale) {
-            console.log(`[SYSTEM] Refreshing instruments (Reason: ${niftyInstruments.length === 0 ? 'Empty' : 'Stale'})...`);
+          if (niftyInstruments.length <= 1 || isStale) {
+            console.log(`[SYSTEM] Refreshing instruments (Count: ${niftyInstruments.length}, Stale: ${isStale})...`);
             const allNFO = await kiteInstance.getInstruments(["NFO"]);
             
-            // Limit to within 1 year
-            const oneYearFromNow = new Date(nowIST);
-            oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
-
+            // Comprehensive NIFTY filter
             const niftyAll = allNFO.filter((ins: any) => {
-              // Capture all NIFTY variations: NIFTY, NIFTY 50, NIFTY50
-              const isNiftyName = ['NIFTY', 'NIFTY 50', 'NIFTY50'].includes(ins.name);
-              const isNiftySymbol = ins.tradingsymbol.startsWith('NIFTY') && !ins.tradingsymbol.startsWith('NIFTYIT');
-              
-              if (!(isNiftyName || isNiftySymbol) || ins.segment !== 'NFO-OPT') return false;
-              
-              // We'll filter only for valid expiries (in string format to avoid date-offset issues with system clock)
+              const sym = ins.tradingsymbol || "";
+              // Exclude non-NIFTY and other indices
+              if (!sym.startsWith("NIFTY") || sym.startsWith("NIFTYIT") || sym.startsWith("NIFTYP") || sym.startsWith("NIFTYM")) return false;
+              if (ins.segment !== 'NFO-OPT') return false;
               return !!ins.expiry;
             });
 
             if (niftyAll.length > 0) {
-              const names = Array.from(new Set(niftyAll.map(i => i.name)));
-              console.log(`[SYSTEM] Found ${niftyAll.length} NIFTY instruments.`);
-              
-              // Extract unique expiry dates - sort them chronologically
-              const expiries = Array.from(new Set(niftyAll.map((i: any) => {
-                const d = new Date(i.expiry);
-                return d.toISOString().split('T')[0];
-              }))).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-              
-              // Find the first expiry that is after "now" or just the first one if all are in "past" (due to clock skew)
-              // Since the system clock might be in 2026 but market is in 2025, we take the absolute earliest
+              const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
+                .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
               allExpiries = expiries;
-              const nearestExpiry = expiries[0];
-              niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === nearestExpiry);
               
-              console.log(`[SYSTEM] Selected nearest available expiry: ${nearestExpiry} (${niftyInstruments.length} strikes).`);
+              // Filter out expiries that are clearly in the past
+              const todayStr = new Date().toISOString().split('T')[0];
+              const futureExpiries = expiries.filter(e => e >= todayStr);
+              
+              // Select the first valid future expiry, or the very first one if none are "future"
+              const selectedExpiry = futureExpiries[0] || expiries[0];
+              
+              niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
+              
+              console.log(`[SYSTEM] Found ${niftyAll.length} total NIFTY options.`);
+              console.log(`[SYSTEM] Selected Expiry: ${selectedExpiry} with ${niftyInstruments.length} strikes.`);
             } else {
-              console.error("[SYSTEM] CRITICAL: No NIFTY options found!");
+              console.error("[SYSTEM] CRITICAL: Zero NIFTY options found in NFO segment.");
             }
           }
 
           let optionSymbols: string[] = [];
-          const spotPriceFetch = marketEngine.getSpotPrice();
-          const atmStrike = Math.round(spotPriceFetch / 50) * 50;
+          const currentSpot = marketEngine.getSpotPrice();
+          const atmStrike = Math.round(currentSpot / 50) * 50;
 
-          if (niftyInstruments.length > 0) {
-            // Find 16 strikes around ATM
-            for (let i = -8; i <= 8; i++) {
+          if (niftyInstruments.length > 1) {
+            // Pick 20 strikes around ATM (10 up, 10 down)
+            const strikesInRange = Array.from(new Set(niftyInstruments.map(i => i.strike)))
+              .sort((a, b) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
+              .slice(0, 10); // Take 10 closest strikes first (to be safe with quote limits)
+              
+            // Actually let's just do -5 to +5 around ATM to guarantee density
+            for (let i = -5; i <= 5; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
               const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
@@ -393,12 +392,11 @@ async function startServer() {
   });
 
   apiRouter.get("/debug/kite", async (req, res) => {
-    // Only fetch samples if empty to avoid overhead
     let samples = [];
-    if (apiKey && accessToken && niftyInstruments.length === 0) {
+    if (apiKey && accessToken) {
        try {
          const allNFO = await kiteInstance.getInstruments(["NFO"]);
-         samples = allNFO.slice(0, 20).map((i: any) => ({ name: i.name, symbol: i.tradingsymbol, expiry: i.expiry }));
+         samples = allNFO.slice(0, 50).map((i: any) => ({ name: i.name, symbol: i.tradingsymbol, expiry: i.expiry }));
        } catch (e) {}
     }
 

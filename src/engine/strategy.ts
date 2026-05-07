@@ -60,10 +60,15 @@ class StrategyEngine {
 
     const total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
     
+    // Debug log occasionally
+    if (Math.floor(Date.now() / 1000) % 20 === 0) {
+       console.log(`[STRATEGY] Trend: ${trendScore.toFixed(0)}, OI: ${oiBiasScore.toFixed(0)}, Gamma: ${gammaScore.toFixed(0)}, Trap: ${trapScore.toFixed(0)}, Time: ${timeFilterScore.toFixed(0)} | Total: ${total.toFixed(0)}`);
+    }
+
     let bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
-    if (total > 65) {
+    if (total > 60) {
       bias = (pcr > 1.05 || oiChangeBias > 0) ? 'BULLISH' : 'BEARISH';
-    } else if (total < 40) {
+    } else if (total < 45) {
       bias = (pcr < 0.95 || oiChangeBias < 0) ? 'BEARISH' : 'BULLISH';
     }
 
