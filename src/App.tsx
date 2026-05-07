@@ -785,12 +785,36 @@ export default function App() {
                   </div>
                   
                   <div className="space-y-2">
-                     {[
-                       { label: 'Market Regime', val: (strategy?.score.trend || 0) > 12 ? 'BULLISH' : 'BEARISH', color: (strategy?.score.trend || 0) > 12 ? 'text-emerald-400' : 'text-rose-400', max: 25, current: strategy?.score.trend },
-                       { label: 'OI Flow Context', val: 'POSITIVE', color: 'text-emerald-400', max: 20, current: strategy?.score.oiBias },
-                       { label: 'Gamma Proxy', val: (strategy?.score.gamma || 0) > 7 ? 'HIGH' : 'STABLE', color: 'text-blue-400', max: 15, current: strategy?.score.gamma },
-                       { label: 'Time Filter (θ)', val: 'OPTIMAL', color: 'text-amber-400', max: 20, current: strategy?.score.timeFilter },
-                     ].map((item, i) => (
+                      {[
+                        { 
+                          label: 'Market Regime', 
+                          val: (strategy?.score.trend || 0) >= 15 ? 'BULLISH' : (strategy?.score.trend || 0) <= 8 ? 'BEARISH' : 'NEUTRAL', 
+                          color: (strategy?.score.trend || 0) >= 15 ? 'text-emerald-400' : (strategy?.score.trend || 0) <= 8 ? 'text-rose-400' : 'text-slate-400', 
+                          max: 25, 
+                          current: strategy?.score.trend 
+                        },
+                        { 
+                          label: 'OI Flow Context', 
+                          val: (strategy?.score.oiBias || 0) >= 15 ? 'BULLISH' : (strategy?.score.oiBias || 0) <= 5 ? 'BEARISH' : 'NEUTRAL', 
+                          color: (strategy?.score.oiBias || 0) >= 15 ? 'text-emerald-400' : (strategy?.score.oiBias || 0) <= 5 ? 'text-rose-400' : 'text-slate-400', 
+                          max: 20, 
+                          current: strategy?.score.oiBias 
+                        },
+                        { 
+                          label: 'Gamma Proxy', 
+                          val: (strategy?.score.gamma || 0) > 10 ? 'HIGH' : (strategy?.score.gamma || 0) < 5 ? 'LOW' : 'STABLE', 
+                          color: (strategy?.score.gamma || 0) > 10 ? 'text-blue-400' : 'text-slate-500', 
+                          max: 15, 
+                          current: strategy?.score.gamma 
+                        },
+                        { 
+                          label: 'Time Filter (θ)', 
+                          val: (strategy?.score.timeFilter || 0) >= 15 ? 'OPTIMAL' : 'THETA DECAY', 
+                          color: (strategy?.score.timeFilter || 0) >= 15 ? 'text-amber-400' : 'text-rose-400', 
+                          max: 20, 
+                          current: strategy?.score.timeFilter 
+                        },
+                      ].map((item, i) => (
                        <div key={i} className="bg-white/[0.02] border border-white/5 rounded-lg p-3 hover:bg-white/[0.04] transition-colors">
                           <div className="flex justify-between items-center mb-2">
                             <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{item.label}</span>
@@ -1422,11 +1446,20 @@ export default function App() {
                <div className="flex gap-4">
                   <div className="terminal-card px-4 py-2 border-emerald-500/20 bg-emerald-500/5">
                      <span className="terminal-label !mb-0">Success Rate</span>
-                     <div className="terminal-value text-lg text-emerald-400">72.4%</div>
+                     <div className="terminal-value text-lg text-emerald-400">
+                        {tradeLogs.length > 0 
+                           ? ((tradeLogs.filter(l => l.win).length / tradeLogs.length) * 100).toFixed(1)
+                           : '0.0'}%
+                     </div>
                   </div>
                   <div className="terminal-card px-4 py-2">
                      <span className="terminal-label !mb-0">Total Return</span>
-                     <div className="terminal-value text-lg text-white">₹1.24L</div>
+                     <div className={cn(
+                        "terminal-value text-lg",
+                        tradeLogs.reduce((acc, curr) => acc + curr.pnl, 0) >= 0 ? "text-emerald-400" : "text-rose-400"
+                     )}>
+                        ₹{(tradeLogs.reduce((acc, curr) => acc + curr.pnl, 0) / 1000).toFixed(2)}k
+                     </div>
                   </div>
                </div>
             </div>
@@ -1437,12 +1470,12 @@ export default function App() {
                      <thead className="sticky top-0 bg-slate-900/90 backdrop-blur z-10">
                         <tr className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] text-left">
                            <th className="p-5 border-b border-terminal-line">Timestamp</th>
-                           <th className="p-5 border-b border-terminal-line">Asset</th>
+                           <th className="p-5 border-b border-terminal-line">Asset / Bias</th>
                            <th className="p-5 border-b border-terminal-line">Signal Score</th>
-                           <th className="p-5 border-b border-terminal-line">Identity</th>
+                           <th className="p-5 border-b border-terminal-line">Phase / VIX</th>
                            <th className="p-5 border-b border-terminal-line">Relational Sync</th>
                            <th className="p-5 border-b border-terminal-line text-right">Profit/Loss</th>
-                           <th className="p-5 border-b border-terminal-line text-right">Action</th>
+                           <th className="p-5 border-b border-terminal-line text-right">Duration</th>
                         </tr>
                      </thead>
                      <tbody className="divide-y divide-white/[0.03]">
@@ -1451,7 +1484,17 @@ export default function App() {
                               <td className="p-5 terminal-value text-[11px] text-slate-400">
                                  {new Date(log.timestamp).toLocaleString()}
                               </td>
-                              <td className="p-5 font-bold text-xs text-white">NIFTY 50 INDEX</td>
+                              <td className="p-5">
+                                 <div className="flex flex-col">
+                                    <span className="font-bold text-xs text-white">NIFTY 50 INDEX</span>
+                                    <span className={cn(
+                                       "text-[8px] font-black tracking-widest uppercase",
+                                       log.bias === 'BULLISH' ? "text-emerald-400" : "text-rose-400"
+                                    )}>
+                                       {log.bias || 'QUANT'} ALPHA
+                                    </span>
+                                 </div>
+                              </td>
                               <td className="p-5">
                                  <div className="flex items-center gap-3">
                                     <div className="w-16 h-1.5 bg-white/5 rounded-full overflow-hidden">
@@ -1461,9 +1504,12 @@ export default function App() {
                                  </div>
                               </td>
                               <td className="p-5">
-                                 <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                    Institutional
-                                 </span>
+                                 <div className="flex flex-col">
+                                    <span className="text-[10px] font-black uppercase text-blue-400">
+                                       {log.phase || 'MID-SESSION'}
+                                    </span>
+                                    <span className="text-[9px] text-slate-500 font-bold">VIX: {log.vix?.toFixed(2) || '14.00'}</span>
+                                 </div>
                               </td>
                               <td className="p-5">
                                  <span className={cn(
@@ -1476,10 +1522,8 @@ export default function App() {
                               <td className={cn("p-5 text-right terminal-value text-[13px]", log.win ? "text-emerald-400" : "text-rose-400")}>
                                  {log.win ? '+' : '-'}₹{Math.abs(log.pnl)}
                               </td>
-                              <td className="p-5 text-right">
-                                 <button className="text-[10px] font-black text-slate-600 hover:text-white uppercase tracking-widest transition-colors opacity-0 group-hover:opacity-100">
-                                    DETAILS
-                                 </button>
+                              <td className="p-5 text-right terminal-value text-[11px] text-slate-500">
+                                 {log.duration ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s` : '--'}
                               </td>
                            </tr>
                         ))}

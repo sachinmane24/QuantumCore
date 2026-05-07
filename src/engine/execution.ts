@@ -22,6 +22,10 @@ class ExecutionEngine {
   private rollsToday: number = 0;
   private lastRollTime: number = 0;
   private lastTradeScore: any = null;
+  private currentTradeBias: 'BULLISH' | 'BEARISH' | null = null;
+  private currentEntryTime: number = 0;
+  private currentSpotAtEntry: number = 0;
+  private currentVixAtEntry: number = 0;
 
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
@@ -29,6 +33,10 @@ class ExecutionEngine {
     const spot = marketEngine.getSpotPrice();
     const atmStrike = Math.round(spot / 50) * 50;
     this.lastTradeScore = strategyEngine.calculateScore();
+    this.currentTradeBias = bias;
+    this.currentEntryTime = Date.now();
+    this.currentSpotAtEntry = spot;
+    this.currentVixAtEntry = marketEngine.getVix();
 
     if (bias === 'BULLISH') {
       // Sell ATM Put, Buy OTM Put (Spread)
@@ -87,6 +95,15 @@ class ExecutionEngine {
 
   async exitAll(reason: string) {
     if (this.activePositions.length > 0) {
+      const now = Date.now();
+      const durationSeconds = Math.round((now - this.currentEntryTime) / 1000);
+      
+      // Determine market phase
+      const hours = new Date().getHours();
+      let phase = 'MID-SESSION';
+      if (hours < 11) phase = 'MARKET OPEN';
+      else if (hours >= 14) phase = 'RE-SETTLEMENT';
+
       await tradeLogger.logTrade({
         timestamp: new Date().toISOString(),
         score: this.lastTradeScore?.total || 0,
@@ -94,12 +111,20 @@ class ExecutionEngine {
         oi_bias: this.lastTradeScore?.oiBias || 0,
         trap: this.lastTradeScore?.trap === 0,
         pnl: Math.round(this.pnl),
-        win: this.pnl > 0
+        win: this.pnl > 0,
+        bias: this.currentTradeBias || undefined,
+        vix: this.currentVixAtEntry || 14,
+        spot: this.currentSpotAtEntry || 0,
+        phase: phase,
+        duration: durationSeconds,
+        entryTime: new Date(this.currentEntryTime).toISOString()
       });
     }
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);
     this.activePositions = [];
-    this.pnl = 0; // Reset PnL for next trade session
+    this.pnl = 0; 
+    this.currentTradeBias = null;
+    this.currentEntryTime = 0;
   }
 
   getState() {

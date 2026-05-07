@@ -24,7 +24,12 @@ class StrategyEngine {
 
     // 1. Trend (Spot vs ATM Strike) - 25 points
     const atmStrike = Math.round(spot / 50) * 50;
-    const trendScore = (spot > atmStrike) ? 20 : (spot < atmStrike) ? 5 : 12.5;
+    const diff = spot - atmStrike;
+    let trendScore = 12.5;
+    if (diff > 5) trendScore = 20;
+    else if (diff > 0) trendScore = 15;
+    else if (diff < -5) trendScore = 5;
+    else if (diff < 0) trendScore = 8;
 
     // 2. OI Bias - 20 points
     let callOi = 0;
@@ -43,10 +48,10 @@ class StrategyEngine {
     const oiChangeBias = putOiChange - callOiChange;
     
     let oiBiasScore = 10;
-    if (pcr > 1.1) oiBiasScore = 15;
     if (pcr > 1.25 || oiChangeBias > 300000) oiBiasScore = 20;
-    else if (pcr < 0.9) oiBiasScore = 5;
+    else if (pcr > 1.1 || oiChangeBias > 100000) oiBiasScore = 15;
     else if (pcr < 0.75 || oiChangeBias < -300000) oiBiasScore = 0;
+    else if (pcr < 0.9 || oiChangeBias < -100000) oiBiasScore = 5;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
@@ -55,8 +60,9 @@ class StrategyEngine {
     const trapScore = (Math.abs(oiChangeBias) > 1500000) ? 5 : 20;
 
     // 5. Time Filter - 20 points
-    const istHour = (new Date().getHours() + 5) % 24; // Simple offset for IST approx
-    const timeFilterScore = (istHour >= 9 && istHour <= 15) ? 20 : 5;
+    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
+    const istHour = new Date(istTime).getHours();
+    const timeFilterScore = (istHour >= 9 && istHour < 15) ? 20 : 5;
 
     const total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
     

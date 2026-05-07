@@ -16,6 +16,12 @@ export interface TradeLogEntry {
   trap: boolean;
   pnl: number;
   win: boolean;
+  bias?: 'BULLISH' | 'BEARISH';
+  vix?: number;
+  spot?: number;
+  phase?: string;
+  duration?: number; // Holding time in seconds
+  entryTime?: string;
 }
 
 // Initializing Firebase Admin if not already initialized
