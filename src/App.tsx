@@ -1109,17 +1109,27 @@ export default function App() {
               {/* Positons & Execution Column */}
               <section className="terminal-card bg-gradient-to-br from-blue-600/10 to-transparent border-blue-500/30 p-8 flex flex-col justify-between shrink-0">
                 <div className="text-center">
-                  <div className="bg-blue-600/10 border border-blue-500/20 inline-block px-4 py-1.5 rounded-full mb-6">
-                    <span className="text-[9px] font-black tracking-[0.3em] uppercase text-blue-400">Institutional Logic</span>
+                  <div className={cn(
+                    "bg-blue-600/10 border border-blue-500/20 inline-block px-4 py-1.5 rounded-full mb-6",
+                    strategy?.score.mode === 'MOMENTUM_SNIPER' && "bg-rose-600/20 border-rose-500/40"
+                  )}>
+                    <span className={cn(
+                      "text-[9px] font-black tracking-[0.3em] uppercase",
+                      strategy?.score.mode === 'MOMENTUM_SNIPER' ? "text-rose-400" : "text-blue-400"
+                    )}>
+                      {strategy?.score.mode === 'MOMENTUM_SNIPER' ? 'Momentum Sniper' : 'Institutional Logic'}
+                    </span>
                   </div>
                   <div className={cn(
                     "text-4xl font-black tracking-tighter mb-2",
                     strategy?.score.bias === 'BULLISH' ? "text-emerald-400" : strategy?.score.bias === 'BEARISH' ? "text-rose-400" : "text-slate-500"
                   )}>
-                    {strategy?.score.bias === 'BULLISH' ? 'SHORT PUT' : strategy?.score.bias === 'BEARISH' ? 'SHORT CALL' : 'STANDBY'}
+                    {strategy?.score.mode === 'MOMENTUM_SNIPER' 
+                      ? (strategy?.score.bias === 'BULLISH' ? 'EXPLOSIVE UP' : 'EXPLOSIVE DOWN')
+                      : (strategy?.score.bias === 'BULLISH' ? 'SHORT PUT' : strategy?.score.bias === 'BEARISH' ? 'SHORT CALL' : 'STANDBY')}
                   </div>
                   <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">
-                    REC: {market?.spot ? Math.round(market.spot / 50) * 50 : '----'} {strategy?.score.bias === 'BULLISH' ? 'PE' : 'CE'}
+                    REC: {strategy?.score.recommendation}
                   </div>
                   {execution?.executionMode === 'LIVE' && (
                     <div className="mt-4 p-2 bg-rose-500/10 border border-rose-500/20 rounded flex items-center gap-2">

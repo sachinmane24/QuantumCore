@@ -32,26 +32,43 @@ class ExecutionEngine {
 
     const spot = marketEngine.getSpotPrice();
     const atmStrike = Math.round(spot / 50) * 50;
-    this.lastTradeScore = strategyEngine.calculateScore();
+    const score = strategyEngine.calculateScore();
+    
+    this.lastTradeScore = score;
     this.currentTradeBias = bias;
     this.currentEntryTime = Date.now();
     this.currentSpotAtEntry = spot;
     this.currentVixAtEntry = marketEngine.getVix();
 
-    if (bias === 'BULLISH') {
-      // Sell ATM Put, Buy OTM Put (Spread)
-      this.activePositions = [
-        { strike: atmStrike, type: 'PE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
-        { strike: atmStrike - 100, type: 'PE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
-      ];
+    if (score.mode === 'MOMENTUM_SNIPER') {
+      // Momentum Sniper: Naked Buying
+      if (bias === 'BULLISH') {
+        this.activePositions = [
+          { strike: atmStrike, type: 'CE', entryPrice: 120, qty: config.LOT_SIZE, side: 'BUY' }
+        ];
+      } else {
+        this.activePositions = [
+          { strike: atmStrike, type: 'PE', entryPrice: 120, qty: config.LOT_SIZE, side: 'BUY' }
+        ];
+      }
+      console.log(`[EXECUTION] TRIGGERED MOMENTUM SNIPER: Naked ${bias} ${atmStrike}.`);
     } else {
-      // Sell ATM Call, Buy OTM Call (Spread)
-      this.activePositions = [
-        { strike: atmStrike, type: 'CE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
-        { strike: atmStrike + 100, type: 'CE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
-      ];
+      // Institutional Logic: Credit Spreads
+      if (bias === 'BULLISH') {
+        // Sell ATM Put, Buy OTM Put (Spread)
+        this.activePositions = [
+          { strike: atmStrike, type: 'PE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: atmStrike - 100, type: 'PE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
+        ];
+      } else {
+        // Sell ATM Call, Buy OTM Call (Spread)
+        this.activePositions = [
+          { strike: atmStrike, type: 'CE', entryPrice: 100, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: atmStrike + 100, type: 'CE', entryPrice: 30, qty: config.LOT_SIZE, side: 'BUY' }
+        ];
+      }
+      console.log(`[EXECUTION] TRIGGERED INST SPREAD: ${bias} credit spread at ${atmStrike}.`);
     }
-    console.log(`Executed ${bias} strategy. Positions:`, this.activePositions);
   }
 
   async updatePnL() {
