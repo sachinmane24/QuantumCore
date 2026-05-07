@@ -158,24 +158,28 @@ class ExecutionEngine {
         totalInvestment = buyPrice * config.LOT_SIZE;
       }
 
-      await tradeLogger.logTrade({
-        timestamp: new Date().toISOString(),
-        score: this.lastTradeScore?.total || 0,
-        gamma: this.lastTradeScore?.gamma || 0,
-        oi_bias: this.lastTradeScore?.oiBias || 0,
-        trap: this.lastTradeScore?.trap === 0,
-        pnl: Math.round(this.pnl),
-        win: this.pnl > 0,
-        bias: this.currentTradeBias || undefined,
-        vix: this.currentVixAtEntry || 14,
-        spot: this.currentSpotAtEntry || 0,
-        phase: phase,
-        duration: durationSeconds,
-        entryTime: new Date(this.currentEntryTime).toISOString(),
-        buyPrice: buyPrice,
-        sellPrice: sellPrice,
-        totalInvestment: totalInvestment
-      });
+      try {
+        await tradeLogger.logTrade({
+          timestamp: new Date().toISOString(),
+          score: this.lastTradeScore?.total || 0,
+          gamma: this.lastTradeScore?.gamma || 0,
+          oi_bias: this.lastTradeScore?.oiBias || 0,
+          trap: this.lastTradeScore?.trap === 0,
+          pnl: Math.round(this.pnl),
+          win: this.pnl > 0,
+          bias: this.currentTradeBias || undefined,
+          vix: this.currentVixAtEntry || 14,
+          spot: this.currentSpotAtEntry || 0,
+          phase: phase,
+          duration: durationSeconds,
+          entryTime: new Date(this.currentEntryTime).toISOString(),
+          buyPrice: buyPrice,
+          sellPrice: sellPrice,
+          totalInvestment: totalInvestment
+        });
+      } catch (logErr) {
+        console.error("[EXECUTION] Failed to log trade, but continuing with exit:", logErr);
+      }
     }
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);
     this.activePositions = [];

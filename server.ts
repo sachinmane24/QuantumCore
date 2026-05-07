@@ -613,6 +613,14 @@ async function startServer() {
     res.json(logs);
   });
 
+  apiRouter.get("/logger-status", async (req, res) => {
+    const logs = await tradeLogger.getLogs();
+    res.json({
+      status: "online",
+      logsCount: logs.length
+    });
+  });
+
   apiRouter.post("/execute", (req, res) => {
     const { bias } = req.body;
     executionEngine.executeTrade(bias);
@@ -622,6 +630,28 @@ async function startServer() {
   apiRouter.post("/exit", async (req, res) => {
     await executionEngine.exitAll("User Manual Exit");
     res.json({ status: "success" });
+  });
+
+  apiRouter.post("/test-log", async (req, res) => {
+    await tradeLogger.logTrade({
+      timestamp: new Date().toISOString(),
+      score: 85,
+      gamma: 12,
+      oi_bias: 250000,
+      trap: false,
+      pnl: 1500,
+      win: true,
+      bias: 'BULLISH',
+      vix: 14.5,
+      spot: 24350,
+      phase: 'TEST',
+      duration: 300,
+      entryTime: new Date(Date.now() - 300000).toISOString(),
+      buyPrice: 150,
+      sellPrice: 180,
+      totalInvestment: 7500
+    });
+    res.json({ success: true, message: "Test trade logged. Check Audit Logs." });
   });
 
   app.use("/api", apiRouter);
