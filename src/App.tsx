@@ -625,7 +625,7 @@ export default function App() {
             </div>
             <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">PCR Ratio</span>
-              <div className="terminal-value text-lg text-emerald-400">{market?.pcr || '1.18'}</div>
+              <div className="terminal-value text-lg text-emerald-400">{market?.pcr ? market.pcr.toFixed(2) : '1.18'}</div>
             </div>
             <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">Last Sync</span>

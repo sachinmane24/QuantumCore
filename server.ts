@@ -47,7 +47,14 @@ async function startServer() {
   }
 
     // Background Trading Loop
-    setInterval(async () => {
+    let isSyncing = false;
+    async function marketLoop() {
+      if (isSyncing) {
+        setTimeout(marketLoop, 500);
+        return;
+      }
+      isSyncing = true;
+      try {
       const now = new Date();
       // IST is UTC+5:30
       const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
@@ -75,26 +82,25 @@ async function startServer() {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
           
           // Ensure we have regular instrument refreshes if empty or contains stale data
-          const nowCheck = new Date();
-          nowCheck.setHours(0,0,0,0);
+          const nowIST = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+          const startOfTodayIST = new Date(nowIST);
+          startOfTodayIST.setHours(0,0,0,0);
           
-          const isStale = niftyInstruments.length > 0 && new Date(niftyInstruments[0].expiry) < nowCheck;
+          const isStale = niftyInstruments.length > 0 && new Date(niftyInstruments[0].expiry) < startOfTodayIST;
 
           if (niftyInstruments.length === 0 || isStale) {
-            console.log("[SYSTEM] niftyInstruments empty or stale, pulling fresh from Kite...");
+            console.log(`[SYSTEM] Refreshing instruments (Reason: ${niftyInstruments.length === 0 ? 'Empty' : 'Stale'})...`);
             const instruments = await kiteInstance.getInstruments(["NFO"]);
-            const startOfToday = new Date();
-            startOfToday.setHours(0, 0, 0, 0);
             
             // Limit to within 2 years to avoid very long term LEAPS showing as primary expiries
-            const twoYearsFromNow = new Date();
+            const twoYearsFromNow = new Date(nowIST);
             twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
 
             const niftyAll = instruments.filter((ins: any) => 
               ins.name === 'NIFTY' && 
               ins.segment === 'NFO-OPT' &&
               ins.expiry &&
-              new Date(ins.expiry) >= startOfToday &&
+              new Date(ins.expiry) >= startOfTodayIST &&
               new Date(ins.expiry) <= twoYearsFromNow
             );
             
@@ -102,10 +108,14 @@ async function startServer() {
             allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry)))
               .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
             
-            const nearestExpiry = allExpiries[0];
-            niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
-            console.log(`[SYSTEM] Refreshed instruments. Total NIFTY expiries found: ${allExpiries.length}`);
-            console.log(`[SYSTEM] Nearest: ${nearestExpiry}, Monthly Candidates: ${allExpiries.slice(0, 5).join(', ')}`);
+            if (allExpiries.length > 0) {
+              const nearestExpiry = allExpiries[0];
+              niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
+              console.log(`[SYSTEM] Refreshed: ${niftyInstruments.length} instruments found for expiry: ${nearestExpiry}`);
+              console.log(`[SYSTEM] Available Expiries: ${allExpiries.slice(0, 5).join(', ')}`);
+            } else {
+              console.error("[SYSTEM] No valid NIFTY options found for today or future expiries.");
+            }
           }
 
           let optionSymbols: string[] = [];
@@ -131,38 +141,43 @@ async function startServer() {
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
             
             let chainData = [];
-            if (optionSymbols.length > 0) {
-              const fetchStrikes = Array.from(new Set(niftyInstruments.map(ins => ins.strike)));
-              fetchStrikes.sort((a, b) => a - b);
+            
+            // Only iterate through strikes we actually intended to fetch
+            const relevantStrikes = Array.from(new Set(niftyInstruments
+              .filter(ins => optionSymbols.includes(`NFO:${ins.tradingsymbol}`))
+              .map(ins => ins.strike)))
+              .sort((a,b) => a - b);
+
+            for (const strike of relevantStrikes) {
+              const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+              const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
               
-              for (const strike of fetchStrikes) {
-                const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
-                const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
-                
-                const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
-                const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
-                
-                if (ceQuote || peQuote) {
-                  chainData.push({
-                    strike,
-                    ce_oi: ceQuote?.oi || 0,
-                    ce_oi_change: ceQuote?.oi_day_high - ceQuote?.oi_day_low || 0,
-                    pe_oi: peQuote?.oi || 0,
-                    pe_oi_change: peQuote?.oi_day_high - peQuote?.oi_day_low || 0,
-                    ce_price: ceQuote?.last_price || 0,
-                    pe_price: peQuote?.last_price || 0,
-                    iv: vix || 14,
-                    delta: 0.5,
-                  });
-                }
+              const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
+              const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
+              
+              if (ceQuote || peQuote) {
+                chainData.push({
+                  strike,
+                  ce_oi: ceQuote?.oi || 0,
+                  ce_oi_change: (ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0),
+                  pe_oi: peQuote?.oi || 0,
+                  pe_oi_change: (peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0),
+                  ce_price: ceQuote?.last_price || 0,
+                  pe_price: peQuote?.last_price || 0,
+                  iv: ceQuote?.iv || vix || 14, // Prefer Kite IV if available
+                  delta: ceQuote?.delta || 0.5,
+                });
               }
             }
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix);
-            // Log every 30 seconds approx if loop is 1s (30 ticks)
-            if (Math.floor(Date.now() / 1000) % 30 === 0) {
-               console.log(`[LIVE-SYNC] Spot: ${spot}, VIX: ${vix}, Chain: ${chainData.length} strikes. Expiry: ${allExpiries[0]}`);
+            // High-visibility logs
+            if (Math.floor(Date.now() / 1000) % 15 === 0) {
+               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot}, VIX: ${vix}, Chain Strikes: ${chainData.length}`);
             }
+          }
+ else {
+            console.warn("[LIVE-SYNC] Received quotes but NIFTY 50 not found in response.");
           }
         } catch (err) {
           console.error("Real-time data sync failed:", err);
@@ -205,7 +220,14 @@ async function startServer() {
           console.error("Autonomous execution engine error:", err);
         }
       }
-    }, 1000);
+    } catch (err) {
+      console.error("[LOOP] Critical error:", err);
+    } finally {
+      isSyncing = false;
+      setTimeout(marketLoop, 1000);
+    }
+  }
+  marketLoop();
 
   app.get("/ping", (req, res) => res.send("pong"));
 
@@ -218,6 +240,8 @@ async function startServer() {
     
     if (key) {
       kiteInstance = new KiteConnect({ api_key: key });
+      niftyInstruments = []; 
+      allExpiries = [];
       console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
     }
     
