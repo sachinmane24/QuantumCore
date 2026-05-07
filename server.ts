@@ -131,18 +131,21 @@ async function startServer() {
           if (niftyInstruments.length === 0 || isStale) {
             console.log(`[SYSTEM] Refreshing instruments (Reason: ${niftyInstruments.length === 0 ? 'Empty' : 'Stale'})...`);
             const instruments = await kiteInstance.getInstruments(["NFO"]);
+            console.log(`[SYSTEM] Total NFO instruments returned: ${instruments.length}`);
             
             // Limit to within 2 years to avoid very long term LEAPS showing as primary expiries
             const twoYearsFromNow = new Date(nowIST);
             twoYearsFromNow.setFullYear(twoYearsFromNow.getFullYear() + 2);
 
             const niftyAll = instruments.filter((ins: any) => 
-              (ins.name === 'NIFTY' || ins.name === 'NIFTY 50') && 
+              ins.name === 'NIFTY' && 
               ins.segment === 'NFO-OPT' &&
               ins.expiry &&
               new Date(ins.expiry) >= startOfTodayIST &&
               new Date(ins.expiry) <= twoYearsFromNow
             );
+
+            console.log(`[SYSTEM] Filtered NIFTY options count: ${niftyAll.length}`);
             
             // Sort chronologically
             allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry)))
@@ -151,10 +154,11 @@ async function startServer() {
             if (allExpiries.length > 0) {
               const nearestExpiry = allExpiries[0];
               niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
-              console.log(`[SYSTEM] Refreshed: ${niftyInstruments.length} instruments found for expiry: ${nearestExpiry}`);
-              console.log(`[SYSTEM] Available Expiries: ${allExpiries.slice(0, 5).join(', ')}`);
+              console.log(`[SYSTEM] Active Expiry Set: ${nearestExpiry}, Instruments: ${niftyInstruments.length}`);
             } else {
               console.error("[SYSTEM] No valid NIFTY options found for today or future expiries.");
+              // Fallback: log a few names to see what we're missing
+              console.log("[DEBUG] Sample NFO names:", Array.from(new Set(instruments.slice(0, 100).map((i:any) => i.name))));
             }
           }
 
@@ -174,7 +178,7 @@ async function startServer() {
           }
 
           const fetchSymbols = [...symbols, ...optionSymbols];
-          const quotes = await kiteInstance.getQuotes(fetchSymbols);
+          const quotes = await kiteInstance.getQuote(fetchSymbols);
           lastRawQuotes = quotes;
           lastFetchTimestamp = new Date().toISOString();
           lastFetchError = null;
