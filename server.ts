@@ -41,6 +41,9 @@ async function startServer() {
   let accessToken: string | null = null;
   let niftyInstruments: any[] = [];
   let allExpiries: string[] = [];
+  let lastRawQuotes: any = null;
+  let lastFetchTimestamp: string | null = null;
+  let lastFetchError: string | null = null;
 
   if (apiKey) {
     kiteInstance = new KiteConnect({ api_key: apiKey });
@@ -135,6 +138,9 @@ async function startServer() {
 
           const fetchSymbols = [...symbols, ...optionSymbols];
           const quotes = await kiteInstance.getQuotes(fetchSymbols);
+          lastRawQuotes = quotes;
+          lastFetchTimestamp = new Date().toISOString();
+          lastFetchError = null;
           
           if (quotes["NSE:NIFTY 50"]) {
             const spot = quotes["NSE:NIFTY 50"].last_price;
@@ -179,7 +185,8 @@ async function startServer() {
  else {
             console.warn("[LIVE-SYNC] Received quotes but NIFTY 50 not found in response.");
           }
-        } catch (err) {
+        } catch (err: any) {
+          lastFetchError = err?.message || String(err);
           console.error("Real-time data sync failed:", err);
         }
       }
@@ -330,6 +337,23 @@ async function startServer() {
       console.error("Kite session error:", err);
       res.status(500).send("Authentication failed");
     }
+  });
+
+  apiRouter.get("/debug/kite", (req, res) => {
+    res.json({
+      timestamp: new Date().toISOString(),
+      kiteConfigured: !!apiKey,
+      sessionActive: !!accessToken,
+      instrumentsCount: niftyInstruments.length,
+      expiries: allExpiries.slice(0, 10),
+      lastFetchTimestamp,
+      lastFetchError,
+      rawQuotesSample: lastRawQuotes ? Object.keys(lastRawQuotes).slice(0, 5).reduce((acc: any, key) => {
+        acc[key] = lastRawQuotes[key];
+        return acc;
+      }, {}) : null,
+      niftySpot: lastRawQuotes ? lastRawQuotes["NSE:NIFTY 50"]?.last_price : null
+    });
   });
 
   apiRouter.get("/kite/status", (req, res) => {
