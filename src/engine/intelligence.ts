@@ -28,7 +28,7 @@ class IntelligenceEngine {
    */
   public deriveParams(
     side: 'BUY' | 'SELL',
-    strategyMode: 'MOMENTUM_SNIPER' | 'INSTITUTIONAL_SPREAD',
+    strategyMode: 'MOMENTUM_SNIPER' | 'INST_SPREAD',
     entrySpot: number,
     bias: 'BULLISH' | 'BEARISH'
   ): TradeParams {

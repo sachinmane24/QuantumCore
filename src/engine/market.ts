@@ -87,6 +87,25 @@ class MarketEngine {
     return this.todayOpen;
   }
 
+  public updateDailyStructure(data: { prevClose?: number, open?: number, high?: number, low?: number, vwap?: number }) {
+    if (data.prevClose !== undefined && data.prevClose > 0) this.yesterdayClose = data.prevClose;
+    if (data.open !== undefined && data.open > 0) this.todayOpen = data.open;
+    if (data.high !== undefined && data.high > 0) this.orbHigh = data.high;
+    if (data.low !== undefined && data.low > 0) this.orbLow = data.low;
+    if (data.vwap !== undefined && data.vwap > 0) this.vwap = data.vwap;
+    console.log(`[MARKET] Daily structure updated from persistence: Close=${this.yesterdayClose}, Open=${this.todayOpen}, ORB_H=${this.orbHigh}, ORB_L=${this.orbLow}, VWAP=${this.vwap}`);
+  }
+
+  public getDailyStructure() {
+    return {
+      prevClose: this.yesterdayClose,
+      open: this.todayOpen,
+      high: this.orbHigh,
+      low: this.orbLow,
+      vwap: this.vwap
+    };
+  }
+
   public syncMode() {
     console.log(`[MARKET] Syncing mode: ${config.DATA_SOURCE}`);
     if (config.DATA_SOURCE === 'MOCK') {
@@ -237,11 +256,16 @@ class MarketEngine {
 
     if (vwap) this.vwap = vwap;
     
-    // Set today's open if it's the first data point
-    if (this.todayOpen === 0 && niftyOhlc?.open) {
-      this.todayOpen = niftyOhlc.open;
+    // Set daily structure values if they are reported by exchange
+    if (niftyOhlc) {
+      if (niftyOhlc.close && (this.yesterdayClose === 0 || this.yesterdayClose === 24300)) {
+         this.yesterdayClose = niftyOhlc.close;
+      }
+      if (niftyOhlc.open && (this.todayOpen === 0 || this.todayOpen === 24350)) {
+         this.todayOpen = niftyOhlc.open;
+      }
     }
-
+    
     // Capture ORB between 9:15 and 9:30 IST
     const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
     const istDate = new Date(istTime);

@@ -126,6 +126,14 @@ interface TradeLogEntry {
   sellPrice?: number;
   totalInvestment?: number;
   duration?: number;
+  strike?: number;
+  intelligence?: {
+    atr: number;
+    vixFactor: number;
+    rr: number;
+    slPrice: number;
+    targetPrice: number;
+  };
 }
 
 const RiskInput = ({ label, value, onChange, type = "number" }: { label: string, value: any, onChange: (val: any) => void, type?: string }) => (
@@ -2207,7 +2215,8 @@ export default function App() {
                            <th className="p-5 border-b border-terminal-line">Asset / Bias</th>
                            <th className="p-5 border-b border-terminal-line">Signal Score</th>
                            <th className="p-5 border-b border-terminal-line">Phase / VIX</th>
-                           <th className="p-5 border-b border-terminal-line">Execution Detail</th>
+                           <th className="p-5 border-b border-terminal-line">Execution Details</th>
+                           <th className="p-5 border-b border-terminal-line">Entry/Exit Level</th>
                            <th className="p-5 border-b border-terminal-line text-right">Investment</th>
                            <th className="p-5 border-b border-terminal-line text-right">Profit/Loss</th>
                            <th className="p-5 border-b border-terminal-line text-right">Duration</th>
@@ -2244,6 +2253,26 @@ export default function App() {
                                        {log.phase || 'MID-SESSION'}
                                     </span>
                                     <span className="text-[9px] text-slate-500 font-bold">VIX: {log.vix?.toFixed(2) || '14.00'}</span>
+                                 </div>
+                              </td>
+                              <td className="p-5">
+                                 <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                    <div className="flex flex-col">
+                                       <span className="text-[7px] text-slate-500 uppercase font-black">Strike</span>
+                                       <span className="text-[10px] text-white font-mono">{log.strike || Math.round((log.spot || 0)/50)*50 || '---'}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                       <span className="text-[7px] text-slate-500 uppercase font-black">RR Ratio</span>
+                                       <span className="text-[10px] text-blue-400 font-mono">1:{log.intelligence?.rr?.toFixed(1) || '1.5'}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                       <span className="text-[7px] text-slate-500 uppercase font-black">Target</span>
+                                       <span className="text-[10px] text-emerald-400 font-mono">{log.intelligence?.targetPrice?.toFixed(1) || '---'}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                       <span className="text-[7px] text-slate-500 uppercase font-black">Stop Loss</span>
+                                       <span className="text-[10px] text-rose-400 font-mono">{log.intelligence?.slPrice?.toFixed(1) || '---'}</span>
+                                    </div>
                                  </div>
                               </td>
                               <td className="p-5">

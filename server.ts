@@ -72,10 +72,35 @@ async function loadRiskConfig() {
   }
 }
 
+async function saveMarketStructure() {
+  try {
+    const structure = marketEngine.getDailyStructure();
+    // Only save if we have some real data
+    if (structure.prevClose > 0 || structure.open > 0) {
+      await savePersistentData("system", "market_structure", structure);
+    }
+  } catch (err) {
+    console.error("[STORAGE] Market structure save failed:", err);
+  }
+}
+
+async function loadMarketStructure() {
+  try {
+    const data = await loadPersistentData("system", "market_structure");
+    if (data) {
+      marketEngine.updateDailyStructure(data);
+      console.log("[STORAGE] Market structure loaded from Firestore.");
+    }
+  } catch (err) {
+    console.error("[STORAGE] Market structure load failed:", err);
+  }
+}
+
 async function startServer() {
   try {
     await loadKiteSession();
     await loadRiskConfig();
+    await loadMarketStructure();
     const app = express();
     const PORT = process.env.PORT || 3000;
 
@@ -248,6 +273,11 @@ async function startServer() {
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, changePercent);
             
+            // Persist market structure if significant values changed (e.g., first open or new High/Low)
+            if (loopCount % 60 === 0) { // Every 1 min approx
+               await saveMarketStructure();
+            }
+
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
                console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}, Chain: ${chainData.length} strikes`);
             }

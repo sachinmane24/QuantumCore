@@ -32,6 +32,7 @@ class ExecutionEngine {
   private currentTradeBias: 'BULLISH' | 'BEARISH' | null = null;
   private currentEntryTime: number = 0;
   private currentSpotAtEntry: number = 0;
+  private currentStrikeAtEntry: number = 0;
   private currentVixAtEntry: number = 0;
   private netDelta: number = 0;
   private netGamma: number = 0;
@@ -68,9 +69,9 @@ class ExecutionEngine {
     this.currentTradeBias = bias;
     this.currentEntryTime = Date.now();
     this.currentSpotAtEntry = spot;
-    this.currentVixAtEntry = marketEngine.getVix();
-
     const atmStrike = Math.round(spot / 50) * 50;
+    this.currentStrikeAtEntry = atmStrike;
+    this.currentVixAtEntry = marketEngine.getVix();
 
     const getLTP = (strike: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
@@ -169,7 +170,7 @@ class ExecutionEngine {
     if (this.currentTradeParams) {
       // Time-Based Decay Intelligence (Option Buying specific)
       const durationMins = (Date.now() - this.currentEntryTime) / 60000;
-      if (this.currentStrategy === 'MOMENTUM_SNIPER' && durationMins > 45) {
+      if (this.lastTradeScore?.mode === 'MOMENTUM_SNIPER' && durationMins > 45) {
          if (this.pnl < this.currentTradeParams.targetRupees * 0.25) {
             await this.exitAll(`Time-Decay Exit: 45m Stagnation Threshold Reached`);
             return;
@@ -351,6 +352,7 @@ class ExecutionEngine {
           buyPrice: buyPrice,
           sellPrice: sellPrice,
           totalInvestment: totalInvestment,
+          strike: this.currentStrikeAtEntry,
           intelligence: this.currentTradeParams ? {
             atr: this.currentTradeParams.atrValue,
             vixFactor: this.currentTradeParams.vixFactor,
