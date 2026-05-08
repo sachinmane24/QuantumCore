@@ -298,11 +298,24 @@ async function startServer() {
         console.error("[SYSTEM] PnL update failed:", err);
       }
 
-      // 3. Autonomous Execution
+      // 3. Autonomous Execution & Auto Square-off
       if (config.AUTO_MODE) {
         try {
-          const decision = strategyEngine.calculateScore();
           const state = executionEngine.getState();
+          const nowIST = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+          const currentISTHours = nowIST.getUTCHours();
+          const currentISTMinutes = nowIST.getUTCMinutes();
+          const currentISTTotalMinutes = currentISTHours * 60 + currentISTMinutes;
+
+          const [endH, endM] = config.END_TIME.split(':').map(Number);
+          const endTotalMinutes = endH * 60 + endM;
+
+          if (currentISTTotalMinutes >= endTotalMinutes && state.positions.length > 0) {
+            console.log(`[AUTO] Auto square-off time reached (${config.END_TIME} IST). Exiting all positions.`);
+            await executionEngine.exitAll(`Auto Square-off (${config.END_TIME})`);
+          }
+
+          const decision = strategyEngine.calculateScore();
 
           // Simple Auto-Exit if profit target or SL reached
           if (state.pnl >= config.TARGET_RUPEES) {
@@ -512,6 +525,7 @@ async function startServer() {
     res.json({
       spot: marketEngine.getSpotPrice(),
       vix: marketEngine.getVix(),
+      vixDelta: marketEngine.getVixDelta(),
       pcr: marketEngine.getPCR(),
       maxPain: marketEngine.getMaxPain(),
       maxOi: marketEngine.getMaxOi(),
@@ -585,7 +599,21 @@ async function startServer() {
     ];
     
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    // IST calculation
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    const day = istTime.getUTCDay();
+    const hours = istTime.getUTCHours();
+    const minutes = istTime.getUTCMinutes();
+    const currentTimeMinutes = hours * 60 + minutes;
+    
+    const today = istTime.toISOString().split('T')[0];
+    const isWeekend = day === 0 || day === 6;
+    const isHoliday = holidays.includes(today);
+    // Market hours: 9:15 AM (555 mins) to 3:30 PM (930 mins)
+    const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
+    const isMarketClosed = isWeekend || isHoliday || isOffMarketHours;
+
     const nextHoliday = holidays.find(h => h >= today);
     
     // If we have real expiries from Zerodha, use them
@@ -672,7 +700,8 @@ async function startServer() {
       holiday: {
         next: nextHoliday,
         isUpcoming: nextHoliday === today || (nextHoliday && (new Date(nextHoliday).getTime() - now.getTime()) / (1000 * 60 * 60 * 24) < 3)
-      }
+      },
+      isMarketClosed
     });
   });
 

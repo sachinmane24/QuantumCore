@@ -354,11 +354,12 @@ class ExecutionEngine {
       const lots = primaryQty / config.LOT_SIZE;
 
       if (sellLegs.length > 0) {
-        // Option Selling / Spreads Margin Heuristic: ~35k per lot for Hedged Spreads, 1.1L for Naked
-        totalInvestment = (buyLegs.length > 0 ? 35000 : 110000) * lots;
+        // Option Selling / Spreads Margin Heuristic
+        const isHedged = buyLegs.length > 0;
+        totalInvestment = (isHedged ? 38000 : 115000) * lots;
       } else {
-        // Option Buying: Premium Paid * Qty
-        totalInvestment = buyPrice * primaryQty;
+        // Option Buying: Real cost calculation
+        totalInvestment = buyLegs.reduce((sum, p) => sum + (p.entryPrice * p.qty), 0);
       }
 
       // Record trade result in Risk Engine

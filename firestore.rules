@@ -25,23 +25,11 @@ service cloud.firestore {
 
     // --- Trades Collection ---
     match /trades/{tradeId} {
-      allow get: if isAdmin();
-      allow list: if isAdmin();
-      allow create: if isAdmin() && isValidId(tradeId) && isValidTrade(request.resource.data);
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn();
       allow update: if false; // Trades are immutable logs
       allow delete: if isAdmin();
-
-      function isValidTrade(data) {
-        return data.keys().hasAll(['timestamp', 'score', 'gamma', 'oi_bias', 'trap', 'pnl', 'win'])
-          && data.keys().size() == 7
-          && data.timestamp is string && data.timestamp.size() <= 100
-          && data.score is number
-          && data.gamma is number
-          && data.oi_bias is number
-          && data.trap is bool
-          && data.pnl is number
-          && data.win is bool;
-      }
     }
   }
 }

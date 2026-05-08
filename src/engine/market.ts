@@ -31,7 +31,11 @@ export interface OptionChainData {
   pe_oi_change: number;
   ce_price: number;
   pe_price: number;
-  iv?: number;
+  ce_volume?: number;
+  pe_volume?: number;
+  ce_iv?: number;
+  pe_iv?: number;
+  iv?: number; // Legacy
   delta?: number;
   gamma?: number;
   theta?: number;
@@ -47,6 +51,7 @@ class MarketEngine {
   private orbLow: number = 0;
   private vwap: number = 0;
   private todayOpen: number = 0;
+  private vixDelta: number = 0;
   private mockInterval: NodeJS.Timeout | null = null;
   private initialized: boolean = false;
 
@@ -60,6 +65,10 @@ class MarketEngine {
 
   public getYesterdayClose(): number {
     return this.yesterdayClose;
+  }
+
+  public getVixDelta(): number {
+    return this.vixDelta;
   }
 
   public getGapPercent(): number {
@@ -136,7 +145,11 @@ class MarketEngine {
         pe_oi_change: (Math.random() - 0.6) * 40000,
         ce_price: Math.max(1, 100 - (strike - spot) * 0.4),
         pe_price: Math.max(1, 100 + (strike - spot) * 0.4),
-        iv: 12 + Math.random() * 4,
+        ce_volume: Math.floor(Math.random() * 1000000),
+        pe_volume: Math.floor(Math.random() * 1000000),
+        ce_iv: 12 + Math.random() * 4,
+        pe_iv: 13 + Math.random() * 4,
+        iv: 12.5 + Math.random() * 4,
         delta: Math.max(-1, Math.min(1, (spot - strike) / 100)),
         gamma: Math.max(0.001, (1 / (50 + Math.abs(spot - strike)))) * 2, // ATM Gamma is higher
         theta: -10 - (Math.random() * 5),
@@ -291,6 +304,14 @@ class MarketEngine {
     
     // Update VIX tick if provided
     if (vix) {
+      if (this.ticks.get(264969)) {
+        const prevVix = this.ticks.get(264969)!.last_price;
+        if (prevVix > 0) {
+           // We can calculate a session delta if we want, but usually VIX % change is from prev close.
+           // However, if we don't have prev close, we just show 0 or calculate from first tick.
+           this.vixDelta = ((vix - prevVix) / prevVix) * 100;
+        }
+      }
       const vixTick: Tick = {
         tradable: true,
         mode: 'full',

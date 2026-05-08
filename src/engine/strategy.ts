@@ -116,46 +116,44 @@ class StrategyEngine {
     let recommendation = isObservationPeriod ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
     if (!isObservationPeriod) {
-      // Significantly increased thresholds for Naked Option Buying (MOMENTUM_SNIPER)
-      // Base threshold increased from 75 -> 85
-      // ORB assisted threshold increased from 60 -> 75
-      const isStrongScore = total > 85;
-      const isOrbConfirmed = orbTrigger !== 0 && total > 75;
+      const isStrongScore = total > 80;
+      const isOrbConfirmed = orbTrigger !== 0 && total > 70;
       
-      if (isStrongScore || isOrbConfirmed) {
+      // Multi-state detection
+      const isSideways = Math.abs(oiChangeBias) < 150000 && Math.abs(diff) < 10;
+      const isHighVol = vix > 18;
+
+      if ((isStrongScore || isOrbConfirmed) && !isSideways) {
         mode = 'MOMENTUM_SNIPER';
+        if (orbTrigger === 1) bias = 'BULLISH';
+        else if (orbTrigger === -1) bias = 'BEARISH';
+        else bias = oiChangeBias > 100000 ? 'BULLISH' : oiChangeBias < -100000 ? 'BEARISH' : 'NEUTRAL';
         
-        // Ensure strong bias alignment for naked buying
-        // Requires at least 400k OI difference or ORB trigger
-        const significantOiBias = Math.abs(oiChangeBias) > 400000;
-        
-        if (orbTrigger === 1) {
-          bias = 'BULLISH';
-        } else if (orbTrigger === -1) {
-          bias = 'BEARISH';
-        } else {
-          bias = oiChangeBias > 100000 ? 'BULLISH' : oiChangeBias < -100000 ? 'BEARISH' : 'NEUTRAL';
-        }
-        
-        // Final sanity check for naked buying: 
-        // 1. Must not be NEUTRAL bias
-        // 2. If no ORB, must have significant OI bias and extreme score
-        if (bias === 'NEUTRAL' || (orbTrigger === 0 && (!significantOiBias || total < 90))) {
-          mode = 'INST_SPREAD'; // Demote to spread if logic isn't "Extreme" or bias is fuzzy
+        if (bias === 'NEUTRAL') {
+          mode = 'INST_SPREAD';
           bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
         }
-        
-        recommendation = mode === 'MOMENTUM_SNIPER' 
-          ? `BUY NAKED ${atmStrike} ${bias === 'BULLISH' ? 'CE' : 'PE'} ${orbTrigger !== 0 ? '(ORB CONFIRMED)' : '(HIGH MOMENTUM)'}`
-          : `${atmStrike} ${bias === 'BULLISH' ? 'BULL SPREAD' : 'BEAR SPREAD'} (CONSOLIDATION BIAS)`;
-      } else if (total > 55) {
+
+        // Strategy Recommendation Engine
+        if (bias === 'BULLISH') {
+          recommendation = isHighVol ? "BULL PUT SPREAD (CREDIT/H-IV)" : "BULL CALL SPREAD (DEBIT/L-IV)";
+          if (mode === 'MOMENTUM_SNIPER') recommendation = `NAKED ATM CE BUY (EXPLOSIVE)`;
+        } else if (bias === 'BEARISH') {
+          recommendation = isHighVol ? "BEAR CALL SPREAD (CREDIT/H-IV)" : "BEAR PUT SPREAD (DEBIT/L-IV)";
+          if (mode === 'MOMENTUM_SNIPER') recommendation = `NAKED ATM PE BUY (EXPLOSIVE)`;
+        }
+      } else if (total > 45 || isSideways) {
         mode = 'INST_SPREAD';
-        bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
-        recommendation = `${atmStrike} ${bias === 'BULLISH' ? 'BULL SPREAD' : 'BEAR SPREAD'}`;
+        bias = 'NEUTRAL';
+        if (isHighVol) {
+          recommendation = "IRON FLY / STRADDLE (IV CRUSH)";
+        } else {
+          recommendation = "IRON CONDOR (THETA DECAY)";
+        }
       } else {
         mode = 'INST_SPREAD';
         bias = 'NEUTRAL';
-        recommendation = trapDetected ? 'TRAP DETECTED - STANDBY' : 'VOLATILITY LOW - STANDBY';
+        recommendation = trapDetected ? "TRAP DETECTED - NEUTRAL" : "LOW CONVICTION - STANDBY";
       }
     }
 

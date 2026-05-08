@@ -24,6 +24,7 @@ interface MarketData {
   spot: number;
   tick: any;
   vix: number;
+  vixDelta?: number;
   pcr: number;
   gapPercent: number;
   orb: { high: number; low: number };
@@ -40,6 +41,10 @@ interface MarketData {
     pe_oi_change: number;
     ce_price: number;
     pe_price: number;
+    ce_volume?: number;
+    pe_volume?: number;
+    ce_iv?: number;
+    pe_iv?: number;
     iv?: number;
     delta?: number;
     gamma?: number;
@@ -101,6 +106,7 @@ interface MarketInfo {
     next: string;
     isUpcoming: boolean;
   };
+  isMarketClosed?: boolean;
 }
 
 interface HistoryPoint {
@@ -390,10 +396,14 @@ export default function App() {
     await fetch('/api/exit', { method: 'POST' });
   };
 
-  const handleToggleDataMode = async () => {
-    if (!execution) return;
+  const handleToggleDataMode = async (targetMode?: 'MOCK' | 'LIVE') => {
+    if (!execution || !marketInfo) return;
     try {
-      const newMode = execution.dataSource === 'MOCK' ? 'LIVE' : 'MOCK';
+      const newMode = targetMode || (execution.dataSource === 'MOCK' ? 'LIVE' : 'MOCK');
+      if (newMode === 'LIVE' && marketInfo.isMarketClosed) {
+         console.warn("Market is closed. Cannot switch to LIVE mode.");
+         return;
+      }
       const res = await fetch('/api/toggle-data-mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -423,7 +433,11 @@ export default function App() {
   };
 
   const handleToggleAutoMode = async () => {
-    if (!execution) return;
+    if (!execution || !marketInfo) return;
+    if (marketInfo.isMarketClosed) {
+       console.warn("Market is closed. Auto Mode is disabled.");
+       return;
+    }
     try {
       const newMode = !execution.autoMode;
       const res = await fetch('/api/toggle-auto-mode', {
@@ -771,6 +785,37 @@ export default function App() {
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
+        {/* --- TOP SUMMARY BAR --- */}
+        <div className="bg-black/60 border-b border-white/5 py-1.5 px-8 flex justify-between items-center text-[9px] font-black uppercase tracking-[0.15em] text-slate-400 shrink-0">
+          <div className="flex gap-10">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">Underlying Spot</span>
+              <span className="text-white">₹{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 1 })}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">Institutional VWAP</span>
+              <span className="text-blue-400">₹{market?.vwap.toFixed(1)}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">DTE (Weekly)</span>
+              <span className="text-amber-500">{marketInfo?.expiry.daysToExpiry} Days</span>
+            </div>
+          </div>
+          <div className="flex gap-10">
+             <div className="flex items-center gap-2">
+              <span className="text-slate-500">ATM Straddle Premium</span>
+              <span className="text-emerald-400">
+                ₹{((market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
+                   (market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0)).toFixed(1)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">IV Rank / Percentile</span>
+              <span className="text-purple-400">42 / 68%</span>
+            </div>
+          </div>
+        </div>
+
         {/* --- REFINED TOP BAR --- */}
         <header className="h-16 border-b border-terminal-line px-8 flex items-center justify-between bg-black/20 backdrop-blur-xl shrink-0 z-10">
           <div className="flex items-center space-x-12">
@@ -795,14 +840,17 @@ export default function App() {
             </div>
             <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">India VIX</span>
-              <div className="terminal-value text-lg">
+              <div className="terminal-value text-lg flex items-center gap-2">
                 <span className="text-slate-200">{market?.vix.toFixed(2) || '12.42'}</span>
-                <span className={cn(
-                  "text-[10px] font-bold ml-2",
-                  execution?.dataSource === 'LIVE' ? "text-blue-400" : "text-slate-500"
-                )}>
-                  {execution?.dataSource === 'LIVE' ? 'SYNC' : 'MOCK'}
-                </span>
+                {market?.vixDelta !== undefined && (
+                  <span className={cn(
+                    "text-[10px] font-black",
+                    market.vixDelta >= 0 ? "text-rose-400" : "text-emerald-400"
+                  )}>
+                    {market.vixDelta >= 0 ? <ArrowUpRight className="w-2.5 h-2.5 inline" /> : <ArrowDownRight className="w-2.5 h-2.5 inline" />}
+                    {Math.abs(market.vixDelta).toFixed(1)}%
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex flex-col text-right">
@@ -819,22 +867,27 @@ export default function App() {
               <>
                 <div className="w-px h-8 bg-white/5 mx-2" />
                 <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Weekly Expiry</span>
-                  <div className="terminal-value text-[9px] text-blue-400 font-black">
-                    {marketInfo.expiry.weekly ? new Date(marketInfo.expiry.weekly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'} 
-                    <span className="text-[8px] text-slate-500 ml-2 font-bold">({marketInfo.expiry.daysToExpiry}d)</span>
-                  </div>
-                </div>
-                <div className="flex flex-col px-4 border-r border-white/5">
-                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Monthly</span>
-                  <div className="terminal-value text-[9px] text-purple-400 font-black">
-                    {marketInfo.expiry.monthly ? new Date(marketInfo.expiry.monthly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
+                  <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Expiries</span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] text-blue-400 font-black leading-none">
+                        {marketInfo.expiry.weekly ? new Date(marketInfo.expiry.weekly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
+                      </span>
+                      <span className="text-[7px] text-slate-500 font-bold uppercase mt-1">Weekly ({marketInfo.expiry.daysToExpiry} DTE)</span>
+                    </div>
+                    <div className="w-px h-4 bg-white/10" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] text-purple-400 font-black leading-none">
+                        {marketInfo.expiry.monthly ? new Date(marketInfo.expiry.monthly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
+                      </span>
+                      <span className="text-[7px] text-slate-500 font-bold uppercase mt-1">Monthly</span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex flex-col px-4">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Holiday Wall</span>
                   <div className={cn("terminal-value text-[9px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
-                    {marketInfo.holiday.next || 'CLEAR'}
+                    {marketInfo.holiday.next ? new Date(marketInfo.holiday.next).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : 'CLEAR'}
                     {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse leading-none py-0.5">UPCOMING</span>}
                   </div>
                 </div>
@@ -844,6 +897,14 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-6">
+          {marketInfo?.isMarketClosed && (
+            <div className="px-4 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center gap-2">
+               <ShieldAlert className="w-3 h-3 text-rose-500" />
+               <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest animate-pulse">
+                  Market is closed
+               </span>
+            </div>
+          )}
           {!kiteStatus.connected && (
             <button 
               onClick={handleKiteConnect}
@@ -889,11 +950,13 @@ export default function App() {
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Operation:</span>
             <button 
               onClick={handleToggleAutoMode}
+              disabled={marketInfo?.isMarketClosed}
               className={cn(
                 "px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all",
                 execution?.autoMode 
                   ? "bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.3)]"
-                  : "bg-slate-700 text-slate-300 border border-white/10"
+                  : "bg-slate-700 text-slate-300 border border-white/10",
+                marketInfo?.isMarketClosed && "opacity-50 cursor-not-allowed"
               )}
             >
               {execution?.autoMode ? 'AUTO' : 'MANUAL'}
@@ -1284,101 +1347,6 @@ export default function App() {
                     </div>
                   </div>
                </section>
-
-              <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Live Metric Intelligence</h3>
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-1.5">
-                       <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                       <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Real-time Stream</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[200px]">
-                  <div className="flex flex-col">
-                    <div className="flex justify-between items-end mb-2 px-1">
-                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Mark-to-Market (PnL)</span>
-                       <span className={cn("text-[10px] font-black", (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                         ₹{execution?.pnl || 0}
-                       </span>
-                    </div>
-                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
-                       <ResponsiveContainer width="100%" height="100%">
-                         <AreaChart data={history}>
-                            <defs>
-                              <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                            <XAxis dataKey="time" hide />
-                            <YAxis hide domain={['auto', 'auto']} />
-                            <Tooltip 
-                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
-                              itemStyle={{ color: '#10b981' }}
-                            />
-                            <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#colorPnl)" isAnimationActive={false} />
-                         </AreaChart>
-                       </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col">
-                    <div className="flex justify-between items-end mb-2 px-1">
-                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Strategy Multi-factor Score</span>
-                       <span className="text-[10px] font-black text-blue-400">
-                         {strategy?.score.total || 0}/100
-                       </span>
-                    </div>
-                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
-                       <ResponsiveContainer width="100%" height="100%">
-                         <AreaChart data={history}>
-                            <defs>
-                              <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                            <XAxis dataKey="time" hide />
-                            <YAxis hide domain={[0, 110]} />
-                            <Tooltip 
-                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
-                              itemStyle={{ color: '#3b82f6' }}
-                            />
-                            <Area type="monotone" dataKey="score" stroke="#3b82f6" fillOpacity={1} fill="url(#colorScore)" isAnimationActive={false} />
-                         </AreaChart>
-                       </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex flex-col h-[80px]">
-                    <div className="flex justify-between items-end mb-2 px-1">
-                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">India VIX Volatility Index</span>
-                       <span className="text-[10px] font-black text-amber-400">
-                         {market?.vix?.toFixed(2) || '--'}
-                       </span>
-                    </div>
-                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
-                       <ResponsiveContainer width="100%" height="100%">
-                         <AreaChart data={history}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                            <XAxis dataKey="time" hide />
-                            <YAxis hide domain={['auto', 'auto']} />
-                            <Tooltip 
-                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
-                              itemStyle={{ color: '#f59e0b' }}
-                            />
-                            <Area type="monotone" dataKey="vix" stroke="#f59e0b" fill="transparent" isAnimationActive={false} />
-                         </AreaChart>
-                       </ResponsiveContainer>
-                    </div>
-                </div>
-              </section>
             </div>
 
             <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8 overflow-y-auto custom-scrollbar pl-2">
@@ -1423,9 +1391,12 @@ export default function App() {
                      </span>
                   </div>
                   <div className="flex justify-between items-center text-[10px]">
-                     <span className="terminal-label !mb-0">Max Margin</span>
+                     <span className="terminal-label !mb-0">{strategy?.score.mode === 'MOMENTUM_SNIPER' ? 'Est. Premium' : 'Est. Margin'}</span>
                      <span className="terminal-value text-white">
-                        ₹{(Math.max(0.75, Math.min(2.5, 1.25 + ((strategy?.score.total || 50) - 55) * 0.02))).toFixed(2)}L
+                        {strategy?.score.mode === 'MOMENTUM_SNIPER' 
+                          ? `₹${(Math.round((market?.chain[0]?.ce_price || 100) * 25)).toLocaleString()}`
+                          : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score.total || 50) - 55) * 0.02))).toFixed(2)}L`
+                        }
                      </span>
                   </div>
                 </div>
@@ -1900,13 +1871,15 @@ export default function App() {
                   <table className="w-full border-collapse">
                     <thead className="sticky top-0 bg-[#0f172a] shadow-sm z-10">
                       <tr className="text-[9px] font-black text-slate-500 uppercase tracking-widest bg-black/40">
-                        <th className="px-6 py-4 text-left border-b border-terminal-line">Strike Price</th>
-                        <th className="px-6 py-4 text-left border-b border-terminal-line">Call OI Change</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Strike</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Delta (CE)</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Vol/OI (CE)</th>
                         <th className="px-6 py-4 text-right border-b border-terminal-line">LTP (Calls)</th>
-                        <th className="px-6 py-4 text-center border-b border-terminal-line">IV%</th>
+                        <th className="px-6 py-4 text-center border-b border-terminal-line">IV (C/P)</th>
                         <th className="px-6 py-4 text-left border-b border-terminal-line">LTP (Puts)</th>
-                        <th className="px-6 py-4 text-right border-b border-terminal-line">Put OI Change</th>
-                        <th className="px-6 py-4 text-right border-b border-terminal-line">Flow Signal</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Vol/OI (PE)</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Gamma (PE)</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Signal</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/[0.02]">
@@ -1916,40 +1889,65 @@ export default function App() {
                         const isSupport = c.strike === market?.maxOi?.pe?.strike;
                         const biasNum = (c.pe_oi_change - c.ce_oi_change);
                         const bias = biasNum > 0 ? "BULL" : "BEAR";
+                        const ceVolOi = c.ce_volume && c.ce_oi ? (c.ce_volume / c.ce_oi).toFixed(2) : '--';
+                        const peVolOi = c.pe_volume && c.pe_oi ? (c.pe_volume / c.pe_oi).toFixed(2) : '--';
+
                         return (
                           <tr key={c.strike} className={cn(
                             "group transition-colors h-14",
                             isAtm ? "bg-blue-600/5 hover:bg-blue-600/10" : "hover:bg-white/[0.01]"
                           )}>
-                            <td className={cn("px-6 py-2 terminal-value text-sm", isAtm ? "text-blue-400 font-black" : "text-slate-400")}>
-                               <div className="flex items-center gap-2">
-                                  {c.strike}
-                                  {isResistance && <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded border border-rose-500/20">RES</span>}
-                                  {isSupport && <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20">SUP</span>}
+                            <td className={cn("px-6 py-2 terminal-value text-sm text-center", isAtm ? "text-blue-400 font-black" : "text-slate-400")}>
+                               <div className="flex flex-col items-center">
+                                  <span>{c.strike}</span>
+                                  <div className="flex gap-1 mt-1">
+                                    {isResistance && <span className="text-[7px] bg-rose-500/20 text-rose-400 px-1 rounded border border-rose-500/20">RES</span>}
+                                    {isSupport && <span className="text-[7px] bg-emerald-500/20 text-emerald-400 px-1 rounded border border-emerald-500/20">SUP</span>}
+                                  </div>
                                </div>
                             </td>
-                            <td className={cn(
-                               "px-6 py-2 terminal-value text-xs font-bold font-mono",
-                               isResistance ? "text-rose-400 bg-rose-500/10" : "text-rose-500/70"
-                             )}>
-                               {(c.ce_oi / 1000000).toFixed(1)}M <span className="text-[10px] opacity-60">({c.ce_oi_change >= 0 ? '+' : ''}{(c.ce_oi_change / 1000).toFixed(1)}k)</span>
-                             </td>
-                             <td className="px-6 py-2 text-right terminal-value text-white text-xs font-black">₹{c.ce_price.toFixed(1)}</td>
-                             <td className="px-6 py-2 text-center terminal-value text-blue-400/40 text-[10px]">{c.iv?.toFixed(1) || '14.2'}%</td>
-                             <td className="px-6 py-2 text-left terminal-value text-white text-xs font-black">₹{c.pe_price.toFixed(1)}</td>
-                             <td className={cn(
-                               "px-6 py-2 text-right terminal-value text-xs font-bold font-mono",
-                               isSupport ? "text-emerald-400 bg-emerald-500/10" : "text-emerald-500/70"
-                             )}>
-                               {(c.pe_oi / 1000000).toFixed(1)}M <span className="text-[10px] opacity-60">({c.pe_oi_change >= 0 ? '+' : ''}{(c.pe_oi_change / 1000).toFixed(1)}k)</span>
-                             </td>
-                            <td className="px-6 py-2 text-right">
-                               <div className={cn(
-                                 "inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest",
-                                 bias === 'BULL' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
-                               )}>
-                                 {bias} POWER
+                            <td className="px-6 py-2 terminal-value text-[10px] text-blue-400 font-bold">
+                              {(c.delta || 0.5).toFixed(2)}
+                            </td>
+                            <td className="px-6 py-2 terminal-value text-[10px] text-slate-500 whitespace-nowrap">
+                               <span className="text-white">{ceVolOi}</span>
+                               <span className="ml-1 opacity-40">x</span>
+                            </td>
+                             <td className="px-6 py-2 text-right">
+                               <div className="flex items-center justify-end gap-2">
+                                 <svg width="24" height="10" className="opacity-30 group-hover:opacity-60 transition-opacity">
+                                   <polyline fill="none" stroke="#10b981" strokeWidth="1" points="0,8 5,4 10,6 15,2 20,5 24,0" />
+                                 </svg>
+                                 <span className="terminal-value text-white text-xs font-black">₹{c.ce_price.toFixed(1)}</span>
                                </div>
+                             </td>
+                             <td className="px-6 py-2 text-center whitespace-nowrap">
+                                <span className={cn("text-[9px] font-black", (c.ce_iv || 14) > 18 ? "text-rose-400" : "text-blue-400/60")}>{(c.ce_iv || 14.2).toFixed(1)}</span>
+                                <span className="text-[8px] text-slate-600 mx-1">/</span>
+                                <span className={cn("text-[9px] font-black", (c.pe_iv || 14) > 18 ? "text-rose-400" : "text-blue-400/60")}>{(c.pe_iv || 14.5).toFixed(1)}</span>
+                             </td>
+                             <td className="px-6 py-2 text-left">
+                               <div className="flex items-center justify-start gap-2">
+                                 <span className="terminal-value text-white text-xs font-black">₹{c.pe_price.toFixed(1)}</span>
+                                 <svg width="24" height="10" className="opacity-30 group-hover:opacity-60 transition-opacity">
+                                   <polyline fill="none" stroke="#f43f5e" strokeWidth="1" points="0,2 5,6 10,4 15,8 20,5 24,10" />
+                                 </svg>
+                               </div>
+                             </td>
+                             <td className="px-6 py-2 text-right terminal-value text-[10px] text-slate-500 whitespace-nowrap">
+                               <span className="text-white">{peVolOi}</span>
+                               <span className="ml-1 opacity-40">x</span>
+                            </td>
+                            <td className="px-6 py-2 text-right terminal-value text-[10px] text-purple-400 font-bold">
+                              {(c.gamma || 0.002).toFixed(4)}
+                            </td>
+                            <td className="px-6 py-2 text-right">
+                                <div className={cn(
+                                  "inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest",
+                                  bias === 'BULL' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                                )}>
+                                  {bias}
+                                </div>
                             </td>
                           </tr>
                         );
