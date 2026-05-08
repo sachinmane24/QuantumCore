@@ -16,6 +16,7 @@ import { executionEngine } from "./src/engine/execution.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
 import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
+import { savePersistentData, loadPersistentData } from "./src/engine/persistence.ts";
 import fs from "fs-extra";
 
 const KITE_STORE = path.join(process.cwd(), "kite_session.json");
@@ -27,9 +28,8 @@ let accessToken: string | null = null;
 // Persistence Helpers
 async function saveKiteSession(data: any) {
   try {
-    const existing = await fs.readJson(KITE_STORE).catch(() => ({}));
-    await fs.writeJson(KITE_STORE, { ...existing, ...data });
-    console.log("[STORAGE] Kite session updated.");
+    await savePersistentData("system", "kite_session", data);
+    console.log("[STORAGE] Kite session updated in Firestore.");
   } catch (err) {
     console.error("[STORAGE] Save failed:", err);
   }
@@ -37,12 +37,12 @@ async function saveKiteSession(data: any) {
 
 async function loadKiteSession() {
   try {
-    if (await fs.pathExists(KITE_STORE)) {
-      const data = await fs.readJson(KITE_STORE);
+    const data = await loadPersistentData("system", "kite_session");
+    if (data) {
       if (data.key) apiKey = data.key;
       if (data.secret) apiSecret = data.secret;
       if (data.token) accessToken = data.token;
-      console.log(`[STORAGE] Session Loaded: Key=${apiKey ? 'Y' : 'N'}, Secret=${apiSecret ? 'Y' : 'N'}, Token=${accessToken ? 'Y' : 'N'}`);
+      console.log(`[STORAGE] Session Loaded from Firestore: Key=${apiKey ? 'Y' : 'N'}, Secret=${apiSecret ? 'Y' : 'N'}, Token=${accessToken ? 'Y' : 'N'}`);
       return data;
     }
   } catch (err) {
@@ -51,9 +51,31 @@ async function loadKiteSession() {
   return null;
 }
 
+async function saveRiskConfig(data: any) {
+  try {
+    await savePersistentData("system", "risk_config", data);
+    console.log("[STORAGE] Risk config updated in Firestore.");
+  } catch (err) {
+    console.error("[STORAGE] Risk save failed:", err);
+  }
+}
+
+async function loadRiskConfig() {
+  try {
+    const data = await loadPersistentData("system", "risk_config");
+    if (data) {
+      updateConfig(data);
+      console.log("[STORAGE] Risk config loaded from Firestore.");
+    }
+  } catch (err) {
+    console.error("[STORAGE] Risk load failed:", err);
+  }
+}
+
 async function startServer() {
   try {
     await loadKiteSession();
+    await loadRiskConfig();
     const app = express();
     const PORT = process.env.PORT || 3000;
 
@@ -462,6 +484,7 @@ async function startServer() {
       vix: marketEngine.getVix(),
       pcr: marketEngine.getPCR(),
       maxPain: marketEngine.getMaxPain(),
+      maxOi: marketEngine.getMaxOi(),
       tick: marketEngine.getLatestTick(),
       chain: marketEngine.getOptionChain(),
       gapPercent: marketEngine.getGapPercent(),
@@ -499,8 +522,9 @@ async function startServer() {
     res.json(config);
   });
 
-  apiRouter.post("/config", (req, res) => {
+  apiRouter.post("/config", async (req, res) => {
     updateConfig(req.body);
+    await saveRiskConfig(req.body);
     res.json({ success: true, config });
   });
 

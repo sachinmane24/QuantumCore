@@ -216,6 +216,17 @@ class MarketEngine {
     return this.optionChain;
   }
 
+  getMaxOi() {
+    if (this.optionChain.length === 0) return { ce: { strike: 0, oi: 0 }, pe: { strike: 0, oi: 0 } };
+    let maxCe = { strike: 0, oi: 0 };
+    let maxPe = { strike: 0, oi: 0 };
+    this.optionChain.forEach(c => {
+      if ((c.ce_oi || 0) > maxCe.oi) maxCe = { strike: c.strike, oi: c.ce_oi };
+      if ((c.pe_oi || 0) > maxPe.oi) maxPe = { strike: c.strike, oi: c.pe_oi };
+    });
+    return { ce: maxCe, pe: maxPe };
+  }
+
   updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number, vwap?: number) {
     this.spotPrice = spotPrice;
     if (chain && chain.length > 0) {
