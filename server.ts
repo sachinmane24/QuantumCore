@@ -534,6 +534,7 @@ async function startServer() {
       gapPercent: marketEngine.getGapPercent(),
       orb: marketEngine.getORB(),
       vwap: marketEngine.getVWAP(),
+      indicators: marketEngine.getTechnicalIndicators(),
       todayOpen: marketEngine.getTodayOpen(),
       yesterdayClose: marketEngine.getYesterdayClose()
     });
@@ -616,9 +617,9 @@ async function startServer() {
 
     const nextHoliday = holidays.find(h => h >= today);
     
-    // If we have real expiries from Zerodha, use them
-    let weeklyExpiry = "";
-    let monthlyExpiry = "";
+    // Real-time Expiry Calculation
+    let weeklyExpiryStr = "";
+    let monthlyExpiryStr = "";
     
     if (allExpiries.length > 0) {
       const formatExpiry = (dateStr: string) => {
@@ -630,12 +631,10 @@ async function startServer() {
         }
       };
 
-      weeklyExpiry = formatExpiry(allExpiries[0]);
+      weeklyExpiryStr = formatExpiry(allExpiries[0]);
       
-      // Find the last expiry of the current month
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
+      const currentMonth = istTime.getUTCMonth();
+      const currentYear = istTime.getUTCFullYear();
       
       const currentMonthExpiries = allExpiries.filter(e => {
         const d = new Date(e);
@@ -643,21 +642,15 @@ async function startServer() {
       });
       
       if (currentMonthExpiries.length > 0) {
-        monthlyExpiry = formatExpiry(currentMonthExpiries[currentMonthExpiries.length - 1]);
+        monthlyExpiryStr = formatExpiry(currentMonthExpiries[currentMonthExpiries.length - 1]);
       } else {
-        // If no more expiries this month, find the last of the next month
         const nextMonth = (currentMonth + 1) % 12;
         const nextYear = currentMonth === 11 ? currentYear + 1 : currentYear;
         const nextMonthExpiries = allExpiries.filter(e => {
           const d = new Date(e);
           return d.getMonth() === nextMonth && d.getFullYear() === nextYear;
         });
-        monthlyExpiry = formatExpiry(nextMonthExpiries[nextMonthExpiries.length - 1] || allExpiries[0]);
-      }
-      
-      // Safety: If weekly is monthly (last week of month), monthly is the next one
-      if (weeklyExpiry === monthlyExpiry && allExpiries.length > 1) {
-         // This is fine, but maybe user wants "Actual Monthly Continous"
+        monthlyExpiryStr = formatExpiry(nextMonthExpiries[nextMonthExpiries.length - 1] || allExpiries[0]);
       }
     } else {
       // Fallback calculation
@@ -677,25 +670,30 @@ async function startServer() {
         result.setDate(lastDay.getDate() - diff);
         
         if (result.getTime() < d.getTime()) {
-          const nextMonth = new Date(d.getFullYear(), d.getMonth() + 2, 0);
-          const nDay = nextMonth.getDay();
+          const nextMonthDay = new Date(d.getFullYear(), d.getMonth() + 2, 0);
+          const nDay = nextMonthDay.getDay();
           const nDiff = (nDay >= 4) ? (nDay - 4) : (nDay + 3);
-          const nextResult = new Date(nextMonth);
-          nextResult.setDate(nextMonth.getDate() - nDiff);
+          const nextResult = new Date(nextMonthDay);
+          nextResult.setDate(nextMonthDay.getDate() - nDiff);
           return nextResult.toISOString().split('T')[0];
         }
         return result.toISOString().split('T')[0];
       };
 
-      weeklyExpiry = getNextThursday(now);
-      monthlyExpiry = getMonthlyThursday(now);
+      weeklyExpiryStr = getNextThursday(istTime);
+      monthlyExpiryStr = getMonthlyThursday(istTime);
     }
 
+    // Sync with Market Engine
+    marketEngine.setExpiryInfo(weeklyExpiryStr, monthlyExpiryStr);
+
+    const daysToExpiry = weeklyExpiryStr ? Math.ceil((new Date(weeklyExpiryStr).getTime() - istTime.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+    
     res.json({
       expiry: {
-        weekly: weeklyExpiry,
-        monthly: monthlyExpiry,
-        daysToExpiry: weeklyExpiry ? Math.ceil((new Date(weeklyExpiry).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : 0
+        weekly: weeklyExpiryStr,
+        monthly: monthlyExpiryStr,
+        daysToExpiry
       },
       holiday: {
         next: nextHoliday,

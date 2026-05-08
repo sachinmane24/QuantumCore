@@ -34,6 +34,11 @@ class ExecutionEngine {
   private currentSpotAtEntry: number = 0;
   private currentStrikeAtEntry: number = 0;
   private currentVixAtEntry: number = 0;
+  private currentIsExpiryDay: boolean = false;
+  private currentIsMonthlyExpiry: boolean = false;
+  private currentEntryNetDelta: number = 0;
+  private currentEntryNetGamma: number = 0;
+  private currentIndicatorsAtEntry: any = null;
   private netDelta: number = 0;
   private netGamma: number = 0;
   private hedgeLogs: string[] = [];
@@ -72,6 +77,11 @@ class ExecutionEngine {
     const atmStrike = Math.round(spot / 50) * 50;
     this.currentStrikeAtEntry = atmStrike;
     this.currentVixAtEntry = marketEngine.getVix();
+    this.currentIndicatorsAtEntry = marketEngine.getTechnicalIndicators();
+    
+    const expiryStatus = marketEngine.getExpiryStatus();
+    this.currentIsExpiryDay = expiryStatus.isExpiryDay;
+    this.currentIsMonthlyExpiry = expiryStatus.isMonthlyExpiry;
 
     const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
@@ -108,13 +118,17 @@ class ExecutionEngine {
     };
 
     if (score.mode === 'MOMENTUM_SNIPER') {
-      // Momentum Sniper: Naked Buying - Find ATM/ITM Strike (Delta ~0.55)
-      const targetStrike = getStrikeByDelta(0.55, bias === 'BULLISH' ? 'CE' : 'PE');
+      // Momentum Sniper: Naked Buying
+      // On expiry day, we MUST avoid OTM. Delta should be at least 0.55-0.65
+      const expiryStatus = marketEngine.getExpiryStatus();
+      const targetDelta = expiryStatus.isExpiryDay ? 0.65 : 0.55;
+      
+      const targetStrike = getStrikeByDelta(targetDelta, bias === 'BULLISH' ? 'CE' : 'PE');
       const entryPrice = getLTP(targetStrike, bias === 'BULLISH' ? 'CE' : 'PE');
       this.activePositions = [
         { strike: targetStrike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice, qty: config.LOT_SIZE, side: 'BUY' }
       ];
-      console.log(`[EXECUTION] AI STRIKE SELECTION (Delta 0.55): Naked ${bias} ${targetStrike} @ ${entryPrice.toFixed(2)}.`);
+      console.log(`[EXECUTION] AI STRIKE SELECTION (Delta ${targetDelta}): Naked ${bias} ${targetStrike} @ ${entryPrice.toFixed(2)}.`);
     } else {
       // Institutional Logic: Credit Spreads (Sell ~0.25 Delta, Buy ~0.10 Delta for hedge)
       if (bias === 'BULLISH') {
@@ -139,6 +153,10 @@ class ExecutionEngine {
         console.log(`[EXECUTION] AI STRIKE SELECTION (Deltas 0.25/0.10): BEARISH credit spread S:${sellStrike}/B:${buyStrike}.`);
       }
     }
+
+    this.calculatePortfolioGreeks();
+    this.currentEntryNetDelta = this.netDelta;
+    this.currentEntryNetGamma = this.netGamma;
 
     riskEngine.recordTradeEntry();
   }
@@ -192,6 +210,19 @@ class ExecutionEngine {
     if (riskStats.isKillSwitchActive) {
       await this.exitAll(`Risk Kill Switch: ${riskStats.killReason}`);
       return;
+    }
+
+    const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    const totalMin = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
+    const expiryStatus = marketEngine.getExpiryStatus();
+
+    // 1:30 PM Shift on Monthly Expiry - Aggressive profit taking or narrowing
+    if (expiryStatus.isMonthlyExpiry && totalMin >= 810) {
+      if (this.pnl > 0 && this.activePositions.length > 0) {
+        console.log("[EXECUTION] Monthly Expiry Afternoon Shift: Securing profits before roll-over volatility.");
+        await this.exitAll("Monthly Expiry 1:30 PM Protective Exit");
+        return;
+      }
     }
 
     if (this.currentTradeParams) {
@@ -369,6 +400,7 @@ class ExecutionEngine {
         await tradeLogger.logTrade({
           timestamp: new Date().toISOString(),
           score: this.lastTradeScore?.total || 0,
+          mode: this.lastTradeScore?.mode || 'INST_SPREAD',
           gamma: this.lastTradeScore?.gamma || 0,
           oi_bias: this.lastTradeScore?.oiBias || 0,
           trap: this.lastTradeScore?.trap === 0,
@@ -377,6 +409,10 @@ class ExecutionEngine {
           bias: this.currentTradeBias || undefined,
           vix: this.currentVixAtEntry || 14,
           spot: this.currentSpotAtEntry || 0,
+          isExpiryDay: this.currentIsExpiryDay,
+          isMonthlyExpiry: this.currentIsMonthlyExpiry,
+          entryNetDelta: this.currentEntryNetDelta,
+          entryNetGamma: this.currentEntryNetGamma,
           phase: phase,
           duration: durationSeconds,
           entryTime: new Date(this.currentEntryTime).toISOString(),
@@ -384,6 +420,15 @@ class ExecutionEngine {
           sellPrice: sellPrice,
           totalInvestment: totalInvestment,
           strike: this.currentStrikeAtEntry,
+          indicators: this.currentIndicatorsAtEntry ? {
+            rsi: this.currentIndicatorsAtEntry.rsi,
+            macd: this.currentIndicatorsAtEntry.macd.macd,
+            macdSignal: this.currentIndicatorsAtEntry.macd.signal,
+            macdHist: this.currentIndicatorsAtEntry.macd.histogram,
+            bbUpper: this.currentIndicatorsAtEntry.bollinger.upper,
+            bbLower: this.currentIndicatorsAtEntry.bollinger.lower,
+            bbMiddle: this.currentIndicatorsAtEntry.bollinger.middle,
+          } : undefined,
           intelligence: this.currentTradeParams ? {
             atr: this.currentTradeParams.atrValue,
             vixFactor: this.currentTradeParams.vixFactor,

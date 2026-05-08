@@ -39,8 +39,15 @@ class IntelligenceEngine {
     const atr = this.calculateATR() || (entrySpot * 0.0025); // Baseline 0.25% if no ATR
     const vwap = marketEngine.getVWAP();
     
-    // Expiry Day Logic (Nifty expires on Thursday)
-    const isExpiryDay = new Date().getDay() === 4; // 4 = Thursday
+    // Expiry Day Logic
+    const expiryStatus = marketEngine.getExpiryStatus();
+    const isExpiryDay = expiryStatus.isExpiryDay;
+    const isMonthlyExpiry = expiryStatus.isMonthlyExpiry;
+
+    const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    const hours = istTime.getUTCHours();
+    const minutes = istTime.getUTCMinutes();
+    const totalMin = hours * 60 + minutes;
     
     // VIX Factor: Higher VIX = Wider SL, Lower VIX = Tighter SL
     const vixFactor = Math.max(0.8, Math.min(1.5, vix / 15));
@@ -52,20 +59,39 @@ class IntelligenceEngine {
     if (strategyMode === 'MOMENTUM_SNIPER') {
       // Option Buying Logic
       // On expiry day, reduce SL because premium decay is brutal
-      const expiryMultiplier = isExpiryDay ? 0.7 : 1.0;
+      let expiryMultiplier = isExpiryDay ? 0.6 : 1.0;
+      if (isMonthlyExpiry) expiryMultiplier = 0.75; // Monthly is slightly more stable
+
       slPoints = atr * 1.2 * vixFactor * expiryMultiplier;
-      riskRewardRatio = isExpiryDay ? 3.0 : 2.0; // Higher RR needed on expiry to offset decay
+      riskRewardRatio = isExpiryDay ? 3.5 : 2.0; // Extremely high RR needed on expiry
       
-      slPoints = Math.min(isExpiryDay ? 30 : 45, slPoints);
+      // Afternoon Gamma Blast (Post 1:45 PM IST = 825 mins)
+      if (isExpiryDay && totalMin >= 825) {
+        riskRewardRatio = 5.0; // Targeting explosive moves
+        slPoints = Math.max(15, slPoints * 0.8); // Tighter SL for scalps
+      }
+
+      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 35 : 25) : 45, slPoints);
       targetPoints = slPoints * riskRewardRatio;
     } else {
       // Option Selling / Spread Logic
       // On expiry day, increase buffer to avoid gamma spikes
-      const expiryMultiplier = isExpiryDay ? 1.3 : 1.0;
+      let expiryMultiplier = isExpiryDay ? 1.4 : 1.0;
+      if (isMonthlyExpiry) expiryMultiplier = 1.6; // Monthly roll-over risk is higher
+
       const vwapDist = Math.abs(entrySpot - vwap);
-      slPoints = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 10);
+      slPoints = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 15);
       riskRewardRatio = 1.2; 
       
+      // Max Pain Convergence Logic (Post 1:30 PM IST = 810 mins)
+      if (isExpiryDay && totalMin >= 810) {
+        const maxPain = marketEngine.getMaxPain();
+        const distToMaxPain = Math.abs(entrySpot - maxPain);
+        if (distToMaxPain < 30) {
+           slPoints *= 0.8; // High confidence if already near Max Pain
+        }
+      }
+
       targetPoints = slPoints * riskRewardRatio;
     }
 

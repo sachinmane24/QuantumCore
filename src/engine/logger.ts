@@ -28,9 +28,23 @@ export interface TradeLogEntry {
   pnl: number;
   win: boolean;
   bias?: 'BULLISH' | 'BEARISH';
+  mode?: string;
   vix?: number;
   spot?: number;
   phase?: string;
+  isExpiryDay?: boolean;
+  isMonthlyExpiry?: boolean;
+  entryNetDelta?: number;
+  entryNetGamma?: number;
+  indicators?: {
+    rsi: number | null;
+    macd: number | null;
+    macdSignal: number | null;
+    macdHist: number | null;
+    bbUpper: number | null;
+    bbLower: number | null;
+    bbMiddle: number | null;
+  };
   duration?: number; // Holding time in seconds
   entryTime?: string;
   buyPrice?: number;

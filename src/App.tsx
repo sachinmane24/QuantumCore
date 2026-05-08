@@ -9,12 +9,13 @@ import {
   ShieldCheck, LayoutDashboard, History, Zap,
   BarChart3, Brain, ArrowUpRight, ArrowDownRight,
   Shield, Target, Crosshair, Menu, Bell, Search,
-  Globe, Moon, Info, ShieldAlert, LogOut, Settings
+  Globe, Moon, Info, ShieldAlert, LogOut, Settings, Timer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, 
-  Tooltip, ResponsiveContainer, BarChart, Bar 
+  Tooltip, ResponsiveContainer, BarChart, Bar,
+  LineChart, Line, Legend
 } from 'recharts';
 import { cn } from './lib/utils';
 import { config } from './engine/config.ts';
@@ -50,6 +51,19 @@ interface MarketData {
     gamma?: number;
     theta?: number;
   }>;
+  indicators?: {
+    rsi: number | null;
+    macd: {
+      macd: number | null;
+      signal: number | null;
+      histogram: number | null;
+    };
+    bollinger: {
+      upper: number | null;
+      lower: number | null;
+      middle: number | null;
+    };
+  };
 }
 
 interface StrategyData {
@@ -115,6 +129,13 @@ interface HistoryPoint {
   score: number;
   vix: number;
   spot: number;
+  rsi: number | null;
+  macd: number | null;
+  macdSignal: number | null;
+  macdHist: number | null;
+  bbUpper: number | null;
+  bbLower: number | null;
+  bbMiddle: number | null;
 }
 
 interface TradeLogEntry {
@@ -364,7 +385,14 @@ export default function App() {
               pnl: executionData.pnl || 0,
               score: strategyData.score.total || 0,
               vix: marketData.vix || 0,
-              spot: marketData.spot || 0
+              spot: marketData.spot || 0,
+              rsi: marketData.indicators?.rsi || null,
+              macd: marketData.indicators?.macd.macd || null,
+              macdSignal: marketData.indicators?.macd.signal || null,
+              macdHist: marketData.indicators?.macd.histogram || null,
+              bbUpper: marketData.indicators?.bollinger.upper || null,
+              bbLower: marketData.indicators?.bollinger.lower || null,
+              bbMiddle: marketData.indicators?.bollinger.middle || null
             };
             // Only add if time is different from last point to avoid duplicates in fast polling
             if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
@@ -1346,6 +1374,140 @@ export default function App() {
                        <div className="text-sm font-black text-blue-400">₹{market?.vwap.toFixed(1) || '----'}</div>
                     </div>
                   </div>
+               </section>
+
+               {/* NIFTY Spot Intelligence Chart */}
+               <section className="terminal-card bg-black/40 border-terminal-line p-6 flex flex-col min-h-[400px]">
+                 <div className="flex justify-between items-center mb-6">
+                    <div className="flex items-center gap-3">
+                       <div className="p-2 bg-blue-500/10 rounded-lg">
+                          <Activity className="w-4 h-4 text-blue-500" />
+                       </div>
+                       <div>
+                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">NIFTY Spot Intelligence</h3>
+                          <div className="flex gap-3 mt-1">
+                             <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                                RSI: <span className={cn("font-black", (market?.indicators?.rsi || 50) > 70 ? "text-rose-400" : (market?.indicators?.rsi || 50) < 30 ? "text-emerald-400" : "text-blue-400")}>
+                                   {market?.indicators?.rsi?.toFixed(1) || '---'}
+                                </span>
+                             </span>
+                             <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                                MACD: <span className="font-black text-white">{market?.indicators?.macd.macd?.toFixed(2) || '---'}</span>
+                             </span>
+                          </div>
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                       <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Price</span>
+                       </div>
+                       <div className="flex items-center gap-2 text-slate-500">
+                          <div className="w-2 h-2 rounded-full border border-blue-500/30" />
+                          <span className="text-[8px] font-black uppercase tracking-widest">BBands</span>
+                       </div>
+                    </div>
+                 </div>
+
+                 <div className="flex-1 w-full h-[300px]">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <LineChart data={history.slice(-30)}>
+                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                       <XAxis 
+                         dataKey="time" 
+                         stroke="#475569" 
+                         fontSize={9} 
+                         tickLine={false} 
+                         axisLine={false} 
+                         dy={10}
+                       />
+                       <YAxis 
+                         domain={['auto', 'auto']} 
+                         orientation="right" 
+                         stroke="#475569" 
+                         fontSize={9} 
+                         tickLine={false} 
+                         axisLine={false} 
+                         dx={10}
+                       />
+                       <Tooltip 
+                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                         itemStyle={{ fontSize: '10px', fontWeight: 'bold' }}
+                       />
+                       <Legend wrapperStyle={{ fontSize: '9px', paddingTop: '10px' }} />
+                       
+                       {/* Bollinger Bands */}
+                       <Line 
+                         type="monotone" 
+                         dataKey="bbUpper" 
+                         stroke="rgba(59, 130, 246, 0.2)" 
+                         strokeWidth={1} 
+                         dot={false} 
+                         strokeDasharray="5 5"
+                         name="BB Upper"
+                       />
+                       <Line 
+                         type="monotone" 
+                         dataKey="bbLower" 
+                         stroke="rgba(59, 130, 246, 0.2)" 
+                         strokeWidth={1} 
+                         dot={false} 
+                         strokeDasharray="5 5"
+                         name="BB Lower"
+                       />
+                       <Line 
+                         type="monotone" 
+                         dataKey="bbMiddle" 
+                         stroke="rgba(59, 130, 246, 0.1)" 
+                         strokeWidth={1} 
+                         dot={false} 
+                         name="BB Mid"
+                       />
+                       
+                       {/* Spot Price */}
+                       <Line 
+                         type="monotone" 
+                         dataKey="spot" 
+                         stroke="#3b82f6" 
+                         strokeWidth={3} 
+                         dot={false} 
+                         name="Nifty Spot"
+                         animationDuration={500}
+                       />
+                     </LineChart>
+                   </ResponsiveContainer>
+                 </div>
+                 
+                 {/* Secondary Indicators Row */}
+                 <div className="grid grid-cols-2 gap-4 mt-6 h-24">
+                    <div className="bg-black/20 rounded-lg p-2 border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-2 px-1">RSI Oscillator</span>
+                       <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={history.slice(-30)}>
+                             <YAxis hide domain={[0, 100]} />
+                             <Area 
+                                type="monotone" 
+                                dataKey="rsi" 
+                                stroke="#f59e0b" 
+                                fill="rgba(245, 158, 11, 0.1)" 
+                                strokeWidth={1} 
+                             />
+                          </AreaChart>
+                       </ResponsiveContainer>
+                    </div>
+                    <div className="bg-black/20 rounded-lg p-2 border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-2 px-1">MACD Momentum</span>
+                       <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={history.slice(-30)}>
+                             <Bar 
+                                dataKey="macdHist" 
+                                fill="#3b82f6"
+                                radius={[2, 2, 0, 0]}
+                             />
+                          </BarChart>
+                       </ResponsiveContainer>
+                    </div>
+                 </div>
                </section>
             </div>
 

@@ -52,8 +52,85 @@ class MarketEngine {
   private vwap: number = 0;
   private todayOpen: number = 0;
   private vixDelta: number = 0;
+  private priceHistory: number[] = [];
+  private readonly MAX_HISTORY = 100;
+  private expiryInfo: { weekly: string | null, monthly: string | null } = { weekly: null, monthly: null };
   private mockInterval: NodeJS.Timeout | null = null;
   private initialized: boolean = false;
+
+  public setExpiryInfo(weekly: string | null, monthly: string | null) {
+    this.expiryInfo = { weekly, monthly };
+  }
+
+  public getExpiryStatus() {
+    const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    const today = istTime.toISOString().split('T')[0];
+    
+    const isWeekly = this.expiryInfo.weekly === today;
+    const isMonthlyExpiry = this.expiryInfo.monthly === today;
+    
+    return {
+      isWeekly,
+      isMonthlyExpiry,
+      isExpiryDay: isWeekly || isMonthlyExpiry,
+    };
+  }
+
+  public getTechnicalIndicators() {
+    if (this.priceHistory.length < 30) {
+      return { rsi: 50, macd: { value: 0, signal: 0, histogram: 0 }, bbands: { upper: this.spotPrice, lower: this.spotPrice, middle: this.spotPrice } };
+    }
+
+    const prices = this.priceHistory;
+    
+    // RSI (14)
+    const computeRSI = (data: number[], period: number = 14) => {
+      let gains = 0;
+      let losses = 0;
+      for (let i = data.length - period; i < data.length; i++) {
+        const diff = data[i] - data[i - 1];
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+      }
+      const avgGain = gains / period;
+      const avgLoss = losses / period;
+      if (avgLoss === 0) return 100;
+      const rs = avgGain / avgLoss;
+      return 100 - (100 / (1 + rs));
+    };
+
+    // EMA
+    const computeEMA = (data: number[], period: number) => {
+      const k = 2 / (period + 1);
+      let ema = data[data.length - period];
+      for (let i = data.length - period + 1; i < data.length; i++) {
+        ema = (data[i] * k) + (ema * (1 - k));
+      }
+      return ema;
+    };
+
+    // Bollinger Bands (20, 2)
+    const computeBBands = (data: number[], period: number = 20, stdDev: number = 2) => {
+      const window = data.slice(-period);
+      const sma = window.reduce((a, b) => a + b, 0) / period;
+      const variance = window.reduce((a, b) => a + Math.pow(b - sma, 2), 0) / period;
+      const sd = Math.sqrt(variance);
+      return { upper: sma + stdDev * sd, middle: sma, lower: sma - stdDev * sd };
+    };
+
+    // MACD (12, 26, 9)
+    const ema12 = computeEMA(prices, 12);
+    const ema26 = computeEMA(prices, 26);
+    const macdValue = ema12 - ema26;
+    // For Signal, we'd ideally need history of MACD values, but for now we approximate or use last few.
+    // Simplifying: Histogram as proxy if we don't have MACD history
+    
+    return {
+      rsi: computeRSI(prices),
+      macd: { value: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
+      bbands: computeBBands(prices)
+    };
+  }
 
   constructor() {
     this.syncMode();
@@ -262,6 +339,17 @@ class MarketEngine {
 
   updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number, vwap?: number) {
     this.spotPrice = spotPrice;
+    
+    // Update price history
+    if (spotPrice > 0) {
+      if (this.priceHistory.length === 0 || this.priceHistory[this.priceHistory.length - 1] !== spotPrice) {
+        this.priceHistory.push(spotPrice);
+        if (this.priceHistory.length > this.MAX_HISTORY) {
+          this.priceHistory.shift();
+        }
+      }
+    }
+
     if (chain && chain.length > 0) {
       this.optionChain = chain;
     } else if (config.DATA_SOURCE === 'MOCK') {

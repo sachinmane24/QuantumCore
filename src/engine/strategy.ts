@@ -78,13 +78,44 @@ class StrategyEngine {
     const isObservationPeriod = totalMin >= 540 && totalMin < 570;
     const timeFilterScore = (totalMin >= 555 && totalMin <= 930) ? 20 : 5;
 
+    // Expiry Context
+    const expiryStatus = marketEngine.getExpiryStatus();
+    const isExpiryDay = expiryStatus.isExpiryDay;
+    const isMonthlyExpiry = expiryStatus.isMonthlyExpiry;
+    const isMorningRange = totalMin >= 555 && totalMin < 630;
+    const isAfternoonShift = totalMin >= 810;
+    const isGammaBlastWindow = isExpiryDay && totalMin >= 825;
+
     // 6. Gap Analysis
     const gapPercent = marketEngine.getGapPercent();
     let gapBias = 0; // -1 to 1
     if (gapPercent > 0.3) gapBias = 1;
     else if (gapPercent < -0.3) gapBias = -1;
 
-    // 7. ORB & Trap Detection
+    // 7. Technical Indicators Analysis
+    const indicators = marketEngine.getTechnicalIndicators();
+    let techIndicatorScore = 0;
+    
+    // RSI Sentiment
+    if (indicators.rsi > 70) {
+      if (bias === 'BULLISH') techIndicatorScore -= 10; // Cautious on overbought long
+    } else if (indicators.rsi < 30) {
+      if (bias === 'BEARISH') techIndicatorScore -= 10; // Cautious on oversold short
+    } else if (indicators.rsi > 50 && bias === 'BULLISH') {
+      techIndicatorScore += 5; // Positive momentum
+    } else if (indicators.rsi < 50 && bias === 'BEARISH') {
+      techIndicatorScore += 5;
+    }
+
+    // MACD Histogram confirmation
+    if (indicators.macd.histogram > 0 && bias === 'BULLISH') techIndicatorScore += 5;
+    if (indicators.macd.histogram < 0 && bias === 'BEARISH') techIndicatorScore += 5;
+
+    // Bollinger Band Constraint
+    if (spot > indicators.bbands.upper && bias === 'BULLISH') techIndicatorScore -= 5; // Overextended
+    if (spot < indicators.bbands.lower && bias === 'BEARISH') techIndicatorScore -= 5; // Overextended
+
+    // 8. ORB & Trap Detection
     const { high: orbHigh, low: orbLow } = marketEngine.getORB();
     const vwap = marketEngine.getVWAP();
     let orbTrigger = 0; // 0: None, 1: Bullish, -1: Bearish
@@ -102,12 +133,19 @@ class StrategyEngine {
       if (spot < orbLow && putOiChange > callOiChange) trapDetected = true;
     }
 
-    let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
+    let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore + techIndicatorScore;
     
     // Bonus for ORB alignment
     if (orbTrigger !== 0) total += 15;
     // Penalty for Trap
     if (trapDetected) total -= 30;
+    
+    // Expiry Specific Scoring
+    if (isExpiryDay) {
+      if (isGammaBlastWindow && orbTrigger !== 0) total += 20; // Gamma Blast potential
+      if (isMorningRange) total += 5; // Preference for early range establishment
+      if (isAfternoonShift && isMonthlyExpiry) total -= 10; // Inst roll-over risk penalty
+    }
     // Observation period constraint
     if (isObservationPeriod) total = Math.min(total, 40);
 
@@ -137,10 +175,18 @@ class StrategyEngine {
         // Strategy Recommendation Engine
         if (bias === 'BULLISH') {
           recommendation = isHighVol ? "BULL PUT SPREAD (CREDIT/H-IV)" : "BULL CALL SPREAD (DEBIT/L-IV)";
-          if (mode === 'MOMENTUM_SNIPER') recommendation = `NAKED ATM CE BUY (EXPLOSIVE)`;
+          if (mode === 'MOMENTUM_SNIPER') {
+            recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED CE BUY` : `NAKED ATM CE BUY (EXPLOSIVE)`;
+          }
         } else if (bias === 'BEARISH') {
           recommendation = isHighVol ? "BEAR CALL SPREAD (CREDIT/H-IV)" : "BEAR PUT SPREAD (DEBIT/L-IV)";
-          if (mode === 'MOMENTUM_SNIPER') recommendation = `NAKED ATM PE BUY (EXPLOSIVE)`;
+          if (mode === 'MOMENTUM_SNIPER') {
+            recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED PE BUY` : `NAKED ATM PE BUY (EXPLOSIVE)`;
+          }
+        }
+        
+        if (isExpiryDay && isAfternoonShift && mode === 'INST_SPREAD') {
+          recommendation += " [MONTHLY ROLL-OVER RISK]";
         }
       } else if (total > 45 || isSideways) {
         mode = 'INST_SPREAD';
