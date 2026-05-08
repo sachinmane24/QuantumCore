@@ -96,24 +96,24 @@ class StrategyEngine {
     const indicators = marketEngine.getTechnicalIndicators();
     let techIndicatorScore = 0;
     
-    // RSI Sentiment
+    // RSI Sentiment (Using raw OI bias as early directional proxy)
     if (indicators.rsi > 70) {
-      if (bias === 'BULLISH') techIndicatorScore -= 10; // Cautious on overbought long
+      if (oiChangeBias > 0) techIndicatorScore -= 10; // Cautious on overbought long
     } else if (indicators.rsi < 30) {
-      if (bias === 'BEARISH') techIndicatorScore -= 10; // Cautious on oversold short
-    } else if (indicators.rsi > 50 && bias === 'BULLISH') {
+      if (oiChangeBias < 0) techIndicatorScore -= 10; // Cautious on oversold short
+    } else if (indicators.rsi > 50 && oiChangeBias > 0) {
       techIndicatorScore += 5; // Positive momentum
-    } else if (indicators.rsi < 50 && bias === 'BEARISH') {
+    } else if (indicators.rsi < 50 && oiChangeBias < 0) {
       techIndicatorScore += 5;
     }
 
     // MACD Histogram confirmation
-    if (indicators.macd.histogram > 0 && bias === 'BULLISH') techIndicatorScore += 5;
-    if (indicators.macd.histogram < 0 && bias === 'BEARISH') techIndicatorScore += 5;
+    if (indicators.macd.histogram > 0 && oiChangeBias > 0) techIndicatorScore += 5;
+    if (indicators.macd.histogram < 0 && oiChangeBias < 0) techIndicatorScore += 5;
 
     // Bollinger Band Constraint
-    if (spot > indicators.bbands.upper && bias === 'BULLISH') techIndicatorScore -= 5; // Overextended
-    if (spot < indicators.bbands.lower && bias === 'BEARISH') techIndicatorScore -= 5; // Overextended
+    if (spot > indicators.bollinger.upper && oiChangeBias > 0) techIndicatorScore -= 5; // Overextended
+    if (spot < indicators.bollinger.lower && oiChangeBias < 0) techIndicatorScore -= 5; // Overextended
 
     // 8. ORB & Trap Detection
     const { high: orbHigh, low: orbLow } = marketEngine.getORB();

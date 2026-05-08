@@ -387,12 +387,12 @@ export default function App() {
               vix: marketData.vix || 0,
               spot: marketData.spot || 0,
               rsi: marketData.indicators?.rsi || null,
-              macd: marketData.indicators?.macd.macd || null,
-              macdSignal: marketData.indicators?.macd.signal || null,
-              macdHist: marketData.indicators?.macd.histogram || null,
-              bbUpper: marketData.indicators?.bollinger.upper || null,
-              bbLower: marketData.indicators?.bollinger.lower || null,
-              bbMiddle: marketData.indicators?.bollinger.middle || null
+              macd: marketData.indicators?.macd?.macd || null,
+              macdSignal: marketData.indicators?.macd?.signal || null,
+              macdHist: marketData.indicators?.macd?.histogram || null,
+              bbUpper: marketData.indicators?.bollinger?.upper || null,
+              bbLower: marketData.indicators?.bollinger?.lower || null,
+              bbMiddle: marketData.indicators?.bollinger?.middle || null
             };
             // Only add if time is different from last point to avoid duplicates in fast polling
             if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
@@ -822,7 +822,7 @@ export default function App() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Institutional VWAP</span>
-              <span className="text-blue-400">₹{market?.vwap.toFixed(1)}</span>
+              <span className="text-blue-400">₹{market?.vwap?.toFixed(1)}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">DTE (Weekly)</span>
@@ -1371,7 +1371,7 @@ export default function App() {
                     </div>
                     <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                        <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Institutional VWAP</span>
-                       <div className="text-sm font-black text-blue-400">₹{market?.vwap.toFixed(1) || '----'}</div>
+                       <div className="text-sm font-black text-blue-400">₹{market?.vwap?.toFixed(1) || '----'}</div>
                     </div>
                   </div>
                </section>
@@ -1392,7 +1392,7 @@ export default function App() {
                                 </span>
                              </span>
                              <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
-                                MACD: <span className="font-black text-white">{market?.indicators?.macd.macd?.toFixed(2) || '---'}</span>
+                                MACD: <span className="font-black text-white">{market?.indicators?.macd?.macd?.toFixed(2) || '---'}</span>
                              </span>
                           </div>
                        </div>

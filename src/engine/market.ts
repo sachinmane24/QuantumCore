@@ -78,7 +78,7 @@ class MarketEngine {
 
   public getTechnicalIndicators() {
     if (this.priceHistory.length < 30) {
-      return { rsi: 50, macd: { value: 0, signal: 0, histogram: 0 }, bbands: { upper: this.spotPrice, lower: this.spotPrice, middle: this.spotPrice } };
+      return { rsi: 50, macd: { macd: 0, signal: 0, histogram: 0 }, bollinger: { upper: this.spotPrice, lower: this.spotPrice, middle: this.spotPrice } };
     }
 
     const prices = this.priceHistory;
@@ -127,8 +127,8 @@ class MarketEngine {
     
     return {
       rsi: computeRSI(prices),
-      macd: { value: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
-      bbands: computeBBands(prices)
+      macd: { macd: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
+      bollinger: computeBBands(prices)
     };
   }
 
