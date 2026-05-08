@@ -36,6 +36,13 @@ export interface TradeLogEntry {
   buyPrice?: number;
   sellPrice?: number;
   totalInvestment?: number;
+  intelligence?: {
+    atr: number;
+    vixFactor: number;
+    rr: number;
+    slPrice: number;
+    targetPrice: number;
+  };
   serverTimestamp?: any;
 }
 

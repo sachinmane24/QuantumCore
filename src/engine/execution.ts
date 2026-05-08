@@ -9,6 +9,8 @@ import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
 import { riskEngine } from './risk.ts';
 
+import { intelligenceEngine, TradeParams } from './intelligence.ts';
+
 export interface Position {
   strike: number;
   type: 'CE' | 'PE' | 'FUT';
@@ -21,6 +23,9 @@ export interface Position {
 class ExecutionEngine {
   private activePositions: Position[] = [];
   private pnl: number = 0;
+  private peakPnL: number = 0;
+  private currentTradeParams: TradeParams | null = null;
+  private currentActiveSL: number = 0;
   private rollsToday: number = 0;
   private lastRollTime: number = 0;
   private lastTradeScore: any = null;
@@ -36,9 +41,19 @@ class ExecutionEngine {
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
 
+    const spot = marketEngine.getSpotPrice();
+    const score = strategyEngine.calculateScore();
+    
+    // Derive Dynamic SL/Target first
+    const derivation = intelligenceEngine.deriveParams(
+      score.mode === 'MOMENTUM_SNIPER' ? 'BUY' : 'SELL',
+      score.mode,
+      spot,
+      bias
+    );
+
     // Validate with Risk Engine
-    const expectedSL = config.SL_RUPEES; // Simplified SL check
-    const validation = riskEngine.validateEntry(config.LOT_SIZE, expectedSL);
+    const validation = riskEngine.validateEntry(config.LOT_SIZE, derivation.stopLossRupees);
     this.lastRiskValidation = validation;
     
     if (!validation.allowed) {
@@ -46,15 +61,16 @@ class ExecutionEngine {
       return;
     }
 
-    const spot = marketEngine.getSpotPrice();
-    const atmStrike = Math.round(spot / 50) * 50;
-    const score = strategyEngine.calculateScore();
-    
+    this.currentTradeParams = derivation;
+    this.currentActiveSL = -derivation.stopLossRupees;
+    this.peakPnL = 0;
     this.lastTradeScore = score;
     this.currentTradeBias = bias;
     this.currentEntryTime = Date.now();
     this.currentSpotAtEntry = spot;
     this.currentVixAtEntry = marketEngine.getVix();
+
+    const atmStrike = Math.round(spot / 50) * 50;
 
     const getLTP = (strike: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
@@ -120,6 +136,16 @@ class ExecutionEngine {
     });
 
     this.pnl = Math.round(currentPnL);
+    this.peakPnL = Math.max(this.peakPnL, this.pnl);
+
+    // Update Intelligence for Trailing SL
+    if (this.currentTradeParams) {
+      this.currentActiveSL = intelligenceEngine.calculateTrailingSL(
+        this.pnl,
+        this.peakPnL,
+        this.currentTradeParams
+      );
+    }
 
     // Update Risk Engine
     riskEngine.updatePnL(this.pnl, this.activePositions);
@@ -140,8 +166,26 @@ class ExecutionEngine {
       return;
     }
 
-    if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
-      await this.exitAll('SL/Target Hit');
+    if (this.currentTradeParams) {
+      // Time-Based Decay Intelligence (Option Buying specific)
+      const durationMins = (Date.now() - this.currentEntryTime) / 60000;
+      if (this.currentStrategy === 'MOMENTUM_SNIPER' && durationMins > 45) {
+         if (this.pnl < this.currentTradeParams.targetRupees * 0.25) {
+            await this.exitAll(`Time-Decay Exit: 45m Stagnation Threshold Reached`);
+            return;
+         }
+      }
+
+      if (this.pnl <= this.currentActiveSL) {
+        await this.exitAll(`Stop Loss Hit (₹${this.currentActiveSL})`);
+      } else if (this.pnl >= this.currentTradeParams.targetRupees) {
+        await this.exitAll(`Target Hit (₹${this.currentTradeParams.targetRupees})`);
+      }
+    } else {
+      // Fallback
+      if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
+        await this.exitAll('SL/Target Hit');
+      }
     }
   }
 
@@ -204,37 +248,54 @@ class ExecutionEngine {
     // If net delta exceeds tolerance, we need to scalp/hedge
     if (Math.abs(this.netDelta) > config.DELTA_TOLERANCE) {
       const spot = marketEngine.getSpotPrice();
-      const atmStrike = Math.round(spot / 50) * 50;
+      // Use a slight OTM strike for hedging to avoid direct conflict with core ATM positions
+      const hedgeBias = this.netDelta > 0 ? 50 : -50;
+      const hedgeStrike = Math.round((spot + hedgeBias) / 50) * 50;
       
-      // Calculate requirement: we want to bring netDelta back to 0
-      // If netDelta is 0.5, we need to SELL 0.5 Delta
-      // Using ATM Options for hedging (approx 0.5 delta)
-      const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; // Sell CE or Sell PE to reduce delta? Wait.
-      // NetDelta > 0 means Long Bias. To hedge, we need Short Delta.
-      // Selling CE gives Negative Delta (~ -0.5)
-      // Buying PE gives Negative Delta (~ -0.5)
-      
+      const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; 
       const hedgeQty = Math.round(Math.abs(this.netDelta) / 0.5) * config.LOT_SIZE;
       
       if (hedgeQty > 0) {
-        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance. Hedging ${hedgeQty} ${hedgeType}...`);
+        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance. Hedging ${hedgeQty} ${hedgeType} at ${hedgeStrike}...`);
         
         const chain = marketEngine.getOptionChain();
-        const opt = chain.find(o => o.strike === atmStrike);
+        const opt = chain.find(o => o.strike === hedgeStrike);
         const price = opt ? (hedgeType === 'CE' ? opt.ce_price : opt.pe_price) : 100;
 
-        // In a real scalp, we might buy/sell options or futures.
-        // Let's add a hedge position.
-        this.activePositions.push({
-          strike: atmStrike,
-          type: hedgeType,
-          entryPrice: price,
-          qty: hedgeQty,
-          side: 'SELL', // Using credit hedging for this strategy
-          isHedge: true
-        });
+        // Check if we already have a position at this strike to net it out
+        const existingIdx = this.activePositions.findIndex(p => p.strike === hedgeStrike && p.type === hedgeType);
+        
+        if (existingIdx !== -1) {
+          const existing = this.activePositions[existingIdx];
+          // If we are selling a hedge but are already long, subtract qty
+          if (existing.side === 'BUY') {
+            if (existing.qty > hedgeQty) {
+              existing.qty -= hedgeQty;
+            } else if (existing.qty === hedgeQty) {
+              this.activePositions.splice(existingIdx, 1);
+            } else {
+              const remaining = hedgeQty - existing.qty;
+              existing.qty = remaining;
+              existing.side = 'SELL';
+              existing.entryPrice = price; // Update to mid-entry
+            }
+          } else {
+            // Both are SELL sides, just add qty
+            existing.qty += hedgeQty;
+          }
+        } else {
+          // No existing position at this strike, add new hedge leg
+          this.activePositions.push({
+            strike: hedgeStrike,
+            type: hedgeType,
+            entryPrice: price,
+            qty: hedgeQty,
+            side: 'SELL',
+            isHedge: true
+          });
+        }
 
-        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString()}] Hedged ${this.netDelta > 0 ? 'Short' : 'Long'} bias with ${hedgeQty} qty ATM ${hedgeType}`);
+        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString()}] Net Delta shifted to ${this.netDelta.toFixed(2)}. Hedged with ${hedgeQty} qty ${hedgeType} @ ${hedgeStrike}`);
         if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
         
         // Recalculate after hedge
@@ -289,7 +350,14 @@ class ExecutionEngine {
           entryTime: new Date(this.currentEntryTime).toISOString(),
           buyPrice: buyPrice,
           sellPrice: sellPrice,
-          totalInvestment: totalInvestment
+          totalInvestment: totalInvestment,
+          intelligence: this.currentTradeParams ? {
+            atr: this.currentTradeParams.atrValue,
+            vixFactor: this.currentTradeParams.vixFactor,
+            rr: this.currentTradeParams.riskRewardRatio,
+            slPrice: this.currentTradeParams.stopLossPrice,
+            targetPrice: this.currentTradeParams.targetPrice
+          } : undefined
         });
       } catch (logErr) {
         console.error("[EXECUTION] Failed to log trade, but continuing with exit:", logErr);
@@ -306,6 +374,9 @@ class ExecutionEngine {
     return {
       positions: this.activePositions,
       pnl: Math.round(this.pnl),
+      peakPnL: Math.round(this.peakPnL),
+      params: this.currentTradeParams,
+      activeSL: this.currentActiveSL,
       rollsToday: this.rollsToday,
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),

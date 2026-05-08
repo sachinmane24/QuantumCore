@@ -1102,6 +1102,66 @@ export default function App() {
                 </section>
               )}
 
+              {/* Intelligence Insights */}
+              {execution?.params && (
+                <section className="terminal-card bg-blue-600/[0.05] border-blue-500/20 p-6 flex flex-col gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-blue-500" />
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">Exit Intelligence Derived</h3>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white/5 p-3 rounded-lg border border-white/5 flex flex-col gap-1">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">ATR Volatility Edge</span>
+                      <div className="text-sm font-black text-white">{execution.params.atrValue} pts</div>
+                      <div className="text-[8px] font-bold text-slate-400 uppercase">Multiplier: {execution.params.vixFactor}x (VIX Regime)</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded-lg border border-white/5 flex flex-col gap-1">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Risk/Reward Profile</span>
+                      <div className="text-sm font-black text-emerald-400">1 : {execution.params.riskRewardRatio}</div>
+                      <div className="text-[8px] font-bold text-slate-400 uppercase">Derivation: Systemic Alpha Vector</div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center text-[10px]">
+                      <span className="text-slate-400 font-bold uppercase">Dynamic Target</span>
+                      <span className="text-emerald-400 font-black">₹{execution.params.targetRupees} Level</span>
+                    </div>
+                    <div className="relative h-1 bg-white/5 rounded-full overflow-hidden">
+                       <motion.div 
+                          className="h-full bg-emerald-500"
+                          initial={{ width: 0 }}
+                          animate={{ width: `${Math.min(100, Math.max(0, (execution.pnl / execution.params.targetRupees) * 100))}%` }}
+                       />
+                    </div>
+
+                    <div className="flex justify-between items-center text-[10px] mt-2">
+                      <span className="text-slate-400 font-bold uppercase">Active Risk Floor (SL)</span>
+                      <span className={cn(
+                        "font-black",
+                        execution.activeSL > -(execution.params?.stopLossRupees || 0) ? "text-blue-400" : "text-rose-400"
+                      )}>
+                        ₹{execution.activeSL} 
+                        {execution.activeSL > -(execution.params?.stopLossRupees || 0) && " (TRAILED)"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-[8px] opacity-60 uppercase font-bold">
+                       <span>Initial: -₹{execution.params.stopLossRupees}</span>
+                       <span>Peak: ₹{execution.peakPnL}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="p-3 bg-blue-500/10 rounded border border-blue-500/20">
+                     <p className="text-[9px] text-blue-300 font-bold leading-relaxed italic">
+                        {execution.pnl >= execution.params.trailingSlTrigger 
+                          ? "Trailing SL activated. Locking partial velocity gains based on market structure depth." 
+                          : "Monitoring market depth. SL anchored to ATR-baseline volatility floor."}
+                     </p>
+                  </div>
+                </section>
+              )}
+
               <section className="terminal-card shrink-0 px-6 py-4 flex flex-col bg-white/[0.01]">
                 <div className="flex justify-between items-center mb-3">
                   <div className="flex items-center gap-2">
