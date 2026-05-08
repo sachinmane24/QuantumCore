@@ -73,26 +73,62 @@ class StrategyEngine {
     const istHour = istDate.getHours();
     const istMin = istDate.getMinutes();
     const totalMin = istHour * 60 + istMin;
+    
+    // Observation Period: 9:00 to 9:30 AM IST (540 to 570 mins)
+    const isObservationPeriod = totalMin >= 540 && totalMin < 570;
     const timeFilterScore = (totalMin >= 555 && totalMin <= 930) ? 20 : 5;
 
-    const total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
+    // 6. Gap Analysis
+    const gapPercent = marketEngine.getGapPercent();
+    let gapBias = 0; // -1 to 1
+    if (gapPercent > 0.3) gapBias = 1;
+    else if (gapPercent < -0.3) gapBias = -1;
+
+    // 7. ORB & Trap Detection
+    const { high: orbHigh, low: orbLow } = marketEngine.getORB();
+    const vwap = marketEngine.getVWAP();
+    let orbTrigger = 0; // 0: None, 1: Bullish, -1: Bearish
+    let trapDetected = false;
+
+    if (totalMin >= 570) { // After 9:30 AM
+      if (spot > orbHigh && spot > vwap && putOiChange > callOiChange) {
+        orbTrigger = 1;
+      } else if (spot < orbLow && spot < vwap && callOiChange > putOiChange) {
+        orbTrigger = -1;
+      }
+
+      // Simple Trap Detection: Price breaks high but OI shift is opposite
+      if (spot > orbHigh && putOiChange < callOiChange) trapDetected = true;
+      if (spot < orbLow && putOiChange > callOiChange) trapDetected = true;
+    }
+
+    let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore;
     
+    // Bonus for ORB alignment
+    if (orbTrigger !== 0) total += 15;
+    // Penalty for Trap
+    if (trapDetected) total -= 30;
+    // Observation period constraint
+    if (isObservationPeriod) total = Math.min(total, 40);
+
     let bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
     let mode: StrategyMode = 'INST_SPREAD';
-    let recommendation = '--';
+    let recommendation = isObservationPeriod ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
-    if (total > 75) {
-      mode = 'MOMENTUM_SNIPER';
-      bias = oiChangeBias > 500000 ? 'BULLISH' : 'BEARISH';
-      recommendation = `BUY NAKED ${atmStrike} ${bias === 'BULLISH' ? 'CE' : 'PE'}`;
-    } else if (total > 55) {
-      mode = 'INST_SPREAD';
-      bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
-      recommendation = `${atmStrike} ${bias === 'BULLISH' ? 'BULL SPREAD' : 'BEAR SPREAD'}`;
-    } else {
-      mode = 'INST_SPREAD';
-      bias = 'NEUTRAL';
-      recommendation = 'STANDBY';
+    if (!isObservationPeriod) {
+      if (total > 75 || (orbTrigger !== 0 && total > 60)) {
+        mode = 'MOMENTUM_SNIPER';
+        bias = (orbTrigger === 1 || (orbTrigger === 0 && oiChangeBias > 500000)) ? 'BULLISH' : 'BEARISH';
+        recommendation = `BUY NAKED ${atmStrike} ${bias === 'BULLISH' ? 'CE' : 'PE'} (ORB TRIGGER)`;
+      } else if (total > 55) {
+        mode = 'INST_SPREAD';
+        bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
+        recommendation = `${atmStrike} ${bias === 'BULLISH' ? 'BULL SPREAD' : 'BEAR SPREAD'}`;
+      } else {
+        mode = 'INST_SPREAD';
+        bias = 'NEUTRAL';
+        recommendation = trapDetected ? 'TRAP DETECTED - STANDBY' : 'STANDBY';
+      }
     }
 
     return {
@@ -100,7 +136,7 @@ class StrategyEngine {
       trend: Math.round(trendScore * trendDirection), // SIGNED
       oiBias: Math.round(oiBiasScore * oiDirection), // SIGNED
       gamma: Math.round(gammaScore),
-      trap: Math.round(trapScore),
+      trap: trapDetected ? 0 : Math.round(trapScore),
       timeFilter: Math.round(timeFilterScore),
       bias,
       mode,

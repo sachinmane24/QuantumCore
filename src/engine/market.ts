@@ -41,10 +41,49 @@ class MarketEngine {
   private ticks: Map<number, Tick> = new Map();
   private optionChain: OptionChainData[] = [];
   private spotPrice: number = 24330; // Updated to match current market levels
+  private yesterdayClose: number = 24300;
+  private orbHigh: number = 0;
+  private orbLow: number = 0;
+  private vwap: number = 0;
+  private todayOpen: number = 0;
   private mockInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.syncMode();
+  }
+
+  public setYesterdayClose(price: number) {
+    this.yesterdayClose = price;
+  }
+
+  public getYesterdayClose(): number {
+    return this.yesterdayClose;
+  }
+
+  public getGapPercent(): number {
+    if (this.todayOpen === 0) return 0;
+    return ((this.todayOpen - this.yesterdayClose) / this.yesterdayClose) * 100;
+  }
+
+  public setORB(high: number, low: number) {
+    this.orbHigh = high;
+    this.orbLow = low;
+  }
+
+  public getORB() {
+    return { high: this.orbHigh, low: this.orbLow };
+  }
+
+  public getVWAP(): number {
+    return this.vwap || this.spotPrice - 5; // Fallback to slightly below spot if not set
+  }
+
+  public setVWAP(price: number) {
+    this.vwap = price;
+  }
+
+  public getTodayOpen(): number {
+    return this.todayOpen;
   }
 
   public syncMode() {
@@ -86,11 +125,20 @@ class MarketEngine {
   }
 
   private startMockData() {
+    // Initial Gap for testing
+    this.yesterdayClose = 24300;
+    this.todayOpen = 24350; // +50 pts gap (~0.2%)
+    this.spotPrice = this.todayOpen;
+    this.vwap = this.spotPrice;
+
     this.mockInterval = setInterval(() => {
       // Mock spot price movement
       const change = (Math.random() - 0.5) * 5;
       this.spotPrice += change;
       
+      // Update VWAP (simple moving weighted average mock)
+      this.vwap = (this.vwap * 0.95) + (this.spotPrice * 0.05);
+
       // Update ticks
       const mockTick: Tick = {
         tradable: true,
@@ -166,12 +214,33 @@ class MarketEngine {
     return this.optionChain;
   }
 
-  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number) {
+  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number, vwap?: number) {
     this.spotPrice = spotPrice;
     if (chain && chain.length > 0) {
       this.optionChain = chain;
     } else if (config.DATA_SOURCE === 'MOCK') {
       this.optionChain = this.generateChain(spotPrice);
+    }
+
+    if (vwap) this.vwap = vwap;
+    
+    // Set today's open if it's the first data point
+    if (this.todayOpen === 0 && niftyOhlc?.open) {
+      this.todayOpen = niftyOhlc.open;
+    }
+
+    // Capture ORB between 9:15 and 9:30 IST
+    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
+    const istDate = new Date(istTime);
+    const hours = istDate.getHours();
+    const minutes = istDate.getMinutes();
+    const timeInMins = hours * 60 + minutes;
+
+    if (timeInMins >= 555 && timeInMins < 570) { // 9:15 to 9:30 AM IST
+      if (niftyOhlc) {
+        if (this.orbHigh === 0 || niftyOhlc.high > this.orbHigh) this.orbHigh = niftyOhlc.high;
+        if (this.orbLow === 0 || niftyOhlc.low < this.orbLow) this.orbLow = niftyOhlc.low;
+      }
     }
     
     // Update VIX tick if provided

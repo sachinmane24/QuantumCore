@@ -25,6 +25,12 @@ interface MarketData {
   tick: any;
   vix: number;
   pcr: number;
+  gapPercent: number;
+  orb: { high: number; low: number };
+  vwap: number;
+  todayOpen: number;
+  yesterdayClose: number;
+  maxPain: number;
   chain: Array<{
     strike: number;
     ce_oi: number;
@@ -48,6 +54,8 @@ interface StrategyData {
     trap: number;
     timeFilter: number;
     bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    mode: string;
+    recommendation: string;
   };
   aiProb: number;
 }
@@ -1074,6 +1082,39 @@ export default function App() {
                   </div>
                 </div>
               </section>
+
+               <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Opening Balance & Market Structure</h3>
+                    <div className="flex gap-4">
+                      <div className="flex items-center gap-1.5">
+                         <div className={cn("w-1.5 h-1.5 rounded-full", market?.gapPercent && market.gapPercent > 0.3 ? "bg-emerald-500" : market?.gapPercent && market.gapPercent < -0.3 ? "bg-rose-500" : "bg-slate-500")} />
+                         <span className="text-[8px] font-bold text-slate-500 uppercase">Gap: {(market?.gapPercent || 0).toFixed(2)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="bg-black/20 p-3 rounded-lg border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Yesterday Close</span>
+                       <div className="text-sm font-black text-white">₹{market?.yesterdayClose || '----'}</div>
+                    </div>
+                    <div className="bg-black/20 p-3 rounded-lg border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Today's Open</span>
+                       <div className="text-sm font-black text-white">₹{market?.todayOpen || '----'}</div>
+                    </div>
+                    <div className="bg-black/20 p-3 rounded-lg border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">ORB (9:15-9:30)</span>
+                       <div className="flex flex-col">
+                          <span className="text-[10px] font-black text-emerald-400">H: ₹{market?.orb.high || '----'}</span>
+                          <span className="text-[10px] font-black text-rose-400">L: ₹{market?.orb.low || '----'}</span>
+                       </div>
+                    </div>
+                    <div className="bg-black/20 p-3 rounded-lg border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Institutional VWAP</span>
+                       <div className="text-sm font-black text-blue-400">₹{market?.vwap.toFixed(1) || '----'}</div>
+                    </div>
+                  </div>
+               </section>
 
               <section className="terminal-card flex-1 flex flex-col min-h-0 overflow-hidden">
                 <div className="px-5 py-3 border-b border-terminal-line flex justify-between items-center bg-white/[0.02]">

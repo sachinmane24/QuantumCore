@@ -464,6 +464,11 @@ async function startServer() {
       maxPain: marketEngine.getMaxPain(),
       tick: marketEngine.getLatestTick(),
       chain: marketEngine.getOptionChain(),
+      gapPercent: marketEngine.getGapPercent(),
+      orb: marketEngine.getORB(),
+      vwap: marketEngine.getVWAP(),
+      todayOpen: marketEngine.getTodayOpen(),
+      yesterdayClose: marketEngine.getYesterdayClose()
     });
   });
 

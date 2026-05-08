@@ -30,6 +30,18 @@ class ExecutionEngine {
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
 
+    // Time Check for observation period 9:00 - 9:30 AM IST
+    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
+    const istDate = new Date(istTime);
+    const hours = istDate.getHours();
+    const minutes = istDate.getMinutes();
+    const timeInMins = hours * 60 + minutes;
+
+    if (timeInMins >= 540 && timeInMins < 570) {
+      console.log("[EXECUTION] Execution blocked: Observation Period (9:00-9:30).");
+      return;
+    }
+
     const spot = marketEngine.getSpotPrice();
     const atmStrike = Math.round(spot / 50) * 50;
     const score = strategyEngine.calculateScore();
