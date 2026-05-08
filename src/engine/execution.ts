@@ -7,6 +7,7 @@ import { config } from './config.ts';
 import { marketEngine } from './market.ts';
 import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
+import { riskEngine } from './risk.ts';
 
 export interface Position {
   strike: number;
@@ -34,15 +35,11 @@ class ExecutionEngine {
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
 
-    // Time Check for observation period 9:00 - 9:30 AM IST
-    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istDate = new Date(istTime);
-    const hours = istDate.getHours();
-    const minutes = istDate.getMinutes();
-    const timeInMins = hours * 60 + minutes;
-
-    if (timeInMins >= 540 && timeInMins < 570) {
-      console.log("[EXECUTION] Execution blocked: Observation Period (9:00-9:30).");
+    // Validate with Risk Engine
+    const expectedSL = config.SL_RUPEES; // Simplified SL check
+    const validation = riskEngine.validateEntry(config.LOT_SIZE, expectedSL);
+    if (!validation.allowed) {
+      console.warn(`[EXECUTION] Trade blocked by Risk Engine: ${validation.reason}`);
       return;
     }
 
@@ -98,7 +95,10 @@ class ExecutionEngine {
   }
 
   async updatePnL() {
-    if (this.activePositions.length === 0) return;
+    if (this.activePositions.length === 0) {
+      riskEngine.updatePnL(0, []);
+      return;
+    }
     
     const chain = marketEngine.getOptionChain();
     let currentPnL = 0;
@@ -115,7 +115,10 @@ class ExecutionEngine {
     });
 
     this.pnl = Math.round(currentPnL);
-    
+
+    // Update Risk Engine
+    riskEngine.updatePnL(this.pnl, this.activePositions);
+
     // Calculate Portfolio Greeks
     this.calculatePortfolioGreeks();
 
@@ -126,6 +129,12 @@ class ExecutionEngine {
     await this.checkGammaScalp();
 
     // Check Risk Management
+    const riskStats = riskEngine.getStats();
+    if (riskStats.isKillSwitchActive) {
+      await this.exitAll(`Risk Kill Switch: ${riskStats.killReason}`);
+      return;
+    }
+
     if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
       await this.exitAll('SL/Target Hit');
     }
@@ -255,6 +264,9 @@ class ExecutionEngine {
         totalInvestment = buyPrice * config.LOT_SIZE;
       }
 
+      // Record trade result in Risk Engine
+      riskEngine.recordTradeResult(this.pnl);
+
       try {
         await tradeLogger.logTrade({
           timestamp: new Date().toISOString(),
@@ -292,9 +304,11 @@ class ExecutionEngine {
       rollsToday: this.rollsToday,
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),
-      hedgeLogs: this.hedgeLogs
+      hedgeLogs: this.hedgeLogs,
+      risk: riskEngine.getStats()
     };
   }
 }
 
 export const executionEngine = new ExecutionEngine();
+

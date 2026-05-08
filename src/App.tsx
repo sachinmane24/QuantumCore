@@ -9,7 +9,7 @@ import {
   ShieldCheck, LayoutDashboard, History, Zap,
   BarChart3, Brain, ArrowUpRight, ArrowDownRight,
   Shield, Target, Crosshair, Menu, Bell, Search,
-  Globe, Moon, Info, ShieldAlert, LogOut
+  Globe, Moon, Info, ShieldAlert, LogOut, Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -68,6 +68,23 @@ interface ExecutionState {
   netDelta: number;
   netGamma: number;
   hedgeLogs: string[];
+  risk: {
+    tradesToday: number;
+    dailyPnL: number;
+    consecutiveLosses: number;
+    maxDrawdownToday: number;
+    peakPnLToday: number;
+    portfolioHeat: number;
+    riskScore: number;
+    isKillSwitchActive: boolean;
+    killReason: string | null;
+    limits: {
+      dailyLoss: number;
+      maxTrades: number;
+      consectuiveLimit: number;
+      heatLimit: number;
+    };
+  };
   dataSource: 'MOCK' | 'LIVE';
   executionMode: 'PAPER' | 'LIVE';
   autoMode: boolean;
@@ -110,15 +127,44 @@ interface TradeLogEntry {
   duration?: number;
 }
 
+const RiskInput = ({ label, value, onChange, type = "number" }: { label: string, value: any, onChange: (val: any) => void, type?: string }) => (
+  <div className="flex flex-col gap-1.5">
+    <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{label}</label>
+    <input 
+      type={type}
+      defaultValue={value}
+      onBlur={(e) => onChange(e.target.value)}
+      className="bg-black/40 border border-white/5 rounded px-3 py-1.5 text-[10px] font-mono text-blue-400 focus:border-blue-500/50 outline-none transition-all w-full"
+    />
+  </div>
+);
+
 export default function App() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [strategy, setStrategy] = useState<StrategyData | null>(null);
   const [execution, setExecution] = useState<ExecutionState | null>(null);
+  const [config, setConfig] = useState<any>(null);
   const [tradeLogs, setTradeLogs] = useState<TradeLogEntry[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
+
+  const updateConfigAtServer = async (update: any) => {
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(update)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConfig(data.config);
+      }
+    } catch (e) {
+      console.error("Failed to update config:", e);
+    }
+  };
   const [manualKiteConfig, setManualKiteConfig] = useState(() => {
     try {
       const saved = localStorage.getItem('kite_config');
@@ -289,6 +335,11 @@ export default function App() {
         if (executionData) setExecution(executionData);
         if (tradeLogsData) setTradeLogs(tradeLogsData);
         if (marketInfoData) setMarketInfo(marketInfoData);
+
+        // Fetch config once
+        if (!config) {
+          fetch('/api/config').then(r => r.json()).then(setConfig);
+        }
 
         if (marketData && strategyData && executionData) {
           setHistory(prev => {
@@ -655,6 +706,7 @@ export default function App() {
         <nav className="flex flex-col gap-6">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
+            { id: 'risk', icon: ShieldAlert, label: 'Risk' },
             { id: 'options', icon: Activity, label: 'Chain' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
             { id: 'history', icon: History, label: 'Audit' },
@@ -1066,7 +1118,7 @@ export default function App() {
                     <span className="text-[8px] font-bold text-emerald-500 uppercase tracking-widest">Real-time Hedge Active</span>
                   </div>
                 </div>
-                <div className="grid grid-cols-4 gap-4 mb-4">
+                <div className="grid grid-cols-5 gap-4 mb-4">
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Net Portfolio Delta</span>
                      <div className="flex items-baseline gap-2">
@@ -1099,6 +1151,18 @@ export default function App() {
                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Rebalance Trigger</span>
                      <div className="text-[10px] font-black text-slate-400 uppercase">
                         {Math.abs(execution?.netDelta || 0) > 0.2 ? 'SCALP IMMINENT' : 'STABLE'}
+                     </div>
+                  </div>
+                  <div 
+                    onClick={() => setActiveTab('risk')}
+                    className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center cursor-pointer hover:bg-white/5 transition-all"
+                  >
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Risk Score</span>
+                     <div className={cn(
+                       "text-lg font-black tracking-tighter",
+                       (execution?.risk?.riskScore || 0) > 70 ? "text-emerald-400" : (execution?.risk?.riskScore || 0) > 40 ? "text-amber-400" : "text-rose-400"
+                     )}>
+                        {execution?.risk?.riskScore || 100}
                      </div>
                   </div>
                 </div>
@@ -1484,6 +1548,258 @@ export default function App() {
                       </div>
                     ))}
                  </div>
+              </section>
+            </div>
+          </motion.main>
+        ) : activeTab === 'risk' ? (
+          <motion.main 
+            key="risk"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="flex-1 p-6 overflow-y-auto custom-scrollbar"
+          >
+            <div className="max-w-6xl mx-auto space-y-6">
+              <div className="flex justify-between items-end">
+                <div>
+                   <h2 className="text-2xl font-black text-white tracking-widest uppercase mb-1">Risk Management Core</h2>
+                   <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Real-time dynamic exposure monitoring & failsafe engine</p>
+                </div>
+                <div className="flex gap-4">
+                   <div className="px-4 py-2 bg-white/[0.02] border border-white/5 rounded-lg flex flex-col items-end">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Kill Switch</span>
+                      <span className={cn(
+                        "text-[10px] font-black",
+                        execution?.risk?.isKillSwitchActive ? "text-rose-500" : "text-emerald-500"
+                      )}>
+                        {execution?.risk?.isKillSwitchActive ? 'HALTED' : 'OPERATIONAL'}
+                      </span>
+                   </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-12 gap-6">
+                 {/* Risk Score Gauge */}
+                 <section className="col-span-12 lg:col-span-4 terminal-card p-6 flex flex-col items-center justify-center">
+                    <div className="relative mb-6">
+                       <svg className="w-48 h-48 -rotate-90">
+                          <circle cx="96" cy="96" r="88" fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth="8" />
+                          <motion.circle 
+                            cx="96" cy="96" r="88" fill="none" 
+                            stroke={cn(
+                              (execution?.risk?.riskScore || 0) > 70 ? "#10b981" : 
+                              (execution?.risk?.riskScore || 0) > 40 ? "#f59e0b" : "#ef4444"
+                            )} 
+                            strokeWidth="8" 
+                            strokeDasharray="552.9"
+                            initial={{ strokeDashoffset: 552.9 }}
+                            animate={{ strokeDashoffset: 552.9 * (1 - (execution?.risk?.riskScore || 0) / 100) }}
+                            transition={{ duration: 1.5, ease: "easeOut" }}
+                            strokeLinecap="round"
+                          />
+                       </svg>
+                       <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-5xl font-black text-white tracking-tighter">
+                            {execution?.risk?.riskScore || 0}
+                          </span>
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Safety Score</span>
+                       </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 w-full">
+                       <div className="bg-white/5 p-3 rounded-lg text-center">
+                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Exposure Heat</span>
+                          <span className="text-sm font-black text-white">{execution?.risk?.portfolioHeat || 0}%</span>
+                       </div>
+                       <div className="bg-white/5 p-3 rounded-lg text-center">
+                          <span className="text-[8px] font-black text-slate-500 uppercase block mb-1">Daily Drawdown</span>
+                          <span className="text-sm font-black text-rose-400">₹{execution?.risk?.maxDrawdownToday || 0}</span>
+                       </div>
+                    </div>
+                 </section>
+
+                 {/* Portfolio Limits Tracking */}
+                 <section className="col-span-12 lg:col-span-8 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                       <div className="terminal-card p-4 space-y-4">
+                          <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+                             <span>Daily PnL Threshold</span>
+                             <span className="text-slate-500">₹{execution?.risk?.limits.dailyLoss} Limit</span>
+                          </div>
+                          <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                             <motion.div 
+                                className={cn(
+                                  "h-full rounded-full transition-all",
+                                  (execution?.risk?.dailyPnL || 0) < 0 ? "bg-rose-500" : "bg-emerald-500"
+                                )}
+                                initial={{ width: 0 }}
+                                animate={{ width: `${Math.min(100, Math.abs((execution?.risk?.dailyPnL || 0) / (execution?.risk?.limits.dailyLoss || 1)) * 100)}%` }}
+                             />
+                          </div>
+                          <div className="flex justify-between text-[10px] items-center">
+                             <span className={cn("font-black", (execution?.risk?.dailyPnL || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                               ₹{execution?.risk?.dailyPnL || 0}
+                             </span>
+                             <span className="text-slate-500 font-mono">
+                               {Math.abs(Math.round(((execution?.risk?.dailyPnL || 0) / (execution?.risk?.limits.dailyLoss || 1)) * 100))}% Used
+                             </span>
+                          </div>
+                       </div>
+
+                       <div className="terminal-card p-4 space-y-4">
+                          <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+                             <span>Trades Frequency</span>
+                             <span className="text-slate-500">{execution?.risk?.limits.maxTrades} Max</span>
+                          </div>
+                          <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                             <motion.div 
+                                className="h-full bg-blue-500 rounded-full"
+                                initial={{ width: 0 }}
+                                animate={{ width: `${Math.min(100, ((execution?.risk?.tradesToday || 0) / (execution?.risk?.limits.maxTrades || 10)) * 100)}%` }}
+                             />
+                          </div>
+                          <div className="flex justify-between text-[10px] items-center">
+                             <span className="font-black text-white">
+                                {execution?.risk?.tradesToday || 0} Trades executed
+                             </span>
+                             <span className="text-slate-500 font-mono">
+                                {Math.round(((execution?.risk?.tradesToday || 0) / (execution?.risk?.limits.maxTrades || 1)) * 100)}% Used
+                             </span>
+                          </div>
+                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                       <div className="terminal-card p-4 bg-white/[0.01]">
+                          <Zap className="w-4 h-4 text-amber-500 mb-2" />
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Consecutive Losses</h4>
+                          <div className="text-xl font-black text-white">{execution?.risk?.consecutiveLosses || 0}</div>
+                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Limit: {execution?.risk?.limits.consectuiveLimit}</p>
+                       </div>
+                       <div className="terminal-card p-4 bg-white/[0.01]">
+                          <Activity className="w-4 h-4 text-blue-500 mb-2" />
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Portfolio Heat</h4>
+                          <div className="text-xl font-black text-white">{execution?.risk?.portfolioHeat || 0}%</div>
+                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Limit: {execution?.risk?.limits.heatLimit}% Cap</p>
+                       </div>
+                       <div className="terminal-card p-4 bg-white/[0.01]">
+                          <Shield className="w-4 h-4 text-emerald-500 mb-2" />
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Profit Lock</h4>
+                          <div className="text-xl font-black text-emerald-400">₹{execution?.risk?.peakPnLToday || 0}</div>
+                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Trailing protection active</p>
+                       </div>
+                    </div>
+
+                    <div className="terminal-card h-40 flex flex-col p-6 overflow-hidden relative">
+                       <div className="absolute top-0 right-0 p-4 opacity-5">
+                          <LogOut className="w-24 h-24 rotate-12" />
+                       </div>
+                       <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Risk Intelligence Engine Status</h4>
+                       <div className="flex-1 space-y-3 overflow-y-auto pr-2 custom-scrollbar">
+                          {execution?.risk?.isKillSwitchActive ? (
+                            <div className="flex items-start gap-3 p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg">
+                               <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0" />
+                               <div>
+                                  <div className="text-[10px] font-black text-rose-500 uppercase tracking-widest">EMERGENCY HALT ACTIVE</div>
+                                  <div className="text-[9px] text-rose-400/70 font-bold mt-1 uppercase">{execution?.risk?.killReason}</div>
+                               </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-start gap-3 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                               <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+                               <div>
+                                  <div className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">ENGINE NOMINAL</div>
+                                  <div className="text-[9px] text-emerald-400/70 font-bold mt-1 uppercase">ALL RISK THRESHOLDS WITHIN BOUNDARIES</div>
+                               </div>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                             <Zap className="w-4 h-4 text-blue-500 shrink-0" />
+                             <div>
+                                <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">ADAPTIVE POSITION SIZING</div>
+                                <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix.toFixed(1)})</div>
+                             </div>
+                          </div>
+                       </div>
+                    </div>
+                 </section>
+              </div>
+
+              {/* Advanced Risk Settings Section */}
+              <section className="terminal-card p-6">
+                <div className="flex items-center gap-2 mb-6">
+                   <Settings className="w-4 h-4 text-slate-400" />
+                   <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Dynamic Risk Configuration</h3>
+                </div>
+                
+                {config && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div className="space-y-4">
+                       <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Capital & Allocation</h4>
+                       <div className="grid grid-cols-1 gap-4">
+                          <RiskInput 
+                            label="Capital Base (₹)" 
+                            value={config.CAPITAL_BASE} 
+                            onChange={(val) => updateConfigAtServer({ CAPITAL_BASE: Number(val) })} 
+                          />
+                          <RiskInput 
+                            label="Max Portfolio Heat (%)" 
+                            value={config.MAX_PORTFOLIO_HEAT} 
+                            onChange={(val) => updateConfigAtServer({ MAX_PORTFOLIO_HEAT: Number(val) })} 
+                          />
+                          <RiskInput 
+                            label="Max Risk Per Trade (%)" 
+                            value={config.MAX_RISK_PER_TRADE_PCT} 
+                            onChange={(val) => updateConfigAtServer({ MAX_RISK_PER_TRADE_PCT: Number(val) })} 
+                          />
+                       </div>
+                    </div>
+
+                    <div className="space-y-4">
+                       <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Circuit Breakers</h4>
+                       <div className="grid grid-cols-1 gap-4">
+                          <RiskInput 
+                            label="Daily Loss Limit (₹)" 
+                            value={config.DAILY_LOSS_LIMIT} 
+                            onChange={(val) => updateConfigAtServer({ DAILY_LOSS_LIMIT: Number(val) })} 
+                          />
+                          <RiskInput 
+                            label="Profit Lock Threshold (₹)" 
+                            value={config.DAILY_PROFIT_LOCK} 
+                            onChange={(val) => updateConfigAtServer({ DAILY_PROFIT_LOCK: Number(val) })} 
+                          />
+                          <RiskInput 
+                            label="Consecutive Loss Limit" 
+                            value={config.CONSECUTIVE_LOSS_LIMIT} 
+                            onChange={(val) => updateConfigAtServer({ CONSECUTIVE_LOSS_LIMIT: Number(val) })} 
+                          />
+                       </div>
+                    </div>
+
+                    <div className="space-y-4">
+                       <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Operational Limits</h4>
+                       <div className="grid grid-cols-1 gap-4">
+                          <RiskInput 
+                            label="Max Trades Per Day" 
+                            value={config.MAX_TRADES_PER_DAY} 
+                            onChange={(val) => updateConfigAtServer({ MAX_TRADES_PER_DAY: Number(val) })} 
+                          />
+                          <RiskInput 
+                            label="Start Time (Market)" 
+                            value={config.START_TIME} 
+                            type="text"
+                            onChange={(val) => updateConfigAtServer({ START_TIME: val })} 
+                          />
+                          <RiskInput 
+                            label="End Time (Manual Square-off)" 
+                            value={config.END_TIME} 
+                            type="text"
+                            onChange={(val) => updateConfigAtServer({ END_TIME: val })} 
+                          />
+                       </div>
+                    </div>
+                  </div>
+                )}
               </section>
             </div>
           </motion.main>

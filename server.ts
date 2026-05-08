@@ -14,7 +14,7 @@ import { marketEngine } from "./src/engine/market.ts";
 import { strategyEngine } from "./src/engine/strategy.ts";
 import { executionEngine } from "./src/engine/execution.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
-import { config, setDataMode, setExecutionMode, setAutoMode } from "./src/engine/config.ts";
+import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
 import fs from "fs-extra";
 
@@ -493,6 +493,15 @@ async function startServer() {
       executionMode: config.EXECUTION_MODE,
       autoMode: config.AUTO_MODE
     });
+  });
+
+  apiRouter.get("/config", (req, res) => {
+    res.json(config);
+  });
+
+  apiRouter.post("/config", (req, res) => {
+    updateConfig(req.body);
+    res.json({ success: true, config });
   });
 
   apiRouter.post("/toggle-data-mode", (req, res) => {

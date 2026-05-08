@@ -20,6 +20,19 @@ export const ConfigSchema = z.object({
   MAX_ROLLS: z.number().default(2),
   GAMMA_THRESHOLD: z.number().default(0.05), // Threshold to trigger rebalance
   DELTA_TOLERANCE: z.number().default(0.2), // Max net Delta shift before hedging
+  
+  // Advanced Risk Parameters
+  CAPITAL_BASE: z.number().default(1000000),
+  MAX_TRADES_PER_DAY: z.number().default(10),
+  DAILY_LOSS_LIMIT: z.number().default(10000), // Max loss for entire day
+  DAILY_PROFIT_LOCK: z.number().default(15000), // Lock 70% of profit after hitting this
+  MAX_RISK_PER_TRADE_PCT: z.number().default(1), // 1% of capital per trade
+  CONSECUTIVE_LOSS_LIMIT: z.number().default(3),
+  START_TIME: z.string().default("09:15"),
+  END_TIME: z.string().default("15:15"),
+  MAX_PORTFOLIO_HEAT: z.number().default(5), // Max aggregate exposure %
+  MAX_VEGA_LIMIT: z.number().default(500),
+  MAX_DELTA_LIMIT: z.number().default(2.0),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -42,6 +55,19 @@ export const config: Config = {
   MAX_ROLLS: 2,
   GAMMA_THRESHOLD: 0.05,
   DELTA_TOLERANCE: 0.2,
+  
+  // Risk Defaults
+  CAPITAL_BASE: 1000000,
+  MAX_TRADES_PER_DAY: 10,
+  DAILY_LOSS_LIMIT: 10000,
+  DAILY_PROFIT_LOCK: 15000,
+  MAX_RISK_PER_TRADE_PCT: 1,
+  CONSECUTIVE_LOSS_LIMIT: 3,
+  START_TIME: "09:15",
+  END_TIME: "15:15",
+  MAX_PORTFOLIO_HEAT: 5,
+  MAX_VEGA_LIMIT: 500,
+  MAX_DELTA_LIMIT: 2.0,
 };
 
 export const setDataMode = (mode: 'MOCK' | 'LIVE') => {
@@ -54,4 +80,8 @@ export const setExecutionMode = (mode: 'PAPER' | 'LIVE') => {
 
 export const setAutoMode = (mode: boolean) => {
   config.AUTO_MODE = mode;
+};
+
+export const updateConfig = (newConfig: Partial<Config>) => {
+  Object.assign(config, newConfig);
 };
