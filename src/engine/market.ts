@@ -33,6 +33,7 @@ export interface OptionChainData {
   pe_price: number;
   iv?: number;
   delta?: number;
+  gamma?: number;
   theta?: number;
   vega?: number;
 }
@@ -117,6 +118,7 @@ class MarketEngine {
         pe_price: Math.max(1, 100 + (strike - spot) * 0.4),
         iv: 12 + Math.random() * 4,
         delta: Math.max(-1, Math.min(1, (spot - strike) / 100)),
+        gamma: Math.max(0.001, (1 / (50 + Math.abs(spot - strike)))) * 2, // ATM Gamma is higher
         theta: -10 - (Math.random() * 5),
         vega: 5 + (Math.random() * 2),
       });

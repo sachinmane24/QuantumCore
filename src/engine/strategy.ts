@@ -116,10 +116,38 @@ class StrategyEngine {
     let recommendation = isObservationPeriod ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
     if (!isObservationPeriod) {
-      if (total > 75 || (orbTrigger !== 0 && total > 60)) {
+      // Significantly increased thresholds for Naked Option Buying (MOMENTUM_SNIPER)
+      // Base threshold increased from 75 -> 85
+      // ORB assisted threshold increased from 60 -> 75
+      const isStrongScore = total > 85;
+      const isOrbConfirmed = orbTrigger !== 0 && total > 75;
+      
+      if (isStrongScore || isOrbConfirmed) {
         mode = 'MOMENTUM_SNIPER';
-        bias = (orbTrigger === 1 || (orbTrigger === 0 && oiChangeBias > 500000)) ? 'BULLISH' : 'BEARISH';
-        recommendation = `BUY NAKED ${atmStrike} ${bias === 'BULLISH' ? 'CE' : 'PE'} (ORB TRIGGER)`;
+        
+        // Ensure strong bias alignment for naked buying
+        // Requires at least 400k OI difference or ORB trigger
+        const significantOiBias = Math.abs(oiChangeBias) > 400000;
+        
+        if (orbTrigger === 1) {
+          bias = 'BULLISH';
+        } else if (orbTrigger === -1) {
+          bias = 'BEARISH';
+        } else {
+          bias = oiChangeBias > 100000 ? 'BULLISH' : oiChangeBias < -100000 ? 'BEARISH' : 'NEUTRAL';
+        }
+        
+        // Final sanity check for naked buying: 
+        // 1. Must not be NEUTRAL bias
+        // 2. If no ORB, must have significant OI bias and extreme score
+        if (bias === 'NEUTRAL' || (orbTrigger === 0 && (!significantOiBias || total < 90))) {
+          mode = 'INST_SPREAD'; // Demote to spread if logic isn't "Extreme" or bias is fuzzy
+          bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
+        }
+        
+        recommendation = mode === 'MOMENTUM_SNIPER' 
+          ? `BUY NAKED ${atmStrike} ${bias === 'BULLISH' ? 'CE' : 'PE'} ${orbTrigger !== 0 ? '(ORB CONFIRMED)' : '(HIGH MOMENTUM)'}`
+          : `${atmStrike} ${bias === 'BULLISH' ? 'BULL SPREAD' : 'BEAR SPREAD'} (CONSOLIDATION BIAS)`;
       } else if (total > 55) {
         mode = 'INST_SPREAD';
         bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
@@ -127,7 +155,7 @@ class StrategyEngine {
       } else {
         mode = 'INST_SPREAD';
         bias = 'NEUTRAL';
-        recommendation = trapDetected ? 'TRAP DETECTED - STANDBY' : 'STANDBY';
+        recommendation = trapDetected ? 'TRAP DETECTED - STANDBY' : 'VOLATILITY LOW - STANDBY';
       }
     }
 

@@ -10,10 +10,11 @@ import { strategyEngine } from './strategy.ts';
 
 export interface Position {
   strike: number;
-  type: 'CE' | 'PE';
+  type: 'CE' | 'PE' | 'FUT';
   entryPrice: number;
   qty: number;
   side: 'SELL' | 'BUY';
+  isHedge?: boolean;
 }
 
 class ExecutionEngine {
@@ -26,6 +27,9 @@ class ExecutionEngine {
   private currentEntryTime: number = 0;
   private currentSpotAtEntry: number = 0;
   private currentVixAtEntry: number = 0;
+  private netDelta: number = 0;
+  private netGamma: number = 0;
+  private hedgeLogs: string[] = [];
 
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
@@ -111,14 +115,50 @@ class ExecutionEngine {
     });
 
     this.pnl = Math.round(currentPnL);
+    
+    // Calculate Portfolio Greeks
+    this.calculatePortfolioGreeks();
 
     // Check Rolling 
     await this.checkRolling();
+
+    // Check Gamma Scalping
+    await this.checkGammaScalp();
 
     // Check Risk Management
     if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
       await this.exitAll('SL/Target Hit');
     }
+  }
+
+  private calculatePortfolioGreeks() {
+    const chain = marketEngine.getOptionChain();
+    let d = 0;
+    let g = 0;
+
+    this.activePositions.forEach(pos => {
+      if (pos.type === 'FUT') {
+        d += (pos.side === 'BUY' ? 1 : -1) * (pos.qty / config.LOT_SIZE);
+        return;
+      }
+
+      const opt = chain.find(o => o.strike === pos.strike);
+      if (opt) {
+        // Delta logic: CE Delta (0 to 1), PE Delta (-1 to 0)
+        let delta = opt.delta || 0.5;
+        if (pos.type === 'PE' && delta > 0) delta = delta - 1; 
+        
+        const gamma = opt.gamma || 0.01;
+        const multiplier = pos.side === 'BUY' ? 1 : -1;
+        const units = pos.qty / config.LOT_SIZE;
+
+        d += delta * multiplier * units;
+        g += gamma * multiplier * units;
+      }
+    });
+
+    this.netDelta = d;
+    this.netGamma = g;
   }
 
   private async checkRolling() {
@@ -141,6 +181,51 @@ class ExecutionEngine {
       this.lastRollTime = now;
       await this.exitAll('Rolling');
       await this.executeTrade(sellPos.type === 'PE' ? 'BULLISH' : 'BEARISH');
+    }
+  }
+
+  private async checkGammaScalp() {
+    if (this.activePositions.length === 0) return;
+    
+    // If net delta exceeds tolerance, we need to scalp/hedge
+    if (Math.abs(this.netDelta) > config.DELTA_TOLERANCE) {
+      const spot = marketEngine.getSpotPrice();
+      const atmStrike = Math.round(spot / 50) * 50;
+      
+      // Calculate requirement: we want to bring netDelta back to 0
+      // If netDelta is 0.5, we need to SELL 0.5 Delta
+      // Using ATM Options for hedging (approx 0.5 delta)
+      const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; // Sell CE or Sell PE to reduce delta? Wait.
+      // NetDelta > 0 means Long Bias. To hedge, we need Short Delta.
+      // Selling CE gives Negative Delta (~ -0.5)
+      // Buying PE gives Negative Delta (~ -0.5)
+      
+      const hedgeQty = Math.round(Math.abs(this.netDelta) / 0.5) * config.LOT_SIZE;
+      
+      if (hedgeQty > 0) {
+        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance. Hedging ${hedgeQty} ${hedgeType}...`);
+        
+        const chain = marketEngine.getOptionChain();
+        const opt = chain.find(o => o.strike === atmStrike);
+        const price = opt ? (hedgeType === 'CE' ? opt.ce_price : opt.pe_price) : 100;
+
+        // In a real scalp, we might buy/sell options or futures.
+        // Let's add a hedge position.
+        this.activePositions.push({
+          strike: atmStrike,
+          type: hedgeType,
+          entryPrice: price,
+          qty: hedgeQty,
+          side: 'SELL', // Using credit hedging for this strategy
+          isHedge: true
+        });
+
+        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString()}] Hedged ${this.netDelta > 0 ? 'Short' : 'Long'} bias with ${hedgeQty} qty ATM ${hedgeType}`);
+        if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
+        
+        // Recalculate after hedge
+        this.calculatePortfolioGreeks();
+      }
     }
   }
 
@@ -204,7 +289,10 @@ class ExecutionEngine {
     return {
       positions: this.activePositions,
       pnl: Math.round(this.pnl),
-      rollsToday: this.rollsToday
+      rollsToday: this.rollsToday,
+      netDelta: Number(this.netDelta.toFixed(3)),
+      netGamma: Number(this.netGamma.toFixed(4)),
+      hedgeLogs: this.hedgeLogs
     };
   }
 }

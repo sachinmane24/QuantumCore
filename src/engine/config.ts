@@ -18,6 +18,8 @@ export const ConfigSchema = z.object({
   SL_RUPEES: z.number().default(2000),
   TARGET_RUPEES: z.number().default(4000),
   MAX_ROLLS: z.number().default(2),
+  GAMMA_THRESHOLD: z.number().default(0.05), // Threshold to trigger rebalance
+  DELTA_TOLERANCE: z.number().default(0.2), // Max net Delta shift before hedging
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -38,6 +40,8 @@ export const config: Config = {
   SL_RUPEES: 2000,
   TARGET_RUPEES: 4000,
   MAX_ROLLS: 2,
+  GAMMA_THRESHOLD: 0.05,
+  DELTA_TOLERANCE: 0.2,
 };
 
 export const setDataMode = (mode: 'MOCK' | 'LIVE') => {

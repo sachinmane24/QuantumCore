@@ -41,6 +41,7 @@ interface MarketData {
     pe_price: number;
     iv?: number;
     delta?: number;
+    gamma?: number;
     theta?: number;
   }>;
 }
@@ -64,6 +65,9 @@ interface ExecutionState {
   positions: any[];
   pnl: number;
   rollsToday: number;
+  netDelta: number;
+  netGamma: number;
+  hedgeLogs: string[];
   dataSource: 'MOCK' | 'LIVE';
   executionMode: 'PAPER' | 'LIVE';
   autoMode: boolean;
@@ -79,6 +83,14 @@ interface MarketInfo {
     next: string;
     isUpcoming: boolean;
   };
+}
+
+interface HistoryPoint {
+  time: string;
+  pnl: number;
+  score: number;
+  vix: number;
+  spot: number;
 }
 
 interface TradeLogEntry {
@@ -103,6 +115,7 @@ export default function App() {
   const [strategy, setStrategy] = useState<StrategyData | null>(null);
   const [execution, setExecution] = useState<ExecutionState | null>(null);
   const [tradeLogs, setTradeLogs] = useState<TradeLogEntry[]>([]);
+  const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
@@ -254,41 +267,42 @@ export default function App() {
           '/api/market-info'
         ];
 
-        const responses = await Promise.all(endpoints.map(async (url) => {
+        const results = await Promise.all(endpoints.map(async (url) => {
           try {
-            return await fetch(url);
+            const res = await fetch(url);
+            if (res.ok) {
+              const contentType = res.headers.get('content-type');
+              if (contentType && contentType.includes('application/json')) {
+                return await res.json();
+              }
+            }
           } catch (e) {
             console.error(`Network error fetching ${url}:`, e);
-            return null;
           }
+          return null;
         }));
         
-        // Validate all responses are OK and JSON
-        for (let i = 0; i < responses.length; i++) {
-          const res = responses[i];
-          if (!res) continue; // Skip if network error occurred
+        const [marketData, strategyData, executionData, tradeLogsData, marketInfoData] = results;
 
-          if (!res.ok) {
-            console.error(`Endpoint ${endpoints[i]} failed with status ${res.status}`);
-            continue;
-          }
-          const contentType = res.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await res.text();
-            console.error(`Endpoint ${endpoints[i]} returned non-JSON content:`, text.slice(0, 100));
-            continue;
-          }
-          
-          try {
-            const data = await res.json();
-            if (i === 0) setMarket(data);
-            if (i === 1) setStrategy(data);
-            if (i === 2) setExecution(data);
-            if (i === 3) setTradeLogs(data);
-            if (i === 4) setMarketInfo(data);
-          } catch (e) {
-            console.error(`Failed to parse JSON from ${endpoints[i]}:`, e);
-          }
+        if (marketData) setMarket(marketData);
+        if (strategyData) setStrategy(strategyData);
+        if (executionData) setExecution(executionData);
+        if (tradeLogsData) setTradeLogs(tradeLogsData);
+        if (marketInfoData) setMarketInfo(marketInfoData);
+
+        if (marketData && strategyData && executionData) {
+          setHistory(prev => {
+            const newPoint: HistoryPoint = {
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              pnl: executionData.pnl || 0,
+              score: strategyData.score.total || 0,
+              vix: marketData.vix || 0,
+              spot: marketData.spot || 0
+            };
+            // Only add if time is different from last point to avoid duplicates in fast polling
+            if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
+            return [...prev, newPoint].slice(-60); // Keep last 60 points (approx 1 min if 1s poll)
+          });
         }
         
         setLastSync(new Date());
@@ -1036,51 +1050,72 @@ export default function App() {
                 </section>
               )}
 
-              <section className="terminal-card h-32 shrink-0 px-6 py-4 flex flex-col">
+              <section className="terminal-card shrink-0 px-6 py-4 flex flex-col bg-white/[0.01]">
                 <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Quantum Greeks Surface</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Portfolio Greeks & Dynamic Hedge</h3>
+                    {execution?.netDelta && Math.abs(execution.netDelta) > 0.1 && (
+                      <span className="flex items-center gap-1 bg-rose-500/10 text-rose-500 text-[8px] font-black px-2 py-0.5 rounded border border-rose-500/20">
+                         <ShieldAlert className="w-2.5 h-2.5" />
+                         UNBALANCED
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-[8px] font-bold text-emerald-500 uppercase tracking-widest">Live Sync</span>
+                    <span className="text-[8px] font-bold text-emerald-500 uppercase tracking-widest">Real-time Hedge Active</span>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4 flex-1">
-                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden group">
-                     <span className="terminal-label !mb-0 text-[8px]">Delta (Δ)</span>
+                <div className="grid grid-cols-4 gap-4 mb-4">
+                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Net Portfolio Delta</span>
                      <div className="flex items-baseline gap-2">
                         <span className={cn(
-                          "text-xl font-black tracking-tighter",
-                          displayDelta > 0.05 ? "text-emerald-400" : displayDelta < -0.05 ? "text-rose-400" : "text-slate-400"
+                          "text-lg font-black tracking-tighter",
+                          (execution?.netDelta || 0) > 0.1 ? "text-emerald-400" : (execution?.netDelta || 0) < -0.1 ? "text-rose-400" : "text-white"
                         )}>
-                          {displayDelta > 0 ? '+' : ''}{displayDelta.toFixed(2)}
-                        </span>
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
-                          {displayDelta > 0.05 ? 'Bullish' : displayDelta < -0.05 ? 'Bearish' : 'Neutral'}
+                          {(execution?.netDelta || 0) > 0 ? '+' : ''}{(execution?.netDelta || 0).toFixed(3)}
                         </span>
                      </div>
                   </div>
-                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
-                     <span className="terminal-label !mb-0 text-[8px]">Theta (θ)</span>
+                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Net Portfolio Gamma</span>
+                     <div className="flex items-baseline gap-2">
+                        <span className="text-lg font-black text-white tracking-tighter">{(execution?.netGamma || 0).toFixed(4)}</span>
+                     </div>
+                  </div>
+                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Delta Neutrality Error</span>
                      <div className="flex items-baseline gap-2">
                         <span className={cn(
-                          "text-xl font-black tracking-tighter",
-                          displayTheta > 0 ? "text-emerald-400" : "text-rose-400"
+                          "text-lg font-black tracking-tighter",
+                          Math.abs(execution?.netDelta || 0) > 0.2 ? "text-rose-400" : "text-blue-400"
                         )}>
-                          {displayTheta > 0 ? '+' : ''}{displayTheta}
-                        </span>
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
-                          {displayTheta > 0 ? 'Collect' : 'Decay'}
+                          {(Math.abs(execution?.netDelta || 0) * 100).toFixed(1)}%
                         </span>
                      </div>
                   </div>
-                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-4 py-2 flex flex-col justify-center relative overflow-hidden">
-                     <span className="terminal-label !mb-0 text-[8px]">Vega (ν)</span>
-                     <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-black text-white tracking-tighter">{displayVega.toFixed(1)}</span>
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Norm</span>
+                  <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Rebalance Trigger</span>
+                     <div className="text-[10px] font-black text-slate-400 uppercase">
+                        {Math.abs(execution?.netDelta || 0) > 0.2 ? 'SCALP IMMINENT' : 'STABLE'}
                      </div>
                   </div>
                 </div>
+
+                {execution?.hedgeLogs && execution.hedgeLogs.length > 0 && (
+                  <div className="mt-2 border-t border-white/5 pt-4">
+                    <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2">Recent Hedge Activities</h4>
+                    <div className="space-y-1 max-h-24 overflow-y-auto pr-2 custom-scrollbar">
+                      {execution.hedgeLogs.map((log, i) => (
+                        <div key={i} className="flex items-center gap-2 text-[9px] text-slate-400 font-mono">
+                           <span className="text-emerald-500/50">▸</span>
+                           {log}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
 
                <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
@@ -1115,6 +1150,101 @@ export default function App() {
                     </div>
                   </div>
                </section>
+
+              <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Live Metric Intelligence</h3>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1.5">
+                       <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                       <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Real-time Stream</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[200px]">
+                  <div className="flex flex-col">
+                    <div className="flex justify-between items-end mb-2 px-1">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Mark-to-Market (PnL)</span>
+                       <span className={cn("text-[10px] font-black", (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                         ₹{execution?.pnl || 0}
+                       </span>
+                    </div>
+                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
+                       <ResponsiveContainer width="100%" height="100%">
+                         <AreaChart data={history}>
+                            <defs>
+                              <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                            <XAxis dataKey="time" hide />
+                            <YAxis hide domain={['auto', 'auto']} />
+                            <Tooltip 
+                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                              itemStyle={{ color: '#10b981' }}
+                            />
+                            <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#colorPnl)" isAnimationActive={false} />
+                         </AreaChart>
+                       </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col">
+                    <div className="flex justify-between items-end mb-2 px-1">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Strategy Multi-factor Score</span>
+                       <span className="text-[10px] font-black text-blue-400">
+                         {strategy?.score.total || 0}/100
+                       </span>
+                    </div>
+                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
+                       <ResponsiveContainer width="100%" height="100%">
+                         <AreaChart data={history}>
+                            <defs>
+                              <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                            <XAxis dataKey="time" hide />
+                            <YAxis hide domain={[0, 110]} />
+                            <Tooltip 
+                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                              itemStyle={{ color: '#3b82f6' }}
+                            />
+                            <Area type="monotone" dataKey="score" stroke="#3b82f6" fillOpacity={1} fill="url(#colorScore)" isAnimationActive={false} />
+                         </AreaChart>
+                       </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col h-[80px]">
+                    <div className="flex justify-between items-end mb-2 px-1">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">India VIX Volatility Index</span>
+                       <span className="text-[10px] font-black text-amber-400">
+                         {market?.vix?.toFixed(2) || '--'}
+                       </span>
+                    </div>
+                    <div className="flex-1 min-h-0 bg-black/20 rounded-lg border border-white/5 p-2">
+                       <ResponsiveContainer width="100%" height="100%">
+                         <AreaChart data={history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                            <XAxis dataKey="time" hide />
+                            <YAxis hide domain={['auto', 'auto']} />
+                            <Tooltip 
+                              contentStyle={{ backgroundColor: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                              itemStyle={{ color: '#f59e0b' }}
+                            />
+                            <Area type="monotone" dataKey="vix" stroke="#f59e0b" fill="transparent" isAnimationActive={false} />
+                         </AreaChart>
+                       </ResponsiveContainer>
+                    </div>
+                </div>
+              </section>
 
               <section className="terminal-card flex-1 flex flex-col min-h-0 overflow-hidden">
                 <div className="px-5 py-3 border-b border-terminal-line flex justify-between items-center bg-white/[0.02]">
