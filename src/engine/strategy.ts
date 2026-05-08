@@ -90,7 +90,7 @@ class StrategyEngine {
     let orbTrigger = 0; // 0: None, 1: Bullish, -1: Bearish
     let trapDetected = false;
 
-    if (totalMin >= 570) { // After 9:30 AM
+    if (totalMin >= 570 && orbHigh > 0 && orbLow > 0) { // After 9:30 AM and ORB is valid
       if (spot > orbHigh && spot > vwap && putOiChange > callOiChange) {
         orbTrigger = 1;
       } else if (spot < orbLow && spot < vwap && callOiChange > putOiChange) {

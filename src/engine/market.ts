@@ -41,13 +41,14 @@ export interface OptionChainData {
 class MarketEngine {
   private ticks: Map<number, Tick> = new Map();
   private optionChain: OptionChainData[] = [];
-  private spotPrice: number = 24330; // Updated to match current market levels
-  private yesterdayClose: number = 24300;
+  private spotPrice: number = 0;
+  private yesterdayClose: number = 0;
   private orbHigh: number = 0;
   private orbLow: number = 0;
   private vwap: number = 0;
   private todayOpen: number = 0;
   private mockInterval: NodeJS.Timeout | null = null;
+  private initialized: boolean = false;
 
   constructor() {
     this.syncMode();
@@ -76,7 +77,7 @@ class MarketEngine {
   }
 
   public getVWAP(): number {
-    return this.vwap || this.spotPrice - 5; // Fallback to slightly below spot if not set
+    return this.vwap || this.spotPrice; // Fallback to spot
   }
 
   public setVWAP(price: number) {
@@ -258,12 +259,18 @@ class MarketEngine {
     
     // Set daily structure values if they are reported by exchange
     if (niftyOhlc) {
-      if (niftyOhlc.close && (this.yesterdayClose === 0 || this.yesterdayClose === 24300)) {
+      if (niftyOhlc.close && (this.yesterdayClose === 0)) {
          this.yesterdayClose = niftyOhlc.close;
       }
-      if (niftyOhlc.open && (this.todayOpen === 0 || this.todayOpen === 24350)) {
+      if (niftyOhlc.open && (this.todayOpen === 0)) {
          this.todayOpen = niftyOhlc.open;
       }
+    }
+    
+    if (!this.initialized && spotPrice > 0) {
+      this.spotPrice = spotPrice;
+      if (this.todayOpen === 0) this.todayOpen = spotPrice; // Emergency fallback
+      this.initialized = true;
     }
     
     // Capture ORB between 9:15 and 9:30 IST
