@@ -1309,118 +1309,6 @@ export default function App() {
                     </div>
                 </div>
               </section>
-
-              <section className="terminal-card flex-1 flex flex-col min-h-0 overflow-hidden">
-                <div className="px-5 py-3 border-b border-terminal-line flex justify-between items-center bg-white/[0.02]">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Option Chain (Institutional Data)</h3>
-                  <div className="flex gap-4">
-                    <div className="flex items-center gap-2">
-                       <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                       <span className="text-[8px] font-bold uppercase text-slate-500">Puts</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                       <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                       <span className="text-[8px] font-bold uppercase text-slate-500">Calls</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Option Chain Insights Bar */}
-                <div className="px-5 py-2.5 bg-white/[0.01] border-b border-white/5 grid grid-cols-4 gap-4">
-                   <div className="flex flex-col">
-                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Total PCR (OI)</span>
-                      <div className="flex items-baseline gap-1.5">
-                         <span className={cn(
-                            "text-xs font-black",
-                            (market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
-                         )}>
-                            {(market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
-                         </span>
-                         <span className="text-[8px] text-slate-600 font-bold uppercase">Volume Weighted</span>
-                      </div>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">OI Change Bias</span>
-                      <div className="flex items-baseline gap-1.5">
-                         <span className={cn(
-                            "text-xs font-black",
-                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
-                         )}>
-                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
-                         </span>
-                         <span className="text-[8px] text-slate-600 font-bold uppercase">Agg. 15 Strikes</span>
-                      </div>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Max Pain (Est)</span>
-                      <div className="flex items-baseline gap-1.5">
-                         <span className="text-xs font-black text-blue-400">
-                            {market?.maxPain ? market.maxPain : (market?.spot ? Math.round(market.spot / 50) * 50 : '----')}
-                         </span>
-                         <span className="text-[8px] text-slate-600 font-bold uppercase">Strike</span>
-                      </div>
-                   </div>
-                   <div className="flex flex-col">
-                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Flow Sentiment</span>
-                      <div className="flex items-baseline gap-1.5">
-                         <span className={cn(
-                            "text-[10px] font-black tracking-tighter uppercase",
-                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 500000 ? "text-emerald-400" : 
-                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) < -500000 ? "text-rose-400" : "text-slate-400"
-                         )}>
-                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 500000 ? 'Deeply Bullish' : 
-                             market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) < -500000 ? 'Deeply Bearish' : 'Neutral/Range'}
-                         </span>
-                      </div>
-                   </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto">
-                  <table className="w-full border-collapse">
-                    <thead className="sticky top-0 bg-[#0f172a] shadow-sm z-10">
-                      <tr className="text-[8px] font-black text-slate-500 uppercase tracking-widest bg-black/20">
-                        <th className="px-4 py-2 text-left border-b border-terminal-line">Strike</th>
-                        <th className="px-4 py-2 text-left border-b border-terminal-line">ΔOI (C)</th>
-                        <th className="px-4 py-2 text-right border-b border-terminal-line">LTP (C)</th>
-                        <th className="px-4 py-2 text-center border-b border-terminal-line">IV%</th>
-                        <th className="px-4 py-2 text-left border-b border-terminal-line">LTP (P)</th>
-                        <th className="px-4 py-2 text-right border-b border-terminal-line">ΔOI (P)</th>
-                        <th className="px-4 py-2 text-right border-b border-terminal-line">Signal</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/[0.02]">
-                      {market?.chain.map((c) => {
-                        const isAtm = c.strike === Math.round((market?.spot || 0) / 50) * 50;
-                        const biasNum = (c.pe_oi_change - c.ce_oi_change);
-                        const bias = biasNum > 0 ? "BULL" : "BEAR";
-                        return (
-                          <tr key={c.strike} className={cn(
-                            "group transition-colors",
-                            isAtm ? "bg-blue-600/5 hover:bg-blue-600/10" : "hover:bg-white/[0.01]"
-                          )}>
-                            <td className={cn("px-4 py-2 terminal-value text-[11px]", isAtm ? "text-blue-400 font-black" : "text-slate-400")}>
-                               {c.strike}
-                            </td>
-                            <td className="px-4 py-2 terminal-value text-rose-500/70 text-[9px]">{(c.ce_oi_change / 1000000).toFixed(2)}M</td>
-                            <td className="px-4 py-2 text-right terminal-value text-white text-[10px]">₹{c.ce_price.toFixed(1)}</td>
-                            <td className="px-4 py-2 text-center terminal-value text-blue-400/60 text-[9px]">{c.iv?.toFixed(1) || '14.2'}%</td>
-                            <td className="px-4 py-2 text-left terminal-value text-white text-[10px]">₹{c.pe_price.toFixed(1)}</td>
-                            <td className="px-4 py-2 text-right terminal-value text-emerald-500/70 text-[9px]">{(c.pe_oi_change / 1000000).toFixed(2)}M</td>
-                            <td className="px-4 py-2 text-right">
-                               <span className={cn(
-                                 "text-[8px] font-black uppercase tracking-widest",
-                                 bias === 'BULL' ? 'text-emerald-500' : 'text-rose-500'
-                               )}>
-                                 {bias}
-                               </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
             </div>
 
             <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8 overflow-y-auto custom-scrollbar pl-2">
@@ -1809,78 +1697,121 @@ export default function App() {
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            className="flex-1 p-8 overflow-hidden flex flex-col gap-6"
+            className="flex-1 p-6 overflow-hidden flex flex-col gap-6"
           >
             <div className="flex justify-between items-end">
                <div>
                   <h2 className="text-2xl font-black text-white tracking-tight uppercase">Instrument Chain</h2>
-                  <p className="text-xs text-slate-500 font-bold tracking-widest mt-1">NIFTY 50 Option Matrix v3.0</p>
+                  <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Institutional Order Flow Intelligence</p>
                </div>
                <div className="flex gap-4">
                   <div className="terminal-card px-4 py-2 border-blue-500/20">
-                     <span className="terminal-label !mb-0">ATM Strike</span>
+                     <span className="terminal-label !mb-0 text-[8px]">ATM Strike</span>
                      <div className="terminal-value text-lg text-blue-400">
                         {market?.spot ? Math.round(market.spot / 50) * 50 : '----'}
                      </div>
                   </div>
                   <div className="terminal-card px-4 py-2">
-                     <span className="terminal-label !mb-0">IV Surface</span>
-                     <div className="terminal-value text-lg text-white">14.2% Avg</div>
+                     <span className="terminal-label !mb-0 text-[8px]">Net OI Sentiment</span>
+                     <div className={cn(
+                       "terminal-value text-lg font-black",
+                       market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                     )}>
+                       {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? 'BULLISH' : 'BEARISH'}
+                     </div>
                   </div>
                </div>
             </div>
 
-            <div className="terminal-card flex-1 overflow-hidden flex flex-col">
-               <div className="flex-1 overflow-y-auto">
-                  <table className="w-full border-collapse">
-                     <thead className="sticky top-0 bg-slate-900 z-10">
-                        <tr className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-terminal-line bg-black/40">
-                           <th className="p-4 text-center border-r border-terminal-line" colSpan={4}>CALLS</th>
-                           <th className="p-4 text-center border-r border-terminal-line" colSpan={1}>STRIKE</th>
-                           <th className="p-4 text-center" colSpan={4}>PUTS</th>
-                        </tr>
-                        <tr className="text-[8px] font-bold text-slate-400 uppercase tracking-widest border-b border-terminal-line italic">
-                           <th className="p-3 text-left">ΔOI</th>
-                           <th className="p-3">DELTA</th>
-                           <th className="p-3">THETA</th>
-                           <th className="p-3 border-r border-terminal-line">LTP</th>
-                           <th className="p-3 border-r border-terminal-line bg-white/5">INDEX</th>
-                           <th className="p-3">LTP</th>
-                           <th className="p-3">THETA</th>
-                           <th className="p-3">DELTA</th>
-                           <th className="p-3 text-right">ΔOI</th>
-                        </tr>
-                     </thead>
-                     <tbody className="divide-y divide-white/[0.03]">
-                        {market?.chain.map((c) => {
-                           const isAtm = c.strike === Math.round((market?.spot || 0) / 50) * 50;
-                           return (
-                              <tr key={c.strike} className={cn(
-                                "group transition-colors",
-                                isAtm ? "bg-blue-600/5 hover:bg-blue-600/10" : "hover:bg-white/[0.01]"
-                              )}>
-                                 <td className="p-4 terminal-value text-rose-500 text-[10px]">{(c.ce_oi_change / 1000000).toFixed(2)}M</td>
-                                 <td className="p-4 text-center terminal-value text-slate-500 text-[10px]">{c.delta?.toFixed(2)}</td>
-                                 <td className="p-4 text-center terminal-value text-slate-600 text-[10px]">{c.theta?.toFixed(1)}</td>
-                                 <td className="p-4 text-center terminal-value text-white text-[11px] font-black border-r border-terminal-line">₹{c.ce_price.toFixed(1)}</td>
-                                 
-                                 <td className="p-4 text-center border-r border-terminal-line bg-white/[0.02]">
-                                    <span className={cn("terminal-value text-xs", isAtm ? "text-blue-400" : "text-slate-400")}>
-                                       {c.strike}
-                                    </span>
-                                 </td>
+            <section className="terminal-card flex-1 flex flex-col min-h-0 overflow-hidden border-white/5">
+                {/* Option Chain Insights Bar */}
+                <div className="px-5 py-3 bg-white/[0.02] border-b border-white/5 grid grid-cols-4 gap-4">
+                   <div className="flex flex-col">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Total PCR (OI)</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn(
+                            "text-base font-black",
+                            (market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
+                         )}>
+                            {(market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
+                         </span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col border-l border-white/5 pl-4">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">OI Change Bias</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn(
+                            "text-base font-black",
+                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                         )}>
+                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
+                         </span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col border-l border-white/5 pl-4">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Max Pain (Est)</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className="text-base font-black text-blue-400">
+                            {market?.maxPain ? market.maxPain : (market?.spot ? Math.round(market.spot / 50) * 50 : '----')}
+                         </span>
+                      </div>
+                   </div>
+                   <div className="flex flex-col border-l border-white/5 pl-4">
+                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Market Status</span>
+                      <div className="flex items-baseline gap-1.5">
+                         <span className={cn("text-[10px] font-black tracking-widest uppercase", market?.spot ? "text-emerald-400" : "text-rose-500")}>
+                            {market?.spot ? 'LIVE SYNCHRONIZED' : 'OFFLINE'}
+                         </span>
+                      </div>
+                   </div>
+                </div>
 
-                                 <td className="p-4 text-center terminal-value text-white text-[11px] font-black">₹{c.pe_price.toFixed(1)}</td>
-                                 <td className="p-4 text-center terminal-value text-slate-600 text-[10px]">{c.theta?.toFixed(1)}</td>
-                                 <td className="p-4 text-center terminal-value text-slate-500 text-[10px]">{(c.delta ? -c.delta : 0).toFixed(2)}</td>
-                                 <td className="p-4 text-right terminal-value text-emerald-500 text-[10px]">{(c.pe_oi_change / 1000000).toFixed(2)}M</td>
-                              </tr>
-                           );
-                        })}
-                     </tbody>
+                <div className="flex-1 overflow-y-auto">
+                  <table className="w-full border-collapse">
+                    <thead className="sticky top-0 bg-[#0f172a] shadow-sm z-10">
+                      <tr className="text-[9px] font-black text-slate-500 uppercase tracking-widest bg-black/40">
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Strike Price</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Call OI Change</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">LTP (Calls)</th>
+                        <th className="px-6 py-4 text-center border-b border-terminal-line">IV%</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">LTP (Puts)</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Put OI Change</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Flow Signal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.02]">
+                      {market?.chain.map((c) => {
+                        const isAtm = c.strike === Math.round((market?.spot || 0) / 50) * 50;
+                        const biasNum = (c.pe_oi_change - c.ce_oi_change);
+                        const bias = biasNum > 0 ? "BULL" : "BEAR";
+                        return (
+                          <tr key={c.strike} className={cn(
+                            "group transition-colors h-14",
+                            isAtm ? "bg-blue-600/5 hover:bg-blue-600/10" : "hover:bg-white/[0.01]"
+                          )}>
+                            <td className={cn("px-6 py-2 terminal-value text-sm", isAtm ? "text-blue-400 font-black" : "text-slate-400")}>
+                               {c.strike}
+                            </td>
+                            <td className="px-6 py-2 terminal-value text-rose-500 text-xs font-bold">{(c.ce_oi_change / 1000).toFixed(1)}k</td>
+                            <td className="px-6 py-2 text-right terminal-value text-white text-xs font-black">₹{c.ce_price.toFixed(1)}</td>
+                            <td className="px-6 py-2 text-center terminal-value text-blue-400/40 text-[10px]">{c.iv?.toFixed(1) || '14.2'}%</td>
+                            <td className="px-6 py-2 text-left terminal-value text-white text-xs font-black">₹{c.pe_price.toFixed(1)}</td>
+                            <td className="px-6 py-2 text-right terminal-value text-emerald-500 text-xs font-bold">{(c.pe_oi_change / 1000).toFixed(1)}k</td>
+                            <td className="px-6 py-2 text-right">
+                               <div className={cn(
+                                 "inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest",
+                                 bias === 'BULL' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                               )}>
+                                 {bias} POWER
+                               </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
                   </table>
-               </div>
-            </div>
+                </div>
+              </section>
           </motion.main>
         ) : activeTab === 'backtest' ? (
           <motion.main 
@@ -2307,23 +2238,6 @@ export default function App() {
                            <span className="text-emerald-400 text-[10px] font-black uppercase tracking-widest">Connection Live - Data Synchronized</span>
                         </div>
                       )}
-                   </div>
-                </div>
-             </section>
-
-             <section className="terminal-card p-8 border-rose-500/10">
-                <div className="flex items-center gap-4 mb-6">
-                   <ShieldAlert className="text-rose-500 w-6 h-6" />
-                   <h4 className="text-sm font-black text-white uppercase tracking-widest">Risk Guardrail</h4>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                   <div className="p-4 bg-white/5 rounded-lg border border-white/5">
-                      <span className="terminal-label">Max Loss Strategy</span>
-                      <div className="terminal-value text-white">₹4,000 / Day</div>
-                   </div>
-                   <div className="p-4 bg-white/5 rounded-lg border border-white/5">
-                      <span className="terminal-label">Trade Timeout</span>
-                      <div className="terminal-value text-white">300 Seconds</div>
                    </div>
                 </div>
              </section>

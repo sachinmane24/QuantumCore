@@ -116,11 +116,14 @@ class RiskEngine {
       return { allowed: false, reason: `Kill Switch Active: ${this.stats.killReason}`, score: this.stats.riskScore };
     }
 
-    // Time Check
+    // Time Check (Convert to IST: UTC+5:30)
     const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    const timeStr = `${istTime.getUTCHours().toString().padStart(2, '0')}:${istTime.getUTCMinutes().toString().padStart(2, '0')}`;
+    
     if (timeStr < config.START_TIME || timeStr > config.END_TIME) {
-      return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME})`, score: this.stats.riskScore };
+      return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };
     }
 
     // Risk per trade check
