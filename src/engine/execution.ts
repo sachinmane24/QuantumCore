@@ -435,6 +435,8 @@ class ExecutionEngine {
             rr: this.currentTradeParams.riskRewardRatio,
             slPrice: this.currentTradeParams.stopLossPrice,
             targetPrice: this.currentTradeParams.targetPrice,
+            slRupees: this.currentTradeParams.stopLossRupees,
+            targetRupees: this.currentTradeParams.targetRupees,
             pop: this.currentTradeParams.pop
           } : undefined
         });

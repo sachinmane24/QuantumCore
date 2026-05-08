@@ -57,6 +57,8 @@ export interface TradeLogEntry {
     rr: number;
     slPrice: number;
     targetPrice: number;
+    slRupees?: number;
+    targetRupees?: number;
     pop?: number;
   };
   serverTimestamp?: any;

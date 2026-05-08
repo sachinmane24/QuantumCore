@@ -33,13 +33,55 @@
         "win": {
           "type": "boolean",
           "description": "Whether the trade was a win."
+        },
+        "bias": {
+          "type": "string",
+          "enum": ["BULLISH", "BEARISH"],
+          "description": "The trade direction bias."
+        },
+        "mode": {
+          "type": "string",
+          "description": "The strategy mode used (e.g., MOMENTUM_SNIPER)."
+        },
+        "vix": {
+          "type": "number",
+          "description": "VIX at entry."
+        },
+        "spot": {
+          "type": "number",
+          "description": "Spot price at entry."
+        },
+        "strike": {
+          "type": "number",
+          "description": "ATM strike established at entry."
+        },
+        "isExpiryDay": {
+          "type": "boolean",
+          "description": "Whether it was an expiry day."
+        },
+        "duration": {
+          "type": "number",
+          "description": "Trade duration in seconds."
+        },
+        "buyPrice": {
+          "type": "number",
+          "description": "Total entry cost for buy legs."
+        },
+        "sellPrice": {
+          "type": "number",
+          "description": "Total entry credit for sell legs."
+        },
+        "intelligence": {
+          "type": "object",
+          "description": "Derived strategy parameters (SL, Target, ATR, etc)."
         }
       },
       "required": [
         "timestamp",
         "score",
         "pnl",
-        "win"
+        "win",
+        "mode"
       ]
     }
   },
