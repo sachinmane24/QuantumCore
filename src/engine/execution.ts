@@ -31,6 +31,7 @@ class ExecutionEngine {
   private netDelta: number = 0;
   private netGamma: number = 0;
   private hedgeLogs: string[] = [];
+  private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
 
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
@@ -38,6 +39,8 @@ class ExecutionEngine {
     // Validate with Risk Engine
     const expectedSL = config.SL_RUPEES; // Simplified SL check
     const validation = riskEngine.validateEntry(config.LOT_SIZE, expectedSL);
+    this.lastRiskValidation = validation;
+    
     if (!validation.allowed) {
       console.warn(`[EXECUTION] Trade blocked by Risk Engine: ${validation.reason}`);
       return;
@@ -92,6 +95,8 @@ class ExecutionEngine {
       }
       console.log(`[EXECUTION] TRIGGERED INST SPREAD: ${bias} credit spread at ${atmStrike}.`);
     }
+
+    riskEngine.recordTradeEntry();
   }
 
   async updatePnL() {
@@ -305,7 +310,8 @@ class ExecutionEngine {
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),
       hedgeLogs: this.hedgeLogs,
-      risk: riskEngine.getStats()
+      risk: riskEngine.getStats(),
+      lastRiskValidation: this.lastRiskValidation
     };
   }
 }

@@ -1398,20 +1398,26 @@ export default function App() {
                        <div className="text-[9px] font-black text-white uppercase tracking-widest opacity-60">Primary Recommendation</div>
                        <p className="text-[10px] text-slate-300 font-bold leading-relaxed">
                           {strategy?.score.bias === 'BULLISH' 
-                            ? "Aggressive Bullish Bias. Recommend PE Credit Spreads for optimal Theta yield." 
+                            ? strategy?.score.mode === 'MOMENTUM_SNIPER' 
+                              ? "Momentum Sniper active. High velocity bullish expansion detected. Buying ATM CE for rapid delta capture."
+                              : "Aggressive Bullish Bias. Institutional flow supports PE Credit Spreads for optimal Theta yield." 
                             : strategy?.score.bias === 'BEARISH' 
-                              ? "Confirmed Bearish Breakdown. Initiate CE Credit Spreads at next resistance."
-                              : "Neutral Range Detected. Avoid directionals, prioritize Iron Fly strategies."}
+                              ? strategy?.score.mode === 'MOMENTUM_SNIPER'
+                                ? "Momentum Sniper active. Bearish breakdown with volume surge. Buying ATM PE for maximum exposure."
+                                : "Confirmed Bearish Breakdown. Institutional sellers entering. Initiate CE Credit Spreads at next resistance."
+                              : "Neutral Range Detected. Low directional conviction. Avoid directionals, prioritize Iron Fly or delta-neutral strategies."}
                        </p>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                        <div className="bg-white/5 p-2 rounded border border-white/5">
                           <span className="text-[8px] text-slate-500 font-black uppercase">Edge Window</span>
-                          <div className="text-[10px] text-blue-400 font-bold">14:15 - 15:30 IST</div>
+                          <div className="text-[10px] text-blue-400 font-bold">{config?.START_TIME || '09:15'} - {config?.END_TIME || '15:20'} IST</div>
                        </div>
                        <div className="bg-white/5 p-2 rounded border border-white/5">
                           <span className="text-[8px] text-slate-500 font-black uppercase">Volatility Edge</span>
-                          <div className="text-[10px] text-emerald-400 font-bold">IV Expansion Alert</div>
+                          <div className="text-[10px] text-emerald-400 font-bold">
+                             {market?.vix && market.vix > 18 ? "IV Expansion Alert" : market?.vix && market.vix < 14 ? "Low IV Environment" : "Normal IV Regime"}
+                          </div>
                        </div>
                     </div>
                  </div>
@@ -1542,15 +1548,15 @@ export default function App() {
                              <motion.div 
                                 className="h-full bg-blue-500 rounded-full"
                                 initial={{ width: 0 }}
-                                animate={{ width: `${Math.min(100, ((execution?.risk?.tradesToday || 0) / (execution?.risk?.limits.maxTrades || 10)) * 100)}%` }}
+                                animate={{ width: `${Math.min(100, (((execution?.risk as any)?.entriesToday || 0) / (execution?.risk?.limits.maxTrades || 10)) * 100)}%` }}
                              />
                           </div>
                           <div className="flex justify-between text-[10px] items-center">
                              <span className="font-black text-white">
-                                {execution?.risk?.tradesToday || 0} Trades executed
+                                {(execution?.risk as any)?.entriesToday || 0} Trades executed
                              </span>
                              <span className="text-slate-500 font-mono">
-                                {Math.round(((execution?.risk?.tradesToday || 0) / (execution?.risk?.limits.maxTrades || 1)) * 100)}% Used
+                                {Math.round((((execution?.risk as any)?.entriesToday || 0) / (execution?.risk?.limits.maxTrades || 1)) * 100)}% Used
                              </span>
                           </div>
                        </div>

@@ -31,6 +31,8 @@ class RiskEngine {
     killReason: null,
   };
 
+  private entriesToday: number = 0;
+
   private dailyHistory: { pnl: number; timestamp: number }[] = [];
 
   updatePnL(currentPnL: number, positions: Position[]) {
@@ -44,12 +46,15 @@ class RiskEngine {
     this.stats.maxDrawdownToday = Math.max(this.stats.maxDrawdownToday, drawdown);
 
     // Calculate Portfolio Heat
-    // Simplified: (Total Qty * Spot) / Capital
-    // For now, let's use a rough risk per position
     const totalRisk = positions.length * config.SL_RUPEES;
     this.stats.portfolioHeat = Number(((totalRisk / config.CAPITAL_BASE) * 100).toFixed(2));
 
     this.calculateRiskScore(positions);
+    this.checkThresholds();
+  }
+
+  recordTradeEntry() {
+    this.entriesToday++;
     this.checkThresholds();
   }
 
@@ -90,7 +95,7 @@ class RiskEngine {
 
     if (this.stats.dailyPnL <= -config.DAILY_LOSS_LIMIT) {
       this.activateKillSwitch('Daily Loss Limit Exceeded');
-    } else if (this.stats.tradesToday >= config.MAX_TRADES_PER_DAY) {
+    } else if (this.entriesToday >= config.MAX_TRADES_PER_DAY) {
       this.activateKillSwitch('Max Trades Per Day Reached');
     } else if (this.stats.consecutiveLosses >= config.CONSECUTIVE_LOSS_LIMIT) {
       this.activateKillSwitch('Consecutive Loss Limit Reached');
@@ -144,6 +149,7 @@ class RiskEngine {
   getStats() {
     return {
       ...this.stats,
+      entriesToday: this.entriesToday,
       limits: {
         dailyLoss: config.DAILY_LOSS_LIMIT,
         maxTrades: config.MAX_TRADES_PER_DAY,
@@ -154,6 +160,7 @@ class RiskEngine {
   }
 
   reset() {
+    this.entriesToday = 0;
     this.stats = {
       tradesToday: 0,
       dailyPnL: 0,
