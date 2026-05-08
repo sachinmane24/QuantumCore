@@ -93,6 +93,18 @@ class RiskEngine {
   private checkThresholds() {
     if (this.stats.isKillSwitchActive) return;
 
+    // Time-based Kill Switch (15:15 IST Square-off)
+    const istTimeStr = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
+    const istDate = new Date(istTimeStr);
+    const hours = istDate.getHours();
+    const minutes = istDate.getMinutes();
+    const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    
+    if (timeStr >= config.END_TIME) {
+      this.activateKillSwitch(`Auto-Square-off Time Reached (${config.END_TIME} IST)`);
+      return;
+    }
+
     if (this.stats.dailyPnL <= -config.DAILY_LOSS_LIMIT) {
       this.activateKillSwitch('Daily Loss Limit Exceeded');
     } else if (this.entriesToday >= config.MAX_TRADES_PER_DAY) {
@@ -122,10 +134,11 @@ class RiskEngine {
     }
 
     // Time Check (Convert to IST: UTC+5:30)
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istTime = new Date(now.getTime() + istOffset);
-    const timeStr = `${istTime.getUTCHours().toString().padStart(2, '0')}:${istTime.getUTCMinutes().toString().padStart(2, '0')}`;
+    const istTimeStr = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
+    const istDate = new Date(istTimeStr);
+    const hours = istDate.getHours();
+    const minutes = istDate.getMinutes();
+    const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
     
     if (timeStr < config.START_TIME || timeStr > config.END_TIME) {
       return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };

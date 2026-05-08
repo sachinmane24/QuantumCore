@@ -15,6 +15,9 @@ export interface TradeParams {
   trailingSlTrigger: number;
   atrValue: number;
   vixFactor: number;
+  pop?: number;
+  maxProfit?: number;
+  maxLoss?: number;
 }
 
 class IntelligenceEngine {
@@ -85,7 +88,10 @@ class IntelligenceEngine {
       riskRewardRatio,
       trailingSlTrigger: Math.round(targetRupees * 0.4), // Start trailing after 40% target achieved
       atrValue: Number(atr.toFixed(2)),
-      vixFactor: Number(vixFactor.toFixed(2))
+      vixFactor: Number(vixFactor.toFixed(2)),
+      pop: strategyMode === 'MOMENTUM_SNIPER' ? 38 : 65, // Standard probabilities for these styles
+      maxProfit: strategyMode === 'MOMENTUM_SNIPER' ? undefined : 2000, // Heuristic for spreads
+      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * 65 : 4500
     };
   }
 

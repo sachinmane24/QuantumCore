@@ -133,6 +133,7 @@ interface TradeLogEntry {
     rr: number;
     slPrice: number;
     targetPrice: number;
+    pop?: number;
   };
 }
 
@@ -2268,6 +2269,10 @@ export default function App() {
                                     <div className="flex flex-col">
                                        <span className="text-[7px] text-slate-500 uppercase font-black">Target</span>
                                        <span className="text-[10px] text-emerald-400 font-mono">{log.intelligence?.targetPrice?.toFixed(1) || '---'}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                       <span className="text-[7px] text-slate-500 uppercase font-black">POP (AI)</span>
+                                       <span className="text-[10px] text-indigo-400 font-mono">{log.intelligence?.pop || '---'}%</span>
                                     </div>
                                     <div className="flex flex-col">
                                        <span className="text-[7px] text-slate-500 uppercase font-black">Stop Loss</span>

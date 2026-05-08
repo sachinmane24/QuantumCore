@@ -269,7 +269,9 @@ class MarketEngine {
     
     if (!this.initialized && spotPrice > 0) {
       this.spotPrice = spotPrice;
-      if (this.todayOpen === 0) this.todayOpen = spotPrice; // Emergency fallback
+      if (this.todayOpen === 0) {
+        this.todayOpen = this.yesterdayClose > 0 ? this.yesterdayClose : spotPrice;
+      }
       this.initialized = true;
     }
     

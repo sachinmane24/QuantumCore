@@ -73,6 +73,29 @@ class ExecutionEngine {
     this.currentStrikeAtEntry = atmStrike;
     this.currentVixAtEntry = marketEngine.getVix();
 
+    const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE') => {
+      const chain = marketEngine.getOptionChain();
+      if (chain.length === 0) return Math.round(spot / 50) * 50;
+      
+      // Delta is 0 to 1 for CE, 0 to -1 for PE in standard models
+      // Our engine uses absolute delta for finding strikes easily
+      let closest = chain[0];
+      let minDiff = Infinity;
+      
+      chain.forEach(opt => {
+        let delta = opt.delta || 0.5;
+        // Normalize PE delta for comparison if negative
+        if (type === 'PE' && delta < 0) delta = Math.abs(delta);
+        
+        const diff = Math.abs(delta - targetDelta);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = opt;
+        }
+      });
+      return closest.strike;
+    };
+
     const getLTP = (strike: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
       const option = chain.find(o => o.strike === strike);
@@ -85,32 +108,36 @@ class ExecutionEngine {
     };
 
     if (score.mode === 'MOMENTUM_SNIPER') {
-      // Momentum Sniper: Naked Buying
-      const entryPrice = getLTP(atmStrike, bias === 'BULLISH' ? 'CE' : 'PE');
+      // Momentum Sniper: Naked Buying - Find ATM/ITM Strike (Delta ~0.55)
+      const targetStrike = getStrikeByDelta(0.55, bias === 'BULLISH' ? 'CE' : 'PE');
+      const entryPrice = getLTP(targetStrike, bias === 'BULLISH' ? 'CE' : 'PE');
       this.activePositions = [
-        { strike: atmStrike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice, qty: config.LOT_SIZE, side: 'BUY' }
+        { strike: targetStrike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice, qty: config.LOT_SIZE, side: 'BUY' }
       ];
-      console.log(`[EXECUTION] TRIGGERED MOMENTUM SNIPER: Naked ${bias} ${atmStrike} @ ${entryPrice.toFixed(2)}.`);
+      console.log(`[EXECUTION] AI STRIKE SELECTION (Delta 0.55): Naked ${bias} ${targetStrike} @ ${entryPrice.toFixed(2)}.`);
     } else {
-      // Institutional Logic: Credit Spreads
+      // Institutional Logic: Credit Spreads (Sell ~0.25 Delta, Buy ~0.10 Delta for hedge)
       if (bias === 'BULLISH') {
-        const sellPrice = getLTP(atmStrike, 'PE');
-        const buyStrike = atmStrike - 100;
+        const sellStrike = getStrikeByDelta(0.25, 'PE');
+        const sellPrice = getLTP(sellStrike, 'PE');
+        const buyStrike = getStrikeByDelta(0.10, 'PE');
         const buyPrice = getLTP(buyStrike, 'PE');
         this.activePositions = [
-          { strike: atmStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'PE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
         ];
+        console.log(`[EXECUTION] AI STRIKE SELECTION (Deltas 0.25/0.10): BULLISH credit spread S:${sellStrike}/B:${buyStrike}.`);
       } else {
-        const sellPrice = getLTP(atmStrike, 'CE');
-        const buyStrike = atmStrike + 100;
+        const sellStrike = getStrikeByDelta(0.25, 'CE');
+        const sellPrice = getLTP(sellStrike, 'CE');
+        const buyStrike = getStrikeByDelta(0.10, 'CE');
         const buyPrice = getLTP(buyStrike, 'CE');
         this.activePositions = [
-          { strike: atmStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'CE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
         ];
+        console.log(`[EXECUTION] AI STRIKE SELECTION (Deltas 0.25/0.10): BEARISH credit spread S:${sellStrike}/B:${buyStrike}.`);
       }
-      console.log(`[EXECUTION] TRIGGERED INST SPREAD: ${bias} credit spread at ${atmStrike}.`);
     }
 
     riskEngine.recordTradeEntry();
@@ -323,12 +350,15 @@ class ExecutionEngine {
       const sellPrice = sellLegs.length > 0 ? sellLegs.reduce((sum, p) => sum + p.entryPrice, 0) : 0;
       
       let totalInvestment = 0;
+      const primaryQty = this.activePositions[0]?.qty || config.LOT_SIZE;
+      const lots = primaryQty / config.LOT_SIZE;
+
       if (sellLegs.length > 0) {
-        // Option Selling / Spreads Margin Heuristic: ~1.2L per lot for Hedged Spreads
-        totalInvestment = (buyLegs.length > 0 ? 120000 : 160000);
+        // Option Selling / Spreads Margin Heuristic: ~35k per lot for Hedged Spreads, 1.1L for Naked
+        totalInvestment = (buyLegs.length > 0 ? 35000 : 110000) * lots;
       } else {
-        // Option Buying: Premium Paid
-        totalInvestment = buyPrice * config.LOT_SIZE;
+        // Option Buying: Premium Paid * Qty
+        totalInvestment = buyPrice * primaryQty;
       }
 
       // Record trade result in Risk Engine
@@ -358,7 +388,8 @@ class ExecutionEngine {
             vixFactor: this.currentTradeParams.vixFactor,
             rr: this.currentTradeParams.riskRewardRatio,
             slPrice: this.currentTradeParams.stopLossPrice,
-            targetPrice: this.currentTradeParams.targetPrice
+            targetPrice: this.currentTradeParams.targetPrice,
+            pop: this.currentTradeParams.pop
           } : undefined
         });
       } catch (logErr) {

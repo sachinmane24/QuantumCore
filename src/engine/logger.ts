@@ -43,6 +43,7 @@ export interface TradeLogEntry {
     rr: number;
     slPrice: number;
     targetPrice: number;
+    pop?: number;
   };
   serverTimestamp?: any;
 }
