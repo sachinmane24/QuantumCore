@@ -145,6 +145,87 @@ class AIEngine {
       };
     }
   }
+
+  async analyzeStockIntel(stockContext: any): Promise<any> {
+    if (!this.ai) {
+      return {
+        verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'AI Offline.', sl: 0, target: 0 },
+        institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
+      };
+    }
+
+    const prompt = `
+      You are a specialized institutional trader for Indian Equities F&O.
+      Analyze the following stock data for a NAKED OPTION BUYING opportunity (CE or PE).
+      
+      Stock Data:
+      ${JSON.stringify(stockContext, null, 2)}
+      
+      Requirements:
+      1. Analyze price action (RSI, Moving Averages, Bollinger Bands).
+      2. Analyze Option Chain (OI concentration, Max Pain, PCR).
+      3. Provide a final BUY/SELL/AVOID verdict.
+      4. Derive precise Stop Loss and Target levels for the option.
+      5. Identify "Institutional Fingerprints" in the OI build-up.
+      
+      Return JSON:
+      {
+        "verdict": {
+          "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
+          "score": number (0-100),
+          "reasoning": "Deep analytical reasoning",
+          "sl": number (Price level for SL),
+          "target": number (Price level for Target)
+        },
+        "institutionalActivity": {
+          "oiTrend": "ACCUMULATION" | "DISTRIBUTION" | "SHORT_COVERING" | "LONG_UNWINDING",
+          "volatilityRegime": "EXPANDING" | "CONTRACTING" | "STABLE"
+        }
+      }
+    `;
+
+    try {
+      const response = await this.ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              verdict: {
+                type: Type.OBJECT,
+                properties: {
+                  bias: { type: Type.STRING, enum: ["BULLISH", "BEARISH", "NEUTRAL"] },
+                  score: { type: Type.NUMBER },
+                  reasoning: { type: Type.STRING },
+                  sl: { type: Type.NUMBER },
+                  target: { type: Type.NUMBER }
+                },
+                required: ["bias", "score", "reasoning", "sl", "target"]
+              },
+              institutionalActivity: {
+                type: Type.OBJECT,
+                properties: {
+                  oiTrend: { type: Type.STRING },
+                  volatilityRegime: { type: Type.STRING }
+                },
+                required: ["oiTrend", "volatilityRegime"]
+              }
+            },
+            required: ["verdict", "institutionalActivity"]
+          }
+        }
+      });
+      return JSON.parse(response.text);
+    } catch (e) {
+      console.error("[AI-STOCK] Analysis Error:", e);
+      return {
+        verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'Neural Engine Error.', sl: 0, target: 0 },
+        institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
+      };
+    }
+  }
 }
 
 export const aiEngine = new AIEngine();

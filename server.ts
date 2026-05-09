@@ -733,6 +733,64 @@ async function startServer() {
     }
   });
 
+  apiRouter.get("/stock-intel/:symbol", async (req, res) => {
+    const { symbol } = req.params;
+    
+    // In a real app, we'd use Kite to fetch deep data.
+    // For this dashboard, we simulate the sophisticated data retrieval and AI processing.
+    
+    const mockPrice = 1500 + (Math.random() * 500);
+    const mockChange = (Math.random() - 0.4) * 20;
+    
+    const stockContext = {
+      symbol,
+      price: mockPrice,
+      change: mockChange,
+      changePercent: (mockChange / mockPrice) * 100,
+      indicators: {
+        rsi: 45 + Math.random() * 20,
+        macd: { macd: 1.5, signal: 1.2, histogram: 0.3 },
+        bollinger: { upper: mockPrice + 50, middle: mockPrice, lower: mockPrice - 50 }
+      },
+      optionChain: [], // To be populated below
+      institutionalActivity: {
+        oiTrend: Math.random() > 0.5 ? 'ACCUMULATION' : 'DISTRIBUTION',
+        volatilityRegime: 'STABLE',
+        deliveryPercentage: 45 + Math.random() * 20
+      }
+    };
+
+    // Generate option chain for result
+    const atmStrike = Math.round(mockPrice / 20) * 20;
+    const chain = [];
+    for (let i = -3; i <= 3; i++) {
+        const strike = atmStrike + (i * 20);
+        chain.push({
+            strike,
+            ce_oi: 100000 + Math.random() * 50000,
+            ce_oi_change: (Math.random() - 0.3) * 10000,
+            pe_oi: 120000 + Math.random() * 50000,
+            pe_oi_change: (Math.random() - 0.5) * 10000,
+            ce_price: Math.max(2, 40 - (strike - mockPrice) * 0.5),
+            pe_price: Math.max(2, 40 + (strike - mockPrice) * 0.5),
+            iv: 18 + Math.random() * 5
+        });
+    }
+    stockContext.optionChain = chain as any;
+
+    try {
+      const intel = await aiEngine.analyzeStockIntel(stockContext);
+      res.json({
+        ...stockContext,
+        verdict: intel.verdict,
+        institutionalActivity: { ...stockContext.institutionalActivity, ...intel.institutionalActivity }
+      });
+    } catch (e) {
+      console.error("[SERVER-STOCK] Intel failed:", e);
+      res.status(500).json({ error: "Stock analysis failed" });
+    }
+  });
+
   apiRouter.post("/exit", async (req, res) => {
     await executionEngine.exitAll("User Manual Exit");
     res.json({ status: "success" });

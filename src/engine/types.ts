@@ -50,6 +50,25 @@ export interface TradeLogEntry {
   serverTimestamp?: any;
 }
 
+export interface OptionChainData {
+  strike: number;
+  ce_oi: number;
+  ce_oi_change: number;
+  pe_oi: number;
+  pe_oi_change: number;
+  ce_price: number;
+  pe_price: number;
+  ce_volume?: number;
+  pe_volume?: number;
+  ce_iv?: number;
+  pe_iv?: number;
+  iv?: number;
+  delta?: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+}
+
 export interface MarketData {
   spot: number;
   tick: any;
@@ -170,3 +189,36 @@ export interface HistoryPoint {
   bbLower: number | null;
   bbMiddle: number | null;
 }
+
+export interface StockIntel {
+  symbol: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  indicators: {
+    rsi: number;
+    macd: { macd: number; signal: number; histogram: number };
+    bollinger: { upper: number; middle: number; lower: number };
+  };
+  optionChain: OptionChainData[];
+  verdict: {
+    bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    score: number;
+    reasoning: string;
+    sl: number;
+    target: number;
+  };
+  institutionalActivity: {
+    oiTrend: string;
+    volatilityRegime: string;
+    deliveryPercentage?: number;
+  };
+}
+
+export const FO_STOCKS = [
+  "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "LICI", "ITC", "HINDUNILVR",
+  "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA", "TITAN", "AXISBANK", "ULTRACEMCO", "KOTAKBANK", "ADANIPORTS",
+  "ONGC", "ASIANPAINT", "NTPC", "JSWSTEEL", "M&M", "POWERGRID", "TATASTEEL", "BAJAJ-AUTO", "ADANIPOWER", "COALINDIA",
+  "TATAMOTORS", "HCLTECH", "SBILIFE", "GRASIM", "NESTLEIND", "INDUSINDBK", "TECHM", "WIPRO", "HINDALCO", "BRITANNIA",
+  "DIVISLAB", "CIPLA", "APOLLOHOSP", "EICHERMOT", "BPCL", "HEROMOTOCO", "DRREDDY", "BAJAJFINSV", "ONGC", "TATARELI"
+];

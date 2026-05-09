@@ -4,6 +4,7 @@
  */
 
 import { config } from './config.ts';
+import { OptionChainData } from './types';
 
 export interface Tick {
   tradable: boolean;
@@ -21,25 +22,6 @@ export interface Tick {
   oi_day_high: number;
   oi_day_low: number;
   timestamp: Date;
-}
-
-export interface OptionChainData {
-  strike: number;
-  ce_oi: number;
-  ce_oi_change: number;
-  pe_oi: number;
-  pe_oi_change: number;
-  ce_price: number;
-  pe_price: number;
-  ce_volume?: number;
-  pe_volume?: number;
-  ce_iv?: number;
-  pe_iv?: number;
-  iv?: number; // Legacy
-  delta?: number;
-  gamma?: number;
-  theta?: number;
-  vega?: number;
 }
 
 class MarketEngine {

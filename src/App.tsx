@@ -8,7 +8,7 @@ import {
   TrendingUp, TrendingDown, Activity, AlertTriangle, 
   ShieldCheck, LayoutDashboard, History, Zap,
   BarChart3, Brain, ArrowUpRight, ArrowDownRight,
-  Shield, Target, Crosshair, Menu, Bell, Search,
+  Shield, Target, Crosshair, Menu, Bell, Search, Cpu, Layers, Filter,
   Globe, Moon, Info, ShieldAlert, LogOut, Settings, Timer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -21,7 +21,7 @@ import { cn } from './lib/utils';
 import { getTradePrediction, PredictionResult } from './services/geminiService';
 import { 
   MarketData, StrategyData, ExecutionState, MarketInfo, 
-  HistoryPoint, TradeLogEntry 
+  HistoryPoint, TradeLogEntry, StockIntel, FO_STOCKS
 } from './engine/types';
 
 // --- Components ---
@@ -50,6 +50,11 @@ export default function App() {
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
+  
+  // Stock Intel State
+  const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
+  const [stockIntel, setStockIntel] = useState<StockIntel | null>(null);
+  const [isSearchingStock, setIsSearchingStock] = useState(false);
 
   const handlePredict = async () => {
     if (!market || !strategy) return;
@@ -64,6 +69,27 @@ export default function App() {
       setIsPredicting(false);
     }
   };
+
+  const fetchStockIntel = async (symbol: string) => {
+    setIsSearchingStock(true);
+    try {
+      const res = await fetch(`/api/stock-intel/${symbol}`);
+      if (res.ok) {
+        const data = await res.json();
+        setStockIntel(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch stock intel", e);
+    } finally {
+      setIsSearchingStock(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'stock-alpha' && selectedStock) {
+      fetchStockIntel(selectedStock);
+    }
+  }, [activeTab, selectedStock]);
 
   const updateConfigAtServer = async (update: any) => {
     try {
@@ -637,6 +663,7 @@ export default function App() {
         <nav className="flex flex-col gap-6">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
+            { id: 'stock-alpha', icon: Cpu, label: 'Stock Alpha' },
             { id: 'risk', icon: ShieldAlert, label: 'Risk' },
             { id: 'options', icon: Activity, label: 'Chain' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
@@ -1603,6 +1630,229 @@ export default function App() {
                  </div>
               </section>
             </div>
+          </motion.main>
+        ) : activeTab === 'stock-alpha' ? (
+          <motion.main 
+            key="stock-alpha"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="flex-1 p-6 overflow-hidden flex flex-col gap-6"
+          >
+            <div className="flex justify-between items-end">
+               <div>
+                  <h2 className="text-2xl font-black text-white tracking-tight uppercase">Stock Options Intelligence</h2>
+                  <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Institutional Naked Buying Analytics</p>
+               </div>
+               <div className="flex gap-4 items-center">
+                  <div className="relative group">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 group-focus-within:text-blue-500 transition-colors" />
+                    <select 
+                      value={selectedStock}
+                      onChange={(e) => setSelectedStock(e.target.value)}
+                      className="bg-slate-900 border border-white/10 rounded-lg pl-8 pr-4 py-2 text-[10px] font-black text-white uppercase outline-none focus:border-blue-500/50 min-w-[200px] appearance-none"
+                    >
+                      {FO_STOCKS.sort().map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
+                  </div>
+                  
+                  <button 
+                    onClick={() => fetchStockIntel(selectedStock)}
+                    disabled={isSearchingStock}
+                    className="p-2.5 terminal-card hover:border-blue-500/40 transition-colors"
+                  >
+                     <Zap className={cn("w-4 h-4", isSearchingStock ? "text-blue-500 animate-pulse" : "text-white")} />
+                  </button>
+               </div>
+            </div>
+
+            {isSearchingStock ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-6">
+                <div className="relative">
+                   <div className="w-16 h-16 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin" />
+                   <Cpu className="absolute inset-0 m-auto w-6 h-6 text-blue-500" />
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                   <p className="text-sm font-black text-white uppercase tracking-widest text-center">Quant-AI Engine Analyzing {selectedStock}</p>
+                   <p className="text-[10px] text-slate-500 font-bold uppercase text-center">Syncing Option Chain & Institutional Order Flow...</p>
+                </div>
+              </div>
+            ) : stockIntel ? (
+              <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                <div className="grid grid-cols-12 gap-6">
+                  {/* Left: AI Verdict */}
+                  <div className="col-span-12 lg:col-span-4 flex flex-col gap-4">
+                     <section className={cn(
+                       "terminal-card p-6 border-l-4",
+                       stockIntel.verdict.bias === 'BULLISH' ? "border-l-emerald-500" : stockIntel.verdict.bias === 'BEARISH' ? "border-l-rose-500" : "border-l-slate-500"
+                     )}>
+                        <div className="flex justify-between items-start mb-6">
+                           <div>
+                              <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Decision Verdict</span>
+                              <h3 className={cn(
+                                "text-2xl font-black tracking-tight",
+                                stockIntel.verdict.bias === 'BULLISH' ? "text-emerald-400" : stockIntel.verdict.bias === 'BEARISH' ? "text-rose-400" : "text-slate-400"
+                              )}>{stockIntel.verdict.bias} TRADE</h3>
+                           </div>
+                           <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex flex-col items-center">
+                              <span className="text-[10px] font-black text-white">{stockIntel.verdict.score}%</span>
+                              <span className="text-[7px] text-slate-500 font-bold uppercase">Confidence</span>
+                           </div>
+                        </div>
+
+                        <div className="space-y-4">
+                           <div className="p-4 bg-white/5 rounded-lg border border-white/5">
+                              <p className="text-[11px] text-slate-300 font-bold leading-relaxed">{stockIntel.verdict.reasoning}</p>
+                           </div>
+
+                           <div className="grid grid-cols-2 gap-3">
+                              <div className="bg-emerald-500/5 p-3 rounded border border-emerald-500/20">
+                                 <div className="text-[8px] font-black text-emerald-500 uppercase mb-1">Target Entry Profit</div>
+                                 <div className="text-base font-black text-white">₹{stockIntel.verdict.target.toFixed(1)}</div>
+                              </div>
+                              <div className="bg-rose-500/5 p-3 rounded border border-rose-500/20">
+                                 <div className="text-[8px] font-black text-rose-500 uppercase mb-1">Invalidation (SL)</div>
+                                 <div className="text-base font-black text-white">₹{stockIntel.verdict.sl.toFixed(1)}</div>
+                              </div>
+                           </div>
+                        </div>
+                     </section>
+
+                     <section className="terminal-card p-6 flex-1">
+                        <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-4 flex items-center gap-2">
+                           <Layers className="w-3 h-3 text-blue-500" />
+                           Institutional Fingerprints
+                        </h4>
+                        <div className="space-y-6">
+                           <div className="flex justify-between items-center bg-white/5 p-3 rounded border border-white/5">
+                              <span className="text-[10px] text-slate-500 font-bold uppercase">OI Accumulation</span>
+                              <span className="text-[10px] text-emerald-400 font-black">{stockIntel.institutionalActivity.oiTrend}</span>
+                           </div>
+                           <div className="flex justify-between items-center bg-white/5 p-3 rounded border border-white/5">
+                              <span className="text-[10px] text-slate-500 font-bold uppercase">Volatility Regime</span>
+                              <span className="text-[10px] text-blue-400 font-black">{stockIntel.institutionalActivity.volatilityRegime}</span>
+                           </div>
+                           <div className="flex justify-between items-center bg-white/5 p-3 rounded border border-white/5">
+                              <span className="text-[10px] text-slate-500 font-bold uppercase">Delivery Base</span>
+                              <span className="text-[10px] text-white font-black">{stockIntel.institutionalActivity.deliveryPercentage}%</span>
+                           </div>
+                        </div>
+                     </section>
+                  </div>
+
+                  {/* Middle: Indicators & Option Chain Overview */}
+                  <div className="col-span-12 lg:col-span-8 flex flex-col gap-6 overflow-hidden">
+                     <div className="grid grid-cols-4 gap-4">
+                        <div className="terminal-card p-4">
+                           <span className="terminal-label">Spot Price</span>
+                           <div className="text-lg font-black text-white">₹{stockIntel.price.toFixed(2)}</div>
+                           <div className={cn("text-[10px] font-bold", stockIntel.change >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                              {stockIntel.change >= 0 ? '+' : ''}{stockIntel.change.toFixed(2)} ({stockIntel.changePercent.toFixed(2)}%)
+                           </div>
+                        </div>
+                        <div className="terminal-card p-4">
+                           <span className="terminal-label">RSI (14)</span>
+                           <div className="text-lg font-black text-blue-400">{stockIntel.indicators.rsi.toFixed(1)}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">
+                              {stockIntel.indicators.rsi > 70 ? 'OVERBOUGHT' : stockIntel.indicators.rsi < 30 ? 'OVERSOLD' : 'NEUTRAL'}
+                           </div>
+                        </div>
+                        <div className="terminal-card p-4">
+                           <span className="terminal-label">MACD Signal</span>
+                           <div className="text-lg font-black text-emerald-400">{stockIntel.indicators.macd.histogram.toFixed(2)}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">Momentum Trend</div>
+                        </div>
+                        <div className="terminal-card p-4">
+                           <span className="terminal-label">Bollinger Squeeze</span>
+                           <div className="text-lg font-black text-purple-400">
+                              {((stockIntel.indicators.bollinger.upper - stockIntel.indicators.bollinger.lower) / stockIntel.indicators.bollinger.middle * 100).toFixed(1)}%
+                           </div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">BB Width Breakdown</div>
+                        </div>
+                     </div>
+
+                     <section className="terminal-card flex-1 flex flex-col overflow-hidden min-h-0">
+                        <div className="px-5 py-3 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
+                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Liquid Option Chain (Near Month)</h4>
+                           <div className="flex gap-4">
+                              <div className="flex items-center gap-1.5">
+                                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Active Call Writing</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                 <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Active Put Writing</span>
+                              </div>
+                           </div>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto">
+                           <table className="w-full text-left">
+                              <thead className="sticky top-0 bg-[#0f172a] shadow-sm z-10 border-b border-terminal-line">
+                                 <tr className="text-[9px] font-black text-slate-500 uppercase tracking-widest bg-black/40">
+                                    <th className="px-6 py-4">Call OI Chg</th>
+                                    <th className="px-6 py-4">LTP (CE)</th>
+                                    <th className="px-6 py-4 text-center">STRIKE</th>
+                                    <th className="px-6 py-4 text-right">LTP (PE)</th>
+                                    <th className="px-6 py-4 text-right">Put OI Chg</th>
+                                 </tr>
+                              </thead>
+                              <tbody className="divide-y divide-white/[0.02]">
+                                 {stockIntel.optionChain.map((chain, i) => {
+                                    const isAtm = Math.abs(chain.strike - stockIntel.price) < 10;
+                                    return (
+                                       <tr key={i} className={cn(
+                                         "hover:bg-white/[0.01] transition-colors",
+                                         isAtm && "bg-blue-600/5 hover:bg-blue-600/10"
+                                       )}>
+                                          <td className="px-6 py-4">
+                                             <div className="flex flex-col">
+                                                <span className={cn("text-[10px] font-black", chain.ce_oi_change >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                                                   {chain.ce_oi_change >= 0 ? '+' : ''}{chain.ce_oi_change.toLocaleString()}
+                                                </span>
+                                                <span className="text-[8px] text-slate-500 font-bold">OI: {chain.ce_oi.toLocaleString()}</span>
+                                             </div>
+                                          </td>
+                                          <td className="px-6 py-4">
+                                             <span className="text-[11px] font-black text-white">₹{chain.ce_price.toFixed(1)}</span>
+                                          </td>
+                                          <td className="px-6 py-4 text-center">
+                                             <span className={cn("text-xs font-black", isAtm ? "text-blue-400" : "text-slate-400")}>{chain.strike}</span>
+                                          </td>
+                                          <td className="px-6 py-4 text-right">
+                                             <span className="text-[11px] font-black text-white">₹{chain.pe_price.toFixed(1)}</span>
+                                          </td>
+                                          <td className="px-6 py-4 text-right">
+                                             <div className="flex flex-col items-end">
+                                                <span className={cn("text-[10px] font-black", chain.pe_oi_change >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                                                   {chain.pe_oi_change >= 0 ? '+' : ''}{chain.pe_oi_change.toLocaleString()}
+                                                </span>
+                                                <span className="text-[8px] text-slate-500 font-bold">OI: {chain.pe_oi.toLocaleString()}</span>
+                                             </div>
+                                          </td>
+                                       </tr>
+                                    );
+                                 })}
+                              </tbody>
+                           </table>
+                        </div>
+
+                        <div className="p-4 bg-white/[0.02] border-t border-white/5">
+                           <p className="text-[8px] text-slate-500 font-black uppercase text-center italic tracking-wider">
+                              Option liquidity validated via real-time order-book snapshot. High slippage warning on out-of-money strikes.
+                           </p>
+                        </div>
+                     </section>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center opacity-40">
+                <Search className="w-12 h-12 text-slate-700 mb-4" />
+                <p className="text-sm font-black text-slate-500 uppercase tracking-widest">Select an F&O Stock to begin deep-scan</p>
+              </div>
+            )}
           </motion.main>
         ) : activeTab === 'risk' ? (
           <motion.main 

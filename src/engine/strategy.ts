@@ -4,7 +4,7 @@
  */
 
 import { marketEngine } from './market.ts';
-import type { OptionChainData } from './market.ts';
+import { OptionChainData } from './types';
 
 export type StrategyMode = 'INST_SPREAD' | 'MOMENTUM_SNIPER';
 export type StrategyType = 
