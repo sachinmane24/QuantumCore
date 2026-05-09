@@ -37,13 +37,15 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const safeProcessEnv = typeof process !== 'undefined' ? process.env : {};
+
+const GEMINI_KEY = safeProcessEnv.GEMINI_API_KEY;
 const isValidKey = GEMINI_KEY && GEMINI_KEY !== 'MY_GEMINI_API_KEY' && GEMINI_KEY.length > 10;
 
 export const config: Config = {
-  KITE_API_KEY: process.env.KITE_API_KEY,
-  KITE_API_SECRET: process.env.KITE_API_SECRET,
-  KITE_ACCESS_TOKEN: process.env.KITE_ACCESS_TOKEN,
+  KITE_API_KEY: safeProcessEnv.KITE_API_KEY,
+  KITE_API_SECRET: safeProcessEnv.KITE_API_SECRET,
+  KITE_ACCESS_TOKEN: safeProcessEnv.KITE_ACCESS_TOKEN,
   GEMINI_API_KEY: isValidKey ? GEMINI_KEY : undefined,
   DATA_SOURCE: 'MOCK',
   EXECUTION_MODE: 'PAPER',

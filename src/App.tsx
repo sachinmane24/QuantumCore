@@ -18,154 +18,13 @@ import {
   LineChart, Line, Legend
 } from 'recharts';
 import { cn } from './lib/utils';
-import { config } from './engine/config.ts';
 import { getTradePrediction, PredictionResult } from './services/geminiService';
+import { 
+  MarketData, StrategyData, ExecutionState, MarketInfo, 
+  HistoryPoint, TradeLogEntry 
+} from './engine/types';
 
-// --- Types ---
-interface MarketData {
-  spot: number;
-  tick: any;
-  vix: number;
-  vixDelta?: number;
-  pcr: number;
-  gapPercent: number;
-  orb: { high: number; low: number };
-  vwap: number;
-  todayOpen: number;
-  yesterdayClose: number;
-  maxPain: number;
-  maxOi?: { ce: { strike: number; oi: number }; pe: { strike: number; oi: number } };
-  chain: Array<{
-    strike: number;
-    ce_oi: number;
-    ce_oi_change: number;
-    pe_oi: number;
-    pe_oi_change: number;
-    ce_price: number;
-    pe_price: number;
-    ce_volume?: number;
-    pe_volume?: number;
-    ce_iv?: number;
-    pe_iv?: number;
-    iv?: number;
-    delta?: number;
-    gamma?: number;
-    theta?: number;
-  }>;
-  indicators?: {
-    rsi: number | null;
-    macd: {
-      macd: number | null;
-      signal: number | null;
-      histogram: number | null;
-    };
-    bollinger: {
-      upper: number | null;
-      lower: number | null;
-      middle: number | null;
-    };
-  };
-}
-
-interface StrategyData {
-  score: {
-    total: number;
-    trend: number;
-    oiBias: number;
-    gamma: number;
-    trap: number;
-    timeFilter: number;
-    bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-    mode: string;
-    strategyType: string;
-    recommendation: string;
-  };
-  aiProb: number;
-}
-
-interface ExecutionState {
-  positions: any[];
-  pnl: number;
-  rollsToday: number;
-  netDelta: number;
-  netGamma: number;
-  hedgeLogs: string[];
-  risk: {
-    tradesToday: number;
-    dailyPnL: number;
-    consecutiveLosses: number;
-    maxDrawdownToday: number;
-    peakPnLToday: number;
-    portfolioHeat: number;
-    riskScore: number;
-    isKillSwitchActive: boolean;
-    killReason: string | null;
-    limits: {
-      dailyLoss: number;
-      maxTrades: number;
-      consectuiveLimit: number;
-      heatLimit: number;
-    };
-  };
-  dataSource: 'MOCK' | 'LIVE';
-  executionMode: 'PAPER' | 'LIVE';
-  autoMode: boolean;
-}
-
-interface MarketInfo {
-  expiry: {
-    weekly: string;
-    monthly: string;
-    daysToExpiry: number;
-  };
-  holiday: {
-    next: string;
-    isUpcoming: boolean;
-  };
-  isMarketClosed?: boolean;
-}
-
-interface HistoryPoint {
-  time: string;
-  pnl: number;
-  score: number;
-  vix: number;
-  spot: number;
-  rsi: number | null;
-  macd: number | null;
-  macdSignal: number | null;
-  macdHist: number | null;
-  bbUpper: number | null;
-  bbLower: number | null;
-  bbMiddle: number | null;
-}
-
-interface TradeLogEntry {
-  timestamp: string;
-  score: number;
-  gamma: number;
-  oi_bias: number;
-  trap: boolean;
-  pnl: number;
-  win: boolean;
-  bias?: 'BULLISH' | 'BEARISH';
-  vix?: number;
-  phase?: string;
-  buyPrice?: number;
-  sellPrice?: number;
-  totalInvestment?: number;
-  duration?: number;
-  strike?: number;
-  exitReason?: string;
-  intelligence?: {
-    atr: number;
-    vixFactor: number;
-    rr: number;
-    slPrice: number;
-    targetPrice: number;
-    pop?: number;
-  };
-}
+// --- Components ---
 
 const RiskInput = ({ label, value, onChange, type = "number" }: { label: string, value: any, onChange: (val: any) => void, type?: string }) => (
   <div className="flex flex-col gap-1.5">
@@ -183,7 +42,7 @@ export default function App() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [strategy, setStrategy] = useState<StrategyData | null>(null);
   const [execution, setExecution] = useState<ExecutionState | null>(null);
-  const [config, setConfig] = useState<any>(null);
+  const [appConfig, setAppConfig] = useState<any>(null);
   const [tradeLogs, setTradeLogs] = useState<TradeLogEntry[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -215,7 +74,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        setConfig(data.config);
+        setAppConfig(data.config);
       }
     } catch (e) {
       console.error("Failed to update config:", e);
@@ -393,8 +252,8 @@ export default function App() {
         if (marketInfoData) setMarketInfo(marketInfoData);
 
         // Fetch config once
-        if (!config) {
-          fetch('/api/config').then(r => r.json()).then(setConfig);
+        if (!appConfig) {
+          fetch('/api/config').then(r => r.json()).then(setAppConfig);
         }
 
         if (marketData && strategyData && executionData) {
@@ -1711,7 +1570,7 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-3">
                        <div className="bg-white/5 p-2 rounded border border-white/5">
                           <span className="text-[8px] text-slate-500 font-black uppercase">Edge Window</span>
-                          <div className="text-[10px] text-blue-400 font-bold">{config?.START_TIME || '09:15'} - {config?.END_TIME || '15:20'} IST</div>
+                          <div className="text-[10px] text-blue-400 font-bold">{appConfig?.START_TIME || '09:15'} - {appConfig?.END_TIME || '15:20'} IST</div>
                        </div>
                        <div className="bg-white/5 p-2 rounded border border-white/5">
                           <span className="text-[8px] text-slate-500 font-black uppercase">Volatility Edge</span>
@@ -1926,24 +1785,24 @@ export default function App() {
                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Dynamic Risk Configuration</h3>
                 </div>
                 
-                {config && (
+                {appConfig && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="space-y-4">
                        <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Capital & Allocation</h4>
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Capital Base (₹)" 
-                            value={config.CAPITAL_BASE} 
+                            value={appConfig.CAPITAL_BASE} 
                             onChange={(val) => updateConfigAtServer({ CAPITAL_BASE: Number(val) })} 
                           />
                           <RiskInput 
                             label="Max Portfolio Heat (%)" 
-                            value={config.MAX_PORTFOLIO_HEAT} 
+                            value={appConfig.MAX_PORTFOLIO_HEAT} 
                             onChange={(val) => updateConfigAtServer({ MAX_PORTFOLIO_HEAT: Number(val) })} 
                           />
                           <RiskInput 
                             label="Max Risk Per Trade (%)" 
-                            value={config.MAX_RISK_PER_TRADE_PCT} 
+                            value={appConfig.MAX_RISK_PER_TRADE_PCT} 
                             onChange={(val) => updateConfigAtServer({ MAX_RISK_PER_TRADE_PCT: Number(val) })} 
                           />
                        </div>
@@ -1954,17 +1813,17 @@ export default function App() {
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Daily Loss Limit (₹)" 
-                            value={config.DAILY_LOSS_LIMIT} 
+                            value={appConfig.DAILY_LOSS_LIMIT} 
                             onChange={(val) => updateConfigAtServer({ DAILY_LOSS_LIMIT: Number(val) })} 
                           />
                           <RiskInput 
                             label="Profit Lock Threshold (₹)" 
-                            value={config.DAILY_PROFIT_LOCK} 
+                            value={appConfig.DAILY_PROFIT_LOCK} 
                             onChange={(val) => updateConfigAtServer({ DAILY_PROFIT_LOCK: Number(val) })} 
                           />
                           <RiskInput 
                             label="Consecutive Loss Limit" 
-                            value={config.CONSECUTIVE_LOSS_LIMIT} 
+                            value={appConfig.CONSECUTIVE_LOSS_LIMIT} 
                             onChange={(val) => updateConfigAtServer({ CONSECUTIVE_LOSS_LIMIT: Number(val) })} 
                           />
                        </div>
@@ -1975,18 +1834,18 @@ export default function App() {
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Max Trades Per Day" 
-                            value={config.MAX_TRADES_PER_DAY} 
+                            value={appConfig.MAX_TRADES_PER_DAY} 
                             onChange={(val) => updateConfigAtServer({ MAX_TRADES_PER_DAY: Number(val) })} 
                           />
                           <RiskInput 
                             label="Start Time (Market)" 
-                            value={config.START_TIME} 
+                            value={appConfig.START_TIME} 
                             type="text"
                             onChange={(val) => updateConfigAtServer({ START_TIME: val })} 
                           />
                           <RiskInput 
                             label="End Time (Manual Square-off)" 
-                            value={config.END_TIME} 
+                            value={appConfig.END_TIME} 
                             type="text"
                             onChange={(val) => updateConfigAtServer({ END_TIME: val })} 
                           />
@@ -2014,25 +1873,25 @@ export default function App() {
                       <tbody className="text-[10px] terminal-value">
                         <tr className="border-b border-white/[0.02]">
                           <td className="px-4 py-3 text-slate-400 uppercase">Capital Base</td>
-                          <td className="px-4 py-3 text-white">₹{config?.CAPITAL_BASE?.toLocaleString() || '0'}</td>
+                          <td className="px-4 py-3 text-white">₹{appConfig?.CAPITAL_BASE?.toLocaleString() || '0'}</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">PORTFOLIO</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>
                         <tr className="border-b border-white/[0.02]">
                           <td className="px-4 py-3 text-slate-400 uppercase">Daily Loss Limit</td>
-                          <td className="px-4 py-3 text-rose-400">₹{config?.DAILY_LOSS_LIMIT?.toLocaleString() || '0'}</td>
+                          <td className="px-4 py-3 text-rose-400">₹{appConfig?.DAILY_LOSS_LIMIT?.toLocaleString() || '0'}</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">SESSION</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>
                         <tr className="border-b border-white/[0.02]">
                           <td className="px-4 py-3 text-slate-400 uppercase">Max Risk Per Trade</td>
-                          <td className="px-4 py-3 text-white">{config?.MAX_RISK_PER_TRADE_PCT}%</td>
+                          <td className="px-4 py-3 text-white">{appConfig?.MAX_RISK_PER_TRADE_PCT}%</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">EXECUTION</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>
                         <tr>
                           <td className="px-4 py-3 text-slate-400 uppercase">Max Trades / Day</td>
-                          <td className="px-4 py-3 text-white">{config?.MAX_TRADES_PER_DAY}</td>
+                          <td className="px-4 py-3 text-white">{appConfig?.MAX_TRADES_PER_DAY}</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">OPERATIONAL</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>

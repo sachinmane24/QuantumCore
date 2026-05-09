@@ -722,6 +722,17 @@ async function startServer() {
     res.json({ status: "success" });
   });
 
+  apiRouter.post("/predict", async (req, res) => {
+    const { marketData, strategyData, historicalTrades } = req.body;
+    try {
+      const result = await aiEngine.getTradePrediction(marketData, strategyData, historicalTrades);
+      res.json(result);
+    } catch (e) {
+      console.error("[SERVER-AI] Prediction failed:", e);
+      res.status(500).json({ error: "AI Prediction failed" });
+    }
+  });
+
   apiRouter.post("/exit", async (req, res) => {
     await executionEngine.exitAll("User Manual Exit");
     res.json({ status: "success" });

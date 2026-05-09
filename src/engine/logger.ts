@@ -5,55 +5,9 @@
 
 import { adminDb as db } from './firebase-server';
 import { FieldValue } from 'firebase-admin/firestore';
+import { TradeLogEntry } from './types';
 import fs from 'fs-extra';
 import path from 'path';
-
-export interface TradeLogEntry {
-  id?: string;
-  timestamp: string;
-  score: number;
-  gamma: number;
-  oi_bias: number;
-  trap: boolean;
-  pnl: number;
-  win: boolean;
-  bias?: 'BULLISH' | 'BEARISH';
-  mode?: string;
-  vix?: number;
-  spot?: number;
-  phase?: string;
-  isExpiryDay?: boolean;
-  isMonthlyExpiry?: boolean;
-  entryNetDelta?: number;
-  entryNetGamma?: number;
-  indicators?: {
-    rsi: number | null;
-    macd: number | null;
-    macdSignal: number | null;
-    macdHist: number | null;
-    bbUpper: number | null;
-    bbLower: number | null;
-    bbMiddle: number | null;
-  };
-  duration?: number; // Holding time in seconds
-  entryTime?: string;
-  buyPrice?: number;
-  sellPrice?: number;
-  totalInvestment?: number;
-  strike?: number;
-  exitReason?: string;
-  intelligence?: {
-    atr: number;
-    vixFactor: number;
-    rr: number;
-    slPrice: number;
-    targetPrice: number;
-    slRupees?: number;
-    targetRupees?: number;
-    pop?: number;
-  };
-  serverTimestamp?: any;
-}
 
 const tradesCollection = db.collection('trades');
 
