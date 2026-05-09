@@ -7,6 +7,19 @@ import { marketEngine } from './market.ts';
 import type { OptionChainData } from './market.ts';
 
 export type StrategyMode = 'INST_SPREAD' | 'MOMENTUM_SNIPER';
+export type StrategyType = 
+  | 'NAKED_BUY' 
+  | 'IRON_CONDOR' 
+  | 'IRON_FLY' 
+  | 'BUTTERFLY' 
+  | 'RATIO_SPREAD' 
+  | 'BULL_CALL_SPREAD' 
+  | 'BEAR_PUT_SPREAD' 
+  | 'BULL_PUT_SPREAD' 
+  | 'BEAR_CALL_SPREAD' 
+  | 'STRADDLE' 
+  | 'STRANGLE' 
+  | 'CALENDAR';
 
 export interface StrategyScore {
   total: number;
@@ -17,6 +30,7 @@ export interface StrategyScore {
   timeFilter: number;
   bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   mode: StrategyMode;
+  strategyType: StrategyType;
   recommendation: string;
 }
 
@@ -96,13 +110,13 @@ class StrategyEngine {
     const indicators = marketEngine.getTechnicalIndicators();
     let techIndicatorScore = 0;
     
-    // RSI Sentiment (Using raw OI bias as early directional proxy)
+    // RSI Sentiment
     if (indicators.rsi > 70) {
-      if (oiChangeBias > 0) techIndicatorScore -= 10; // Cautious on overbought long
+      if (oiChangeBias > 0) techIndicatorScore -= 10; 
     } else if (indicators.rsi < 30) {
-      if (oiChangeBias < 0) techIndicatorScore -= 10; // Cautious on oversold short
+      if (oiChangeBias < 0) techIndicatorScore -= 10; 
     } else if (indicators.rsi > 50 && oiChangeBias > 0) {
-      techIndicatorScore += 5; // Positive momentum
+      techIndicatorScore += 5; 
     } else if (indicators.rsi < 50 && oiChangeBias < 0) {
       techIndicatorScore += 5;
     }
@@ -112,8 +126,8 @@ class StrategyEngine {
     if (indicators.macd.histogram < 0 && oiChangeBias < 0) techIndicatorScore += 5;
 
     // Bollinger Band Constraint
-    if (spot > indicators.bollinger.upper && oiChangeBias > 0) techIndicatorScore -= 5; // Overextended
-    if (spot < indicators.bollinger.lower && oiChangeBias < 0) techIndicatorScore -= 5; // Overextended
+    if (spot > indicators.bollinger.upper && oiChangeBias > 0) techIndicatorScore -= 5; 
+    if (spot < indicators.bollinger.lower && oiChangeBias < 0) techIndicatorScore -= 5; 
 
     // 8. ORB & Trap Detection
     const { high: orbHigh, low: orbLow } = marketEngine.getORB();
@@ -121,97 +135,111 @@ class StrategyEngine {
     let orbTrigger = 0; // 0: None, 1: Bullish, -1: Bearish
     let trapDetected = false;
 
-    if (totalMin >= 570 && orbHigh > 0 && orbLow > 0) { // After 9:30 AM and ORB is valid
+    if (totalMin >= 570 && orbHigh > 0 && orbLow > 0) { 
       if (spot > orbHigh && spot > vwap && putOiChange > callOiChange) {
         orbTrigger = 1;
       } else if (spot < orbLow && spot < vwap && callOiChange > putOiChange) {
         orbTrigger = -1;
       }
 
-      // Simple Trap Detection: Price breaks high but OI shift is opposite
       if (spot > orbHigh && putOiChange < callOiChange) trapDetected = true;
       if (spot < orbLow && putOiChange > callOiChange) trapDetected = true;
     }
 
     let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore + techIndicatorScore;
     
-    // Bonus for ORB alignment
     if (orbTrigger !== 0) total += 15;
-    // Penalty for Trap
     if (trapDetected) total -= 30;
     
-    // Expiry Specific Scoring
     if (isExpiryDay) {
-      if (isGammaBlastWindow && orbTrigger !== 0) total += 20; // Gamma Blast potential
-      if (isMorningRange) total += 5; // Preference for early range establishment
-      if (isAfternoonShift && isMonthlyExpiry) total -= 10; // Inst roll-over risk penalty
+      if (isGammaBlastWindow && orbTrigger !== 0) total += 20; 
+      if (isMorningRange) total += 5; 
+      if (isAfternoonShift && isMonthlyExpiry) total -= 10; 
     }
-    // Observation period constraint
     if (isObservationPeriod) total = Math.min(total, 40);
 
     let bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
     let mode: StrategyMode = 'INST_SPREAD';
+    let strategyType: StrategyType = 'IRON_CONDOR';
     let recommendation = isObservationPeriod ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
     if (!isObservationPeriod) {
       const isStrongScore = total > 80;
       const isOrbConfirmed = orbTrigger !== 0 && total > 70;
-      
-      // Multi-state detection
-      const isSideways = Math.abs(oiChangeBias) < 150000 && Math.abs(diff) < 10;
+      const isSideways = Math.abs(oiChangeBias) < 150000 && Math.abs(diff) < 15;
       const isHighVol = vix > 18;
+      const isLowVol = vix < 12;
 
-      if ((isStrongScore || isOrbConfirmed) && !isSideways) {
-        mode = 'MOMENTUM_SNIPER';
+      // Determine Bias
+      if (isSideways && total < 60) {
+        bias = 'NEUTRAL';
+      } else {
         if (orbTrigger === 1) bias = 'BULLISH';
         else if (orbTrigger === -1) bias = 'BEARISH';
-        else bias = oiChangeBias > 100000 ? 'BULLISH' : oiChangeBias < -100000 ? 'BEARISH' : 'NEUTRAL';
-        
-        if (bias === 'NEUTRAL') {
-          mode = 'INST_SPREAD';
-          bias = oiChangeBias > 0 ? 'BULLISH' : 'BEARISH';
-        }
+        else bias = oiChangeBias > 200000 ? 'BULLISH' : oiChangeBias < -200000 ? 'BEARISH' : 'NEUTRAL';
+      }
 
-        // Strategy Recommendation Engine
-        if (bias === 'BULLISH') {
-          recommendation = isHighVol ? "BULL PUT SPREAD (CREDIT/H-IV)" : "BULL CALL SPREAD (DEBIT/L-IV)";
-          if (mode === 'MOMENTUM_SNIPER') {
-            recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED CE BUY` : `NAKED ATM CE BUY (EXPLOSIVE)`;
+      // Selection Matrix
+      if (bias === 'BULLISH') {
+        if (isStrongScore || isOrbConfirmed) {
+          if (isHighVol) {
+             strategyType = 'RATIO_SPREAD';
+             recommendation = "BULLISH RATIO SPREAD (SELL FAR OTM)";
+          } else {
+             strategyType = 'NAKED_BUY';
+             recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED CE BUY` : `NAKED ATM CE BUY (EXPLOSIVE)`;
           }
-        } else if (bias === 'BEARISH') {
-          recommendation = isHighVol ? "BEAR CALL SPREAD (CREDIT/H-IV)" : "BEAR PUT SPREAD (DEBIT/L-IV)";
-          if (mode === 'MOMENTUM_SNIPER') {
-            recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED PE BUY` : `NAKED ATM PE BUY (EXPLOSIVE)`;
-          }
-        }
-        
-        if (isExpiryDay && isAfternoonShift && mode === 'INST_SPREAD') {
-          recommendation += " [MONTHLY ROLL-OVER RISK]";
-        }
-      } else if (total > 45 || isSideways) {
-        mode = 'INST_SPREAD';
-        bias = 'NEUTRAL';
-        if (isHighVol) {
-          recommendation = "IRON FLY / STRADDLE (IV CRUSH)";
+          mode = 'MOMENTUM_SNIPER';
         } else {
-          recommendation = "IRON CONDOR (THETA DECAY)";
+          strategyType = isHighVol ? 'BULL_PUT_SPREAD' : 'BULL_CALL_SPREAD';
+          recommendation = isHighVol ? "BULL PUT SPREAD (CREDIT/H-IV)" : "BULL CALL SPREAD (DEBIT/L-IV)";
+          mode = 'INST_SPREAD';
+        }
+      } else if (bias === 'BEARISH') {
+        if (isStrongScore || isOrbConfirmed) {
+          if (isHighVol) {
+             strategyType = 'RATIO_SPREAD';
+             recommendation = "BEARISH RATIO SPREAD (SELL FAR OTM)";
+          } else {
+             strategyType = 'NAKED_BUY';
+             recommendation = isGammaBlastWindow ? `GAMMA BLAST: NAKED PE BUY` : `NAKED ATM PE BUY (EXPLOSIVE)`;
+          }
+          mode = 'MOMENTUM_SNIPER';
+        } else {
+          strategyType = isHighVol ? 'BEAR_CALL_SPREAD' : 'BEAR_PUT_SPREAD';
+          recommendation = isHighVol ? "BEAR CALL SPREAD (CREDIT/H-IV)" : "BEAR PUT SPREAD (DEBIT/L-IV)";
+          mode = 'INST_SPREAD';
         }
       } else {
+        // Neutral Strategies
         mode = 'INST_SPREAD';
-        bias = 'NEUTRAL';
-        recommendation = trapDetected ? "TRAP DETECTED - NEUTRAL" : "LOW CONVICTION - STANDBY";
+        if (isHighVol) {
+          strategyType = total > 50 ? 'STRADDLE' : 'IRON_FLY';
+          recommendation = total > 50 ? "LONG STRADDLE (VOL EXPANSION)" : "IRON FLY / STRADDLE (IV CRUSH)";
+        } else if (isLowVol) {
+          strategyType = 'CALENDAR';
+          recommendation = "CALENDAR SPREAD (TIME DECAY)";
+        } else {
+          strategyType = total < 40 ? 'IRON_CONDOR' : 'BUTTERFLY';
+          recommendation = total < 40 ? "IRON CONDOR (THETA DECAY)" : "BUTTERFLY (RANGE BOUND)";
+        }
+      }
+
+      if (isExpiryDay && isAfternoonShift && mode === 'INST_SPREAD') {
+        recommendation += " [MONTHLY ROLL-OVER RISK]";
       }
     }
 
     return {
       total: Math.round(total),
-      trend: Math.round(trendScore * trendDirection), // SIGNED
-      oiBias: Math.round(oiBiasScore * oiDirection), // SIGNED
+      trend: Math.round(trendScore * trendDirection), 
+      oiBias: Math.round(oiBiasScore * oiDirection), 
       gamma: Math.round(gammaScore),
       trap: trapDetected ? 0 : Math.round(trapScore),
       timeFilter: Math.round(timeFilterScore),
       bias,
       mode,
+      strategyType,
       recommendation
     };
   }

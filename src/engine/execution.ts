@@ -49,6 +49,7 @@ class ExecutionEngine {
 
     const spot = marketEngine.getSpotPrice();
     const score = strategyEngine.calculateScore();
+    const atmStrike = Math.round(spot / 50) * 50;
     
     // Derive Dynamic SL/Target first
     const derivation = intelligenceEngine.deriveParams(
@@ -74,7 +75,6 @@ class ExecutionEngine {
     this.currentTradeBias = bias;
     this.currentEntryTime = Date.now();
     this.currentSpotAtEntry = spot;
-    const atmStrike = Math.round(spot / 50) * 50;
     this.currentStrikeAtEntry = atmStrike;
     this.currentVixAtEntry = marketEngine.getVix();
     this.currentIndicatorsAtEntry = marketEngine.getTechnicalIndicators();
@@ -86,17 +86,11 @@ class ExecutionEngine {
     const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
       if (chain.length === 0) return Math.round(spot / 50) * 50;
-      
-      // Delta is 0 to 1 for CE, 0 to -1 for PE in standard models
-      // Our engine uses absolute delta for finding strikes easily
       let closest = chain[0];
       let minDiff = Infinity;
-      
       chain.forEach(opt => {
         let delta = opt.delta || 0.5;
-        // Normalize PE delta for comparison if negative
         if (type === 'PE' && delta < 0) delta = Math.abs(delta);
-        
         const diff = Math.abs(delta - targetDelta);
         if (diff < minDiff) {
           minDiff = diff;
@@ -109,50 +103,157 @@ class ExecutionEngine {
     const getLTP = (strike: number, type: 'CE' | 'PE') => {
       const chain = marketEngine.getOptionChain();
       const option = chain.find(o => o.strike === strike);
-      if (option) {
-        return type === 'CE' ? option.ce_price : option.pe_price;
-      }
-      // Probabilistic pricing fallback if strike not in main chain view
+      if (option) return type === 'CE' ? option.ce_price : option.pe_price;
       const dist = Math.abs(strike - spot);
       return Math.max(5, 100 - (dist * 0.5));
     };
 
-    if (score.mode === 'MOMENTUM_SNIPER') {
-      // Momentum Sniper: Naked Buying
-      // On expiry day, we MUST avoid OTM. Delta should be at least 0.55-0.65
-      const expiryStatus = marketEngine.getExpiryStatus();
-      const targetDelta = expiryStatus.isExpiryDay ? 0.65 : 0.55;
-      
-      const targetStrike = getStrikeByDelta(targetDelta, bias === 'BULLISH' ? 'CE' : 'PE');
-      const entryPrice = getLTP(targetStrike, bias === 'BULLISH' ? 'CE' : 'PE');
-      this.activePositions = [
-        { strike: targetStrike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice, qty: config.LOT_SIZE, side: 'BUY' }
-      ];
-      console.log(`[EXECUTION] AI STRIKE SELECTION (Delta ${targetDelta}): Naked ${bias} ${targetStrike} @ ${entryPrice.toFixed(2)}.`);
-    } else {
-      // Institutional Logic: Credit Spreads (Sell ~0.25 Delta, Buy ~0.10 Delta for hedge)
-      if (bias === 'BULLISH') {
+    const newPositions: Position[] = [];
+
+    switch (score.strategyType) {
+      case 'NAKED_BUY': {
+        const targetDelta = expiryStatus.isExpiryDay ? 0.65 : 0.55;
+        const strike = getStrikeByDelta(targetDelta, bias === 'BULLISH' ? 'CE' : 'PE');
+        newPositions.push({ strike, type: bias === 'BULLISH' ? 'CE' : 'PE', entryPrice: getLTP(strike, bias === 'BULLISH' ? 'CE' : 'PE'), qty: config.LOT_SIZE, side: 'BUY' });
+        break;
+      }
+
+      case 'BULL_CALL_SPREAD': {
+        const buyStrike = atmStrike;
+        const sellStrike = atmStrike + 150;
+        newPositions.push(
+          { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' }
+        );
+        break;
+      }
+
+      case 'BEAR_PUT_SPREAD': {
+        const buyStrike = atmStrike;
+        const sellStrike = atmStrike - 150;
+        newPositions.push(
+          { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' }
+        );
+        break;
+      }
+
+      case 'BULL_PUT_SPREAD': {
         const sellStrike = getStrikeByDelta(0.25, 'PE');
-        const sellPrice = getLTP(sellStrike, 'PE');
-        const buyStrike = getStrikeByDelta(0.10, 'PE');
-        const buyPrice = getLTP(buyStrike, 'PE');
-        this.activePositions = [
-          { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
-          { strike: buyStrike, type: 'PE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
-        ];
-        console.log(`[EXECUTION] AI STRIKE SELECTION (Deltas 0.25/0.10): BULLISH credit spread S:${sellStrike}/B:${buyStrike}.`);
-      } else {
+        const buyStrike = sellStrike - 100;
+        newPositions.push(
+          { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'BEAR_CALL_SPREAD': {
         const sellStrike = getStrikeByDelta(0.25, 'CE');
-        const sellPrice = getLTP(sellStrike, 'CE');
-        const buyStrike = getStrikeByDelta(0.10, 'CE');
-        const buyPrice = getLTP(buyStrike, 'CE');
-        this.activePositions = [
-          { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' },
-          { strike: buyStrike, type: 'CE', entryPrice: buyPrice, qty: config.LOT_SIZE, side: 'BUY' }
-        ];
-        console.log(`[EXECUTION] AI STRIKE SELECTION (Deltas 0.25/0.10): BEARISH credit spread S:${sellStrike}/B:${buyStrike}.`);
+        const buyStrike = sellStrike + 100;
+        newPositions.push(
+          { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'IRON_CONDOR': {
+        const sellPE = getStrikeByDelta(0.15, 'PE');
+        const buyPE = sellPE - 100;
+        const sellCE = getStrikeByDelta(0.15, 'CE');
+        const buyCE = sellCE + 100;
+        newPositions.push(
+          { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyPE, type: 'PE', entryPrice: getLTP(buyPE, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: sellCE, type: 'CE', entryPrice: getLTP(sellCE, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyCE, type: 'CE', entryPrice: getLTP(buyCE, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'IRON_FLY': {
+        const buyPE = atmStrike - 250;
+        const buyCE = atmStrike + 250;
+        newPositions.push(
+          { strike: atmStrike, type: 'PE', entryPrice: getLTP(atmStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: atmStrike, type: 'CE', entryPrice: getLTP(atmStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
+          { strike: buyPE, type: 'PE', entryPrice: getLTP(buyPE, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: buyCE, type: 'CE', entryPrice: getLTP(buyCE, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'STRADDLE': {
+        newPositions.push(
+          { strike: atmStrike, type: 'CE', entryPrice: getLTP(atmStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: atmStrike, type: 'PE', entryPrice: getLTP(atmStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'RATIO_SPREAD': {
+        if (bias === 'BULLISH') {
+          const buyStrike = atmStrike;
+          const sellStrike = atmStrike + 200;
+          newPositions.push(
+            { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
+            { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE * 2, side: 'SELL' }
+          );
+        } else {
+          const buyStrike = atmStrike;
+          const sellStrike = atmStrike - 200;
+          newPositions.push(
+            { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
+            { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE * 2, side: 'SELL' }
+          );
+        }
+        break;
+      }
+
+      case 'BUTTERFLY': {
+        const center = atmStrike;
+        const wingSize = 100;
+        const type = bias === 'BULLISH' ? 'CE' : 'PE';
+        newPositions.push(
+          { strike: center - wingSize, type, entryPrice: getLTP(center - wingSize, type), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: center, type, entryPrice: getLTP(center, type), qty: config.LOT_SIZE * 2, side: 'SELL' },
+          { strike: center + wingSize, type, entryPrice: getLTP(center + wingSize, type), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'STRANGLE': {
+        const buyPE = getStrikeByDelta(0.20, 'PE');
+        const buyCE = getStrikeByDelta(0.20, 'CE');
+        newPositions.push(
+          { strike: buyPE, type: 'PE', entryPrice: getLTP(buyPE, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
+          { strike: buyCE, type: 'CE', entryPrice: getLTP(buyCE, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
+        );
+        break;
+      }
+
+      case 'CALENDAR': {
+        // Simulated as a neutral spread with staggered strikes to mimic theta behavior
+        const buyStrike = atmStrike;
+        const sellStrike = atmStrike; 
+        newPositions.push(
+          { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE') * 1.5, qty: config.LOT_SIZE, side: 'BUY' }, // Premium proxy for far-month
+          { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' }    // Near-month
+        );
+        break;
+      }
+
+      default: {
+         // Fallback to simple naked buy
+         const strike = atmStrike;
+         newPositions.push({ strike, type: bias === 'BEARISH' ? 'PE' : 'CE', entryPrice: getLTP(strike, bias === 'BEARISH' ? 'PE' : 'CE'), qty: config.LOT_SIZE, side: 'BUY' });
+         break;
       }
     }
+
+    this.activePositions = newPositions;
+    console.log(`[EXECUTION] AI AUTO-DECIDE: Structure [${score.strategyType}] selected based on VIX ${this.currentVixAtEntry.toFixed(2)} and Score ${score.total}.`);
 
     this.calculatePortfolioGreeks();
     this.currentEntryNetDelta = this.netDelta;

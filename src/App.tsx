@@ -77,6 +77,7 @@ interface StrategyData {
     timeFilter: number;
     bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
     mode: string;
+    strategyType: string;
     recommendation: string;
   };
   aiProb: number;
@@ -835,7 +836,7 @@ export default function App() {
           <div className="flex gap-10">
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Underlying Spot</span>
-              <span className="text-white">₹{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 1 })}</span>
+              <span className="text-white">₹{market?.spot?.toLocaleString(undefined, { minimumFractionDigits: 1 })}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Institutional VWAP</span>
@@ -876,17 +877,17 @@ export default function App() {
                 {execution?.dataSource === 'LIVE' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               </span>
               <div className="terminal-value text-lg">
-                <span className="text-slate-200">{market?.spot.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="text-slate-200">{market?.spot?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 <span className={cn("text-[10px] font-bold ml-2", (market?.tick?.change || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                  {(market?.tick?.change || 0) >= 0 ? '+' : ''}{(market?.spot - (market?.tick?.ohlc?.close || market?.spot)).toFixed(2)}
-                  <span className="ml-1 opacity-60">({market?.tick?.change.toFixed(2)}%)</span>
+                  {(market?.tick?.change || 0) >= 0 ? '+' : ''}{((market?.spot || 0) - (market?.tick?.ohlc?.close || market?.spot || 0)).toFixed(2)}
+                  <span className="ml-1 opacity-60">({market?.tick?.change?.toFixed(2)}%)</span>
                 </span>
               </div>
             </div>
             <div className="flex flex-col text-right">
               <span className="terminal-label !mb-0.5">India VIX</span>
               <div className="terminal-value text-lg flex items-center gap-2">
-                <span className="text-slate-200">{market?.vix.toFixed(2) || '12.42'}</span>
+                <span className="text-slate-200">{market?.vix?.toFixed(2) || '12.42'}</span>
                 {market?.vixDelta !== undefined && (
                   <span className={cn(
                     "text-[10px] font-black",
@@ -1908,7 +1909,7 @@ export default function App() {
                              <Zap className="w-4 h-4 text-blue-500 shrink-0" />
                              <div>
                                 <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">ADAPTIVE POSITION SIZING</div>
-                                <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix.toFixed(1)})</div>
+                                <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix?.toFixed(1)})</div>
                              </div>
                           </div>
                        </div>
@@ -2064,9 +2065,9 @@ export default function App() {
                      <span className="terminal-label !mb-0 text-[8px]">Net OI Sentiment</span>
                      <div className={cn(
                        "terminal-value text-lg font-black",
-                       market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                       (market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
                      )}>
-                       {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? 'BULLISH' : 'BEARISH'}
+                       {(market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? 'BULLISH' : 'BEARISH'}
                      </div>
                   </div>
                </div>
@@ -2080,9 +2081,9 @@ export default function App() {
                       <div className="flex items-baseline gap-1.5">
                          <span className={cn(
                             "text-base font-black",
-                            (market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
+                            ((market?.chain || []).reduce((acc, curr) => acc + curr.pe_oi, 0) / ((market?.chain || []).reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
                          )}>
-                            {(market?.chain.reduce((acc, curr) => acc + curr.pe_oi, 0) / (market?.chain.reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
+                            {((market?.chain || []).reduce((acc, curr) => acc + curr.pe_oi, 0) / ((market?.chain || []).reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
                          </span>
                       </div>
                    </div>
@@ -2091,9 +2092,9 @@ export default function App() {
                       <div className="flex items-baseline gap-1.5">
                          <span className={cn(
                             "text-base font-black",
-                            market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
+                            (market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
                          )}>
-                            {market?.chain.reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
+                            {(market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
                          </span>
                       </div>
                    </div>
@@ -2139,7 +2140,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/[0.02]">
-                      {market?.chain.map((c) => {
+                      {(market?.chain || []).map((c) => {
                         const isAtm = c.strike === Math.round((market?.spot || 0) / 50) * 50;
                         const isResistance = c.strike === market?.maxOi?.ce?.strike;
                         const isSupport = c.strike === market?.maxOi?.pe?.strike;
