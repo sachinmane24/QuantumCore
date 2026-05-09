@@ -156,6 +156,7 @@ interface TradeLogEntry {
   totalInvestment?: number;
   duration?: number;
   strike?: number;
+  exitReason?: string;
   intelligence?: {
     atr: number;
     vixFactor: number;
@@ -422,6 +423,7 @@ export default function App() {
         setLoading(false);
       } catch (err) {
         console.error("Fetch Data Critical Error:", err);
+        setLoading(false);
       }
     };
 
@@ -891,10 +893,10 @@ export default function App() {
                 {market?.vixDelta !== undefined && (
                   <span className={cn(
                     "text-[10px] font-black",
-                    market.vixDelta >= 0 ? "text-rose-400" : "text-emerald-400"
+                    market?.vixDelta !== undefined && (market?.vixDelta ?? 0) >= 0 ? "text-rose-400" : "text-emerald-400"
                   )}>
-                    {market.vixDelta >= 0 ? <ArrowUpRight className="w-2.5 h-2.5 inline" /> : <ArrowDownRight className="w-2.5 h-2.5 inline" />}
-                    {Math.abs(market.vixDelta).toFixed(1)}%
+                    {(market?.vixDelta ?? 0) >= 0 ? <ArrowUpRight className="w-2.5 h-2.5 inline" /> : <ArrowDownRight className="w-2.5 h-2.5 inline" />}
+                    {Math.abs(market?.vixDelta ?? 0).toFixed(1)}%
                   </span>
                 )}
               </div>
@@ -1060,7 +1062,7 @@ export default function App() {
                     <div className="text-right">
                       <span className="terminal-label !mb-0 text-[8px]">Confidence</span>
                       <div className="text-2xl font-black tracking-tighter text-blue-400">
-                        {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
+                        {Math.min(95, Math.max(30, (strategy?.score?.total || 50) * 0.8 + 15))?.toFixed(1)}%
                       </div>
                     </div>
                   </div>
@@ -1089,7 +1091,7 @@ export default function App() {
                           color: (strategy?.score.gamma || 0) > 10 ? 'text-blue-400' : (strategy?.score.gamma || 0) < 5 ? 'text-rose-400' : 'text-slate-500', 
                           max: 15, 
                           current: strategy?.score.gamma,
-                          desc: `VIX at ${market?.vix?.toFixed(1) || '--'}. ${ (strategy?.score.gamma || 0) > 10 ? 'Low vol supports theta capture.' : 'High vol increases gamma hedging risk.' }`
+                          desc: `VIX at ${market?.vix?.toFixed(1) || '--'}. ${ (strategy?.score?.gamma || 0) > 10 ? 'Low vol supports theta capture.' : 'High vol increases gamma hedging risk.' }`
                         },
                         { 
                           label: 'Time Filter (θ)', 
@@ -1382,14 +1384,14 @@ export default function App() {
                           "text-lg font-black tracking-tighter",
                           (execution?.netDelta || 0) > 0.1 ? "text-emerald-400" : (execution?.netDelta || 0) < -0.1 ? "text-rose-400" : "text-white"
                         )}>
-                          {(execution?.netDelta || 0) > 0 ? '+' : ''}{(execution?.netDelta || 0).toFixed(3)}
+                          {(execution?.netDelta || 0) > 0 ? '+' : ''}{(execution?.netDelta || 0)?.toFixed(3)}
                         </span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Net Portfolio Gamma</span>
                      <div className="flex items-baseline gap-2">
-                        <span className="text-lg font-black text-white tracking-tighter">{(execution?.netGamma || 0).toFixed(4)}</span>
+                        <span className="text-lg font-black text-white tracking-tighter">{(execution?.netGamma || 0)?.toFixed(4)}</span>
                      </div>
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2 flex flex-col justify-center">
@@ -1399,7 +1401,7 @@ export default function App() {
                           "text-lg font-black tracking-tighter",
                           Math.abs(execution?.netDelta || 0) > 0.2 ? "text-rose-400" : "text-blue-400"
                         )}>
-                          {(Math.abs(execution?.netDelta || 0) * 100).toFixed(1)}%
+                          {(Math.abs(execution?.netDelta || 0) * 100)?.toFixed(1)}%
                         </span>
                      </div>
                   </div>
@@ -1650,9 +1652,9 @@ export default function App() {
                   <div className="flex justify-between items-center text-[10px]">
                      <span className="terminal-label !mb-0">{strategy?.score.mode === 'MOMENTUM_SNIPER' ? 'Est. Premium' : 'Est. Margin'}</span>
                      <span className="terminal-value text-white">
-                        {strategy?.score.mode === 'MOMENTUM_SNIPER' 
-                          ? `₹${(Math.round((market?.chain[0]?.ce_price || 100) * 25)).toLocaleString()}`
-                          : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score.total || 50) - 55) * 0.02))).toFixed(2)}L`
+                        {strategy?.score?.mode === 'MOMENTUM_SNIPER' 
+                          ? `₹${(Math.round((market?.chain?.[0]?.ce_price || 100) * 25))?.toLocaleString() || '0'}`
+                          : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score?.total || 50) - 55) * 0.02)))?.toFixed(2)}L`
                         }
                      </span>
                   </div>
@@ -1909,7 +1911,7 @@ export default function App() {
                              <Zap className="w-4 h-4 text-blue-500 shrink-0" />
                              <div>
                                 <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">ADAPTIVE POSITION SIZING</div>
-                                <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix?.toFixed(1)})</div>
+                                <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix?.toFixed(1) || '---'})</div>
                              </div>
                           </div>
                        </div>
@@ -2012,13 +2014,13 @@ export default function App() {
                       <tbody className="text-[10px] terminal-value">
                         <tr className="border-b border-white/[0.02]">
                           <td className="px-4 py-3 text-slate-400 uppercase">Capital Base</td>
-                          <td className="px-4 py-3 text-white">₹{config?.CAPITAL_BASE?.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-white">₹{config?.CAPITAL_BASE?.toLocaleString() || '0'}</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">PORTFOLIO</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>
                         <tr className="border-b border-white/[0.02]">
                           <td className="px-4 py-3 text-slate-400 uppercase">Daily Loss Limit</td>
-                          <td className="px-4 py-3 text-rose-400">₹{config?.DAILY_LOSS_LIMIT?.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-rose-400">₹{config?.DAILY_LOSS_LIMIT?.toLocaleString() || '0'}</td>
                           <td className="px-4 py-3 text-slate-500 uppercase">SESSION</td>
                           <td className="px-4 py-3 text-right text-emerald-400">PERSISTED</td>
                         </tr>
@@ -2083,7 +2085,7 @@ export default function App() {
                             "text-base font-black",
                             ((market?.chain || []).reduce((acc, curr) => acc + curr.pe_oi, 0) / ((market?.chain || []).reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)) > 1 ? "text-emerald-400" : "text-rose-400"
                          )}>
-                            {((market?.chain || []).reduce((acc, curr) => acc + curr.pe_oi, 0) / ((market?.chain || []).reduce((acc, curr) => acc + curr.ce_oi, 0) || 1)).toFixed(2)}
+                            {((market?.chain || []).reduce((acc, curr) => acc + (curr?.pe_oi || 0), 0) / ((market?.chain || []).reduce((acc, curr) => acc + (curr?.ce_oi || 0), 0) || 1))?.toFixed(2) || '0.00'}
                          </span>
                       </div>
                    </div>
@@ -2094,7 +2096,7 @@ export default function App() {
                             "text-base font-black",
                             (market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0) > 0 ? "text-emerald-400" : "text-rose-400"
                          )}>
-                            {(market?.chain || []).reduce((acc, curr) => acc + (curr.pe_oi_change - curr.ce_oi_change), 0).toLocaleString()}
+                            {(market?.chain || []).reduce((acc, curr) => acc + ((curr?.pe_oi_change || 0) - (curr?.ce_oi_change || 0)), 0).toLocaleString() || '0'}
                          </span>
                       </div>
                    </div>
@@ -2509,6 +2511,11 @@ export default function App() {
                                        {log.phase || 'MID-SESSION'}
                                     </span>
                                     <span className="text-[9px] text-slate-500 font-bold">VIX: {log.vix?.toFixed(2) || '14.00'}</span>
+                                     {log.exitReason && (
+                                        <div className="text-[7px] text-rose-400 font-bold uppercase mt-0.5 tracking-tighter">
+                                           {log.exitReason}
+                                        </div>
+                                     )}
                                  </div>
                               </td>
                               <td className="p-5">
@@ -2687,7 +2694,7 @@ export default function App() {
           <div className="flex flex-col">
             <span className="terminal-label !mb-0">Consolidated Equity (PnL)</span>
             <div className={cn("text-2xl terminal-value tracking-tighter", (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
-              {(execution?.pnl || 0) >= 0 ? '+' : ''}₹{(execution?.pnl || 0).toLocaleString()}
+              {(execution?.pnl || 0) >= 0 ? '+' : ''}₹{(execution?.pnl || 0)?.toLocaleString() || '0'}
               <span className="text-[10px] ml-2 opacity-60">INR</span>
             </div>
           </div>

@@ -3,27 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { initializeApp } from 'firebase/app';
-import { 
-  getFirestore, 
-  doc, 
-  getDoc, 
-  setDoc,
-  collection
-} from 'firebase/firestore';
+import { adminDb as db } from './firebase-server';
 import fs from 'fs-extra';
 import path from 'path';
 
-const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-const firebaseConfig = fs.readJsonSync(configPath);
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-
 export async function savePersistentData(collectionName: string, id: string, data: any) {
   try {
-    const docRef = doc(db, collectionName, id);
-    await setDoc(docRef, {
+    const docRef = db.collection(collectionName).doc(id);
+    await docRef.set({
       ...data,
       updatedAt: new Date().toISOString()
     }, { merge: true });
@@ -35,9 +22,9 @@ export async function savePersistentData(collectionName: string, id: string, dat
 
 export async function loadPersistentData(collectionName: string, id: string) {
   try {
-    const docRef = doc(db, collectionName, id);
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
+    const docRef = db.collection(collectionName).doc(id);
+    const snap = await docRef.get();
+    if (snap.exists) {
       return snap.data();
     }
   } catch (err) {

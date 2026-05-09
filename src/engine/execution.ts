@@ -521,6 +521,7 @@ class ExecutionEngine {
           sellPrice: sellPrice,
           totalInvestment: totalInvestment,
           strike: this.currentStrikeAtEntry,
+          exitReason: reason,
           indicators: this.currentIndicatorsAtEntry ? {
             rsi: this.currentIndicatorsAtEntry.rsi,
             macd: this.currentIndicatorsAtEntry.macd.macd,
