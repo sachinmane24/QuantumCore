@@ -19,6 +19,7 @@ import {
 } from 'recharts';
 import { cn } from './lib/utils';
 import { config } from './engine/config.ts';
+import { getTradePrediction, PredictionResult } from './services/geminiService';
 
 // --- Types ---
 interface MarketData {
@@ -186,6 +187,22 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
+  const [prediction, setPrediction] = useState<PredictionResult | null>(null);
+  const [isPredicting, setIsPredicting] = useState(false);
+
+  const handlePredict = async () => {
+    if (!market || !strategy) return;
+    setIsPredicting(true);
+    try {
+      // Small delay to simulate scanning if it's too fast
+      const result = await getTradePrediction(market, strategy, tradeLogs);
+      setPrediction(result);
+    } catch (e) {
+      console.error("Prediction failed:", e);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
 
   const updateConfigAtServer = async (update: any) => {
     try {
@@ -1143,6 +1160,83 @@ export default function App() {
                     >
                       Warning: Heavy Institutional Absorption at Current Level
                     </motion.div>
+                  )}
+                </div>
+              </section>
+
+              {/* Gemini Predictive Intelligence */}
+              <section className="terminal-card bg-blue-600/[0.02] border-blue-500/10 flex flex-col">
+                <div className="p-5 border-b border-terminal-line flex justify-between items-center bg-blue-500/5">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2">
+                    <Brain className="w-3 h-3" />
+                    Gemini Predictive AI
+                  </h3>
+                  <button 
+                    onClick={handlePredict}
+                    disabled={isPredicting}
+                    className="p-1 hover:bg-blue-500/20 rounded transition-colors disabled:opacity-50"
+                  >
+                    <Zap className={cn("w-3 h-3 text-blue-500", isPredicting && "animate-pulse")} />
+                  </button>
+                </div>
+                <div className="p-5 flex-1 flex flex-col gap-4">
+                  {!prediction && !isPredicting ? (
+                    <div className="flex flex-col items-center justify-center h-24 bg-black/20 rounded-xl border border-white/5 border-dashed">
+                      <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest text-center px-4">
+                        Initial predictive scan required.
+                      </p>
+                      <button 
+                        onClick={handlePredict}
+                        className="mt-2 text-[9px] font-black text-blue-400 hover:text-blue-300 uppercase tracking-widest"
+                      >
+                        [ RUN SCAN ]
+                      </button>
+                    </div>
+                  ) : isPredicting ? (
+                    <div className="flex flex-col items-center justify-center h-24 bg-black/20 rounded-xl border border-blue-500/20">
+                      <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                        className="mb-2"
+                      >
+                        <Crosshair className="w-4 h-4 text-blue-500/40" />
+                      </motion.div>
+                      <p className="text-[8px] font-black text-blue-400 uppercase tracking-widest animate-pulse">
+                        Neural Pattern Matching...
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className={cn(
+                        "p-4 rounded-xl border flex flex-col items-center justify-center transition-all bg-black/40",
+                        prediction.prediction === 'WIN' ? "border-emerald-500/20" : prediction.prediction === 'LOSS' ? "border-rose-500/20" : "border-slate-500/20"
+                      )}>
+                        <div className={cn(
+                          "font-black tracking-[0.2em] text-sm uppercase mb-1",
+                          prediction.prediction === 'WIN' ? "text-emerald-400" : prediction.prediction === 'LOSS' ? "text-rose-500" : "text-slate-400"
+                        )}>
+                          PREDICTED: {prediction.prediction}
+                        </div>
+                        <div className="text-[9px] opacity-70 uppercase font-black text-center tracking-widest">
+                           Confidence: {prediction.confidence}%
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div>
+                          <span className="text-[7px] font-black text-slate-500 uppercase tracking-widest block mb-1">AI Contextual Multi-Reasoning</span>
+                          <p className="text-[9px] text-slate-300 leading-relaxed italic">
+                            "{prediction.reasoning}"
+                          </p>
+                        </div>
+                        <div className="bg-blue-500/5 p-2 rounded border border-blue-500/10">
+                          <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest block mb-1">Tactical Recommendation</span>
+                          <p className="text-[9px] font-bold text-white uppercase tracking-tight">
+                            {prediction.suggestedAction}
+                          </p>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               </section>
