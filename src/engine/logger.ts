@@ -5,7 +5,7 @@
 
 import { adminDb as db } from './firebase-server.ts';
 import { FieldValue } from 'firebase-admin/firestore';
-import { TradeLogEntry } from './types.ts';
+import type { TradeLogEntry } from './types.ts';
 import fs from 'fs-extra';
 import path from 'path';
 

@@ -9,7 +9,8 @@ import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
 import { riskEngine } from './risk.ts';
 
-import { intelligenceEngine, TradeParams } from './intelligence.ts';
+import { intelligenceEngine } from './intelligence.ts';
+import type { TradeParams } from './intelligence.ts';
 
 export interface Position {
   strike: number;

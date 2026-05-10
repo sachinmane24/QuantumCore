@@ -98,7 +98,7 @@ async function loadMarketStructure() {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Shared state within startServer
   let kiteInstance: any = null;
@@ -120,16 +120,17 @@ async function startServer() {
     // Request Logger with Versioning
     app.use((req, res, next) => {
       const timestamp = new Date().toISOString();
-      console.log(`[V5.3-DIAG] ${timestamp} - ${req.method} ${req.url}`);
+      console.log(`[V5.4-DIAG] ${timestamp} - ${req.method} ${req.url}`);
       next();
     });
 
-    app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4" }));
+    app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.1" }));
     app.get("/ping", (req, res) => res.send("pong"));
 
+    console.log(`[INIT] Attempting to listen on port: ${PORT}`);
     // Start listening ASAP for health checks
-    app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`[V5.4] Quantum Server listening on port ${PORT}`);
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[V5.4.2] Quantum Server listening on port ${PORT}`);
     });
 
     // Load persisted data in background (Unwaited)

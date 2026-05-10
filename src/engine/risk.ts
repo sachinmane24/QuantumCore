@@ -4,7 +4,7 @@
  */
 
 import { config } from './config.ts';
-import { Position } from './execution.ts';
+import type { Position } from './execution.ts';
 
 interface RiskStats {
   tradesToday: number;

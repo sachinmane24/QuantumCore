@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { config } from "./config.ts";
-import { TradeLogEntry } from "./types.ts";
+import type { TradeLogEntry } from "./types.ts";
 
 export interface PredictionResult {
   prediction: 'WIN' | 'LOSS' | 'NEUTRAL';
