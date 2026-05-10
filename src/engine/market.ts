@@ -175,6 +175,20 @@ class MarketEngine {
     };
   }
 
+  public getSwingLevels(window: number = 20): { high: number; low: number } {
+    if (this.priceHistory.length < window) {
+      return { 
+        high: Math.max(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])), 
+        low: Math.min(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])) 
+      };
+    }
+    const recent = this.priceHistory.slice(-window);
+    return {
+      high: Math.max(...recent),
+      low: Math.min(...recent)
+    };
+  }
+
   public syncMode() {
     console.log(`[MARKET] Syncing mode: ${config.DATA_SOURCE}`);
     if (config.DATA_SOURCE === 'MOCK') {
@@ -188,6 +202,13 @@ class MarketEngine {
         this.mockInterval = null;
         console.log(`[MARKET] Mock interval cleared`);
       }
+      // Reset mock-initialized values to allow live data to take over
+      this.yesterdayClose = 0;
+      this.todayOpen = 0;
+      this.orbHigh = 0;
+      this.orbLow = 0;
+      this.vwap = 0;
+      this.initialized = false;
     }
   }
 
@@ -226,6 +247,15 @@ class MarketEngine {
     this.vwap = this.spotPrice;
 
     this.mockInterval = setInterval(() => {
+      // Safety check: if mode was changed but interval not cleared or still running
+      if (config.DATA_SOURCE !== 'MOCK') {
+        if (this.mockInterval) {
+          clearInterval(this.mockInterval);
+          this.mockInterval = null;
+        }
+        return;
+      }
+
       // Mock spot price movement
       const change = (Math.random() - 0.5) * 5;
       this.spotPrice += change;
@@ -342,10 +372,10 @@ class MarketEngine {
     
     // Set daily structure values if they are reported by exchange
     if (niftyOhlc) {
-      if (niftyOhlc.close && (this.yesterdayClose === 0)) {
+      if (niftyOhlc.close && niftyOhlc.close > 0) {
          this.yesterdayClose = niftyOhlc.close;
       }
-      if (niftyOhlc.open && (this.todayOpen === 0)) {
+      if (niftyOhlc.open && niftyOhlc.open > 0) {
          this.todayOpen = niftyOhlc.open;
       }
     }

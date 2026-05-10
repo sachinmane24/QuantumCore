@@ -52,6 +52,12 @@ class IntelligenceEngine {
     // VIX Factor: Higher VIX = Wider SL, Lower VIX = Tighter SL
     const vixFactor = Math.max(0.8, Math.min(1.5, vix / 15));
     
+    // Stop Loss Hunting Protection: 
+    // We check the recent swing high/low and put our SL at least X points beyond it 
+    // to avoid getting hunted in a liquidity sweep.
+    const swings = marketEngine.getSwingLevels(30); 
+    const huntingBuffer = Math.max(5, atr * 0.15); // Dynamic buffer based on volatility
+    
     let slPoints = 0;
     let targetPoints = 0;
     let riskRewardRatio = 1.5;
@@ -62,7 +68,19 @@ class IntelligenceEngine {
       let expiryMultiplier = isExpiryDay ? 0.6 : 1.0;
       if (isMonthlyExpiry) expiryMultiplier = 0.75; // Monthly is slightly more stable
 
+      // Base SL
       slPoints = atr * 1.2 * vixFactor * expiryMultiplier;
+      
+      // SL Hunting Mitigation: Adjust base SL points to ensure the final price level 
+      // is outside the recent swing range + buffer
+      if (bias === 'BULLISH') {
+        const structuralSL = entrySpot - (swings.low - huntingBuffer);
+        slPoints = Math.max(slPoints, structuralSL);
+      } else {
+        const structuralSL = (swings.high + huntingBuffer) - entrySpot;
+        slPoints = Math.max(slPoints, structuralSL);
+      }
+
       riskRewardRatio = isExpiryDay ? 3.5 : 2.0; // Extremely high RR needed on expiry
       
       // Afternoon Gamma Blast (Post 1:45 PM IST = 825 mins)
@@ -80,7 +98,17 @@ class IntelligenceEngine {
       if (isMonthlyExpiry) expiryMultiplier = 1.6; // Monthly roll-over risk is higher
 
       const vwapDist = Math.abs(entrySpot - vwap);
-      slPoints = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 15);
+      const baseSL = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 15);
+      
+      // Structural SL Protection for selling
+      if (bias === 'BULLISH') {
+        const structuralSL = entrySpot - (swings.low - huntingBuffer * 1.5); // Wider buffer for selling
+        slPoints = Math.max(baseSL, structuralSL);
+      } else {
+        const structuralSL = (swings.high + huntingBuffer * 1.5) - entrySpot;
+        slPoints = Math.max(baseSL, structuralSL);
+      }
+
       riskRewardRatio = 1.2; 
       
       // Max Pain Convergence Logic (Post 1:30 PM IST = 810 mins)

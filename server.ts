@@ -65,7 +65,10 @@ async function loadRiskConfig() {
     const data = await loadPersistentData("system", "risk_config");
     if (data) {
       updateConfig(data);
-      if (accessToken) setDataMode('LIVE');
+      if (accessToken) {
+        setDataMode('LIVE');
+        marketEngine.syncMode();
+      }
       console.log("[STORAGE] Risk config loaded from Firestore.");
     }
   } catch (err) {
@@ -142,6 +145,7 @@ async function startServer() {
         if (data.token) {
           accessToken = data.token;
           setDataMode('LIVE');
+          marketEngine.syncMode();
           console.log("[INIT] Session restored from persistence. Mode set to LIVE.");
         }
         console.log("[INIT] Kite session loaded.");
@@ -150,7 +154,8 @@ async function startServer() {
           if (accessToken) {
             kiteInstance.setAccessToken(accessToken);
             // Default to LIVE mode once session is loaded
-            config.DATA_SOURCE = 'LIVE';
+            setDataMode('LIVE');
+            marketEngine.syncMode();
             console.log("[SYSTEM] Active session found. Defaulting to LIVE DATA mode.");
           }
         }
@@ -470,6 +475,7 @@ async function startServer() {
       
       // Force LIVE data mode once authenticated
       setDataMode('LIVE');
+      marketEngine.syncMode();
       console.log("[AUTH] Session generated successfully. Mode set to LIVE.");
 
       await saveKiteSession({ token: accessToken });
