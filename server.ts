@@ -132,6 +132,53 @@ async function startServer() {
     }
   }
 
+    async function refreshNfoCache() {
+      if (!kiteInstance || !accessToken) return;
+      try {
+        console.log("[SYSTEM] Refreshing Global NFO cache...");
+        nfoCache = await kiteInstance.getInstruments(["NFO"]);
+        lastNfoRefresh = Date.now();
+        
+        // Update NIFTY instruments specifically for the main loop
+        const startOfTodayIST = new Date(new Date().getTime() + (5.5 * 60 * 60 * 1000));
+        startOfTodayIST.setHours(0,0,0,0);
+        
+        const niftyAll = nfoCache.filter((ins: any) => {
+          const sym = ins.tradingsymbol || "";
+          if (!sym.startsWith("NIFTY") || sym.startsWith("NIFTYIT") || sym.startsWith("NIFTYP") || sym.startsWith("NIFTYM")) return false;
+          if (ins.segment !== 'NFO-OPT') return false;
+          return !!ins.expiry;
+        });
+
+        if (niftyAll.length > 0) {
+          const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
+            .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
+
+          allExpiries = expiries as string[];
+          const todayStr = new Date().toISOString().split('T')[0];
+          const futureExpiries = expiries.filter(e => e >= todayStr);
+          const selectedExpiry = futureExpiries[0] || expiries[0];
+          
+          niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
+          console.log(`[SYSTEM] NIFTY Cache Updated: ${niftyInstruments.length} strikes for ${selectedExpiry}`);
+        }
+      } catch (e) {
+        console.error("[SYSTEM] NFO cache refresh failed:", e);
+      }
+    }
+
+    async function getStockOptions(symbol: string) {
+      if (!kiteInstance || !accessToken) return [];
+      if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
+        await refreshNfoCache();
+      }
+      return nfoCache.filter((ins: any) => 
+        ins.name === symbol && 
+        ins.segment === 'NFO-OPT' &&
+        new Date(ins.expiry) >= new Date()
+      );
+    }
+
     // Background Trading Loop
     let isSyncing = false;
     async function marketLoop() {
@@ -154,8 +201,6 @@ async function startServer() {
           console.log("[SYSTEM] Market hours ended (4 PM IST). Disabling Auto Mode.");
           setAutoMode(false);
         }
-        // MODIFICATION: Allow LIVE mode to persist for evening/weekend analysis
-        // We no longer force revert to MOCK here.
       }
 
       // 1. Data Sync
@@ -164,46 +209,11 @@ async function startServer() {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
           
-          // Ensure we have regular instrument refreshes if empty or contains stale data
-          const nowIST = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-          const startOfTodayIST = new Date(nowIST);
-          startOfTodayIST.setHours(0,0,0,0);
-          
-          const isStale = niftyInstruments.length > 0 && new Date(niftyInstruments[0].expiry) < startOfTodayIST;
+          // Ensure we have regular instrument refreshes
+          const isStale = nfoCache.length > 0 && (Date.now() - lastNfoRefresh > 6 * 60 * 60 * 1000);
 
           if (niftyInstruments.length <= 1 || isStale) {
-            console.log(`[SYSTEM] Refreshing instruments (Count: ${niftyInstruments.length}, Stale: ${isStale})...`);
-            const allNFO = await kiteInstance.getInstruments(["NFO"]);
-            
-            // Comprehensive NIFTY filter
-            const niftyAll = allNFO.filter((ins: any) => {
-              const sym = ins.tradingsymbol || "";
-              // Exclude non-NIFTY and other indices
-              if (!sym.startsWith("NIFTY") || sym.startsWith("NIFTYIT") || sym.startsWith("NIFTYP") || sym.startsWith("NIFTYM")) return false;
-              if (ins.segment !== 'NFO-OPT') return false;
-              return !!ins.expiry;
-            });
-
-            if (niftyAll.length > 0) {
-              const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
-                .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
-
-              allExpiries = expiries as string[];
-              
-              // Filter out expiries that are clearly in the past
-              const todayStr = new Date().toISOString().split('T')[0];
-              const futureExpiries = expiries.filter(e => e >= todayStr);
-              
-              // Select the first valid future expiry, or the very first one if none are "future"
-              const selectedExpiry = futureExpiries[0] || expiries[0];
-              
-              niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
-              
-              console.log(`[SYSTEM] Found ${niftyAll.length} total NIFTY options.`);
-              console.log(`[SYSTEM] Selected Expiry: ${selectedExpiry} with ${niftyInstruments.length} strikes.`);
-            } else {
-              console.error("[SYSTEM] CRITICAL: Zero NIFTY options found in NFO segment.");
-            }
+            await refreshNfoCache();
           }
 
           let optionSymbols: string[] = [];
@@ -729,50 +739,168 @@ async function startServer() {
     }
   });
 
+  // Cache for stock metadata to avoid redundant lookups
+  let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
+  let nfoCache: any[] = [];
+  let lastNfoRefresh: number = 0;
+
+  async function getStockOptions(symbol: string) {
+    if (!kiteInstance || !accessToken) return [];
+    
+    // Refresh global NFO cache if empty or > 4h old
+    if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
+      try {
+        console.log("[SYSTEM] Refreshing Global NFO cache...");
+        nfoCache = await kiteInstance.getInstruments(["NFO"]);
+        lastNfoRefresh = Date.now();
+      } catch (e) {
+        console.error("NFO cache refresh failed:", e);
+        return [];
+      }
+    }
+
+    return nfoCache.filter((ins: any) => 
+      ins.name === symbol && 
+      ins.segment === 'NFO-OPT' &&
+      new Date(ins.expiry) >= new Date()
+    );
+  }
+
   apiRouter.get("/stock-intel/:symbol", async (req, res) => {
     const { symbol } = req.params;
     
-    // In a real app, we'd use Kite to fetch deep data.
-    // For this dashboard, we simulate the sophisticated data retrieval and AI processing.
-    
-    const mockPrice = 1500 + (Math.random() * 500);
-    const mockChange = (Math.random() - 0.4) * 20;
+    let price = 1500;
+    let change = 0;
+    let changePercent = 0;
+    let ohlc = { open: 0, high: 0, low: 0, close: 0 };
+    let chain: any[] = [];
+    let isLive = false;
+    let rsi = 50;
+    let deliveryPercentage = 45;
+
+    if (kiteInstance && accessToken) {
+      try {
+        const fullSymbol = `NSE:${symbol}`;
+        const quotes = await kiteInstance.getQuote([fullSymbol]);
+        
+        if (quotes[fullSymbol]) {
+          const q = quotes[fullSymbol];
+          price = q.last_price;
+          ohlc = q.ohlc;
+          change = q.net_change || (price - ohlc.close);
+          changePercent = ohlc.close > 0 ? (change / ohlc.close) * 100 : 0;
+          isLive = true;
+
+          // Fetch indicators from historical
+          try {
+            const now = new Date();
+            const from = new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 20 days
+            const to = now.toISOString().split('T')[0];
+            const candles = await kiteInstance.getHistoricalData(q.instrument_token, "day", from, to);
+            if (candles.length >= 14) {
+               // Simple RSI approximation
+               let gains = 0;
+               let losses = 0;
+               for (let i = candles.length - 14; i < candles.length; i++) {
+                  const diff = candles[i].close - candles[i].open;
+                  if (diff >= 0) gains += diff;
+                  else losses -= diff;
+               }
+               const rs = losses === 0 ? 100 : gains / losses;
+               rsi = 100 - (100 / (1 + rs));
+            }
+          } catch (e) {
+            console.warn(`[STOCK-INTEL] Historical fetch for ${symbol} failed, using random RSI`);
+            rsi = 45 + Math.random() * 15;
+          }
+
+          // Fetch Options for this stock
+          const stockOptions = await getStockOptions(symbol);
+
+          if (stockOptions.length > 0) {
+            const expiries = Array.from(new Set(stockOptions.map((i: any) => i.expiry))).sort() as string[];
+            const nearestExpiry = expiries[0];
+            const currentExpiryOptions = stockOptions.filter((i: any) => i.expiry === nearestExpiry);
+            const lotSize = currentExpiryOptions[0].lot_size;
+            stockMetadataCache.set(symbol, { token: q.instrument_token, lotSize });
+
+            const atmStrike = Math.round(price / 5) * 5; 
+            const strikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike)))
+              .sort((a: any, b: any) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
+              .slice(0, 7); // More strikes
+
+            const optionSymbols = [];
+            for (const strike of strikes) {
+              const ce = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
+              const pe = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
+              if (ce) optionSymbols.push(`NFO:${ce.tradingsymbol}`);
+              if (pe) optionSymbols.push(`NFO:${pe.tradingsymbol}`);
+            }
+
+            const optQuotes = await kiteInstance.getQuote(optionSymbols);
+            for (const strike of strikes.sort((a:any, b:any) => a-b)) {
+              const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
+              const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
+              const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
+              const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
+
+              chain.push({
+                strike,
+                ce_oi: ceQ?.oi || 0,
+                ce_oi_change: (ceQ?.oi_day_high || 0) - (ceQ?.oi_day_low || 0),
+                pe_oi: peQ?.oi || 0,
+                pe_oi_change: (peQ?.oi_day_high || 0) - (peQ?.oi_day_low || 0),
+                ce_price: ceQ?.last_price || 0,
+                pe_price: peQ?.last_price || 0,
+                iv: ceQ?.iv || 22
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[SERVER-STOCK] Live fetch for ${symbol} failed:`, err);
+      }
+    }
+
+    // Fallback/Mock enhancements
+    if (!isLive) {
+      price = 1500 + (Math.random() * 500);
+      change = (Math.random() - 0.4) * 20;
+      changePercent = (change / price) * 100;
+      const atmStrike = Math.round(price / 20) * 20;
+      for (let i = -3; i <= 3; i++) {
+        const strike = atmStrike + (i * 20);
+        chain.push({
+          strike,
+          ce_oi: 100000 + Math.random() * 50000,
+          ce_oi_change: (Math.random() - 0.3) * 10000,
+          pe_oi: 120000 + Math.random() * 50000,
+          pe_oi_change: (Math.random() - 0.5) * 10000,
+          ce_price: Math.max(2, 40 - (strike - price) * 0.5),
+          pe_price: Math.max(2, 40 + (strike - price) * 0.5),
+          iv: 18 + Math.random() * 5
+        });
+      }
+      rsi = 45 + Math.random() * 20;
+    }
     
     const stockContext = {
       symbol,
-      price: mockPrice,
-      change: mockChange,
-      changePercent: (mockChange / mockPrice) * 100,
+      price,
+      change,
+      changePercent,
       indicators: {
-        rsi: 45 + Math.random() * 20,
+        rsi,
         macd: { macd: 1.5, signal: 1.2, histogram: 0.3 },
-        bollinger: { upper: mockPrice + 50, middle: mockPrice, lower: mockPrice - 50 }
+        bollinger: { upper: price + 50, middle: price, lower: price - 50 }
       },
-      optionChain: [], // To be populated below
+      optionChain: chain,
       institutionalActivity: {
         oiTrend: Math.random() > 0.5 ? 'ACCUMULATION' : 'DISTRIBUTION',
         volatilityRegime: 'STABLE',
         deliveryPercentage: 45 + Math.random() * 20
       }
     };
-
-    // Generate option chain for result
-    const atmStrike = Math.round(mockPrice / 20) * 20;
-    const chain = [];
-    for (let i = -3; i <= 3; i++) {
-        const strike = atmStrike + (i * 20);
-        chain.push({
-            strike,
-            ce_oi: 100000 + Math.random() * 50000,
-            ce_oi_change: (Math.random() - 0.3) * 10000,
-            pe_oi: 120000 + Math.random() * 50000,
-            pe_oi_change: (Math.random() - 0.5) * 10000,
-            ce_price: Math.max(2, 40 - (strike - mockPrice) * 0.5),
-            pe_price: Math.max(2, 40 + (strike - mockPrice) * 0.5),
-            iv: 18 + Math.random() * 5
-        });
-    }
-    stockContext.optionChain = chain as any;
 
     try {
       const intel = await aiEngine.analyzeStockIntel(stockContext);

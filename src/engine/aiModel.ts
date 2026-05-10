@@ -149,7 +149,7 @@ class AIEngine {
   async analyzeStockIntel(stockContext: any): Promise<any> {
     if (!this.ai) {
       return {
-        verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'AI Offline.', sl: 0, target: 0 },
+        verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'AI Offline (No API Key).', sl: 0, target: 0 },
         institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
       };
     }
@@ -164,8 +164,8 @@ class AIEngine {
       Requirements:
       1. Analyze price action (RSI, Moving Averages, Bollinger Bands).
       2. Analyze Option Chain (OI concentration, Max Pain, PCR).
-      3. Provide a final BUY/SELL/AVOID verdict.
-      4. Derive precise Stop Loss and Target levels for the option.
+      3. Provide a final BULLISH/BEARISH/NEUTRAL verdict.
+      4. Derive precise Stop Loss and Target levels for the equity price.
       5. Identify "Institutional Fingerprints" in the OI build-up.
       
       Return JSON:
@@ -173,9 +173,9 @@ class AIEngine {
         "verdict": {
           "bias": "BULLISH" | "BEARISH" | "NEUTRAL",
           "score": number (0-100),
-          "reasoning": "Deep analytical reasoning",
-          "sl": number (Price level for SL),
-          "target": number (Price level for Target)
+          "reasoning": "Detailed institutional analysis",
+          "sl": number,
+          "target": number
         },
         "institutionalActivity": {
           "oiTrend": "ACCUMULATION" | "DISTRIBUTION" | "SHORT_COVERING" | "LONG_UNWINDING",
@@ -185,6 +185,7 @@ class AIEngine {
     `;
 
     try {
+      console.log(`[AI-STOCK] Analyzing ${stockContext.symbol}...`);
       const response = await this.ai.models.generateContent({
         model: "gemini-2.0-flash",
         contents: prompt,
@@ -217,11 +218,26 @@ class AIEngine {
           }
         }
       });
-      return JSON.parse(response.text);
+      
+      const text = response.text;
+      if (!text) {
+        console.error("[AI-STOCK] Model returned empty text");
+        throw new Error("Empty AI response");
+      }
+
+      const result = JSON.parse(text);
+      console.log(`[AI-STOCK] ${stockContext.symbol} Analysis Complete: ${result.verdict.bias} (${result.verdict.score}%)`);
+      return result;
     } catch (e) {
       console.error("[AI-STOCK] Analysis Error:", e);
       return {
-        verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'Neural Engine Error.', sl: 0, target: 0 },
+        verdict: { 
+          bias: 'NEUTRAL', 
+          score: 50, 
+          reasoning: `AI synchronization issue: ${e instanceof Error ? e.message : 'Unknown'}. Check console logs.`, 
+          sl: 0, 
+          target: 0 
+        },
         institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
       };
     }
