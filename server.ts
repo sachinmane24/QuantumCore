@@ -98,9 +98,6 @@ async function loadMarketStructure() {
 
 async function startServer() {
   try {
-    await loadKiteSession();
-    await loadRiskConfig();
-    await loadMarketStructure();
     const app = express();
     const PORT = process.env.PORT || 3000;
 
@@ -115,6 +112,33 @@ async function startServer() {
       next();
     });
 
+    // Start listening ASAP for health checks
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`[V5.2] Quantum Server listening on port ${PORT}`);
+    });
+
+    // Load persisted data in background
+    Promise.all([
+      loadKiteSession(),
+      loadRiskConfig(),
+      loadMarketStructure()
+    ]).then(() => {
+      console.log("[INIT] Persistent data loaded successfully.");
+      if (apiKey && !kiteInstance) {
+        console.log("[INIT] Initializing Kite with loaded session...");
+        kiteInstance = new KiteConnect({ api_key: apiKey });
+        if (accessToken) {
+          kiteInstance.setAccessToken(accessToken);
+        }
+      }
+      // Start market loop after data load
+      marketLoop();
+    }).catch(err => {
+      console.error("[INIT] One or more data loads failed:", err);
+      // Start loop anyway as fallback
+      marketLoop();
+    });
+
   // Kite instance (single session for this dev app)
   let kiteInstance: any = null;
   let niftyInstruments: any[] = [];
@@ -123,14 +147,11 @@ async function startServer() {
   let lastFetchTimestamp: string | null = null;
   let lastFetchError: string | null = null;
   let loopCount = 0;
+  let nfoCache: any[] = [];
+  let lastNfoRefresh: number = 0;
+  let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
 
-  if (apiKey) {
-    kiteInstance = new KiteConnect({ api_key: apiKey });
-    if (accessToken) {
-       kiteInstance.setAccessToken(accessToken);
-       console.log("[INIT] Initialized kiteInstance with persisted accessToken");
-    }
-  }
+  // Remove the immediate check here since it's now handled in the Promise.all.then
 
     async function refreshNfoCache() {
       if (!kiteInstance || !accessToken) return;
@@ -353,8 +374,7 @@ async function startServer() {
       setTimeout(marketLoop, 1000);
     }
   }
-  marketLoop();
-
+  
   app.get("/ping", (req, res) => res.send("pong"));
 
   const apiRouter = express.Router();
@@ -739,33 +759,6 @@ async function startServer() {
     }
   });
 
-  // Cache for stock metadata to avoid redundant lookups
-  let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
-  let nfoCache: any[] = [];
-  let lastNfoRefresh: number = 0;
-
-  async function getStockOptions(symbol: string) {
-    if (!kiteInstance || !accessToken) return [];
-    
-    // Refresh global NFO cache if empty or > 4h old
-    if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
-      try {
-        console.log("[SYSTEM] Refreshing Global NFO cache...");
-        nfoCache = await kiteInstance.getInstruments(["NFO"]);
-        lastNfoRefresh = Date.now();
-      } catch (e) {
-        console.error("NFO cache refresh failed:", e);
-        return [];
-      }
-    }
-
-    return nfoCache.filter((ins: any) => 
-      ins.name === symbol && 
-      ins.segment === 'NFO-OPT' &&
-      new Date(ins.expiry) >= new Date()
-    );
-  }
-
   apiRouter.get("/stock-intel/:symbol", async (req, res) => {
     const { symbol } = req.params;
     
@@ -963,10 +956,6 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
-  app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`[V5.2] Quantum Server listening on port ${PORT}`);
-  });
 
   } catch (err) {
     console.error("FATAL: Server failed to start:", err);
