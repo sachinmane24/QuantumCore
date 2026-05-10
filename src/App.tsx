@@ -55,6 +55,22 @@ export default function App() {
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
   const [stockIntel, setStockIntel] = useState<StockIntel | null>(null);
   const [isSearchingStock, setIsSearchingStock] = useState(false);
+  const [foStocks, setFoStocks] = useState<string[]>(FO_STOCKS);
+
+  useEffect(() => {
+    const fetchFOStocks = async () => {
+      try {
+        const res = await fetch('/api/fo-stocks');
+        if (res.ok) {
+          const data = await res.json();
+          setFoStocks(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch FO stocks", e);
+      }
+    };
+    fetchFOStocks();
+  }, []);
 
   const handlePredict = async () => {
     if (!market || !strategy) return;
@@ -1662,7 +1678,7 @@ export default function App() {
                       onChange={(e) => setSelectedStock(e.target.value)}
                       className="bg-slate-900 border border-white/10 rounded-lg pl-8 pr-4 py-2 text-[10px] font-black text-white uppercase outline-none focus:border-blue-500/50 min-w-[200px] appearance-none"
                     >
-                      {FO_STOCKS.sort().map(s => <option key={s} value={s}>{s}</option>)}
+                      {foStocks.sort().map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                     <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
                   </div>

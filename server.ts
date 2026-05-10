@@ -498,6 +498,20 @@ async function startServer() {
     }
   });
 
+  apiRouter.get("/fo-stocks", (req, res) => {
+    const stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
+      .filter(name => !!name)
+      .sort();
+    
+    if (stocks.length === 0) {
+      // Fallback to top volume FO stocks
+      return res.json([
+        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "ITC", "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA"
+      ]);
+    }
+    res.json(stocks);
+  });
+
   apiRouter.get("/debug/kite", async (req, res) => {
     let samples = [];
     if (apiKey && accessToken) {
