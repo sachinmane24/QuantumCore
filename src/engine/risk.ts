@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config } from './config';
-import { Position } from './execution';
+import { config } from './config.ts';
+import { Position } from './execution.ts';
 
 interface RiskStats {
   tradesToday: number;

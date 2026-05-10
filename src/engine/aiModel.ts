@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { config } from "./config.ts";
-import { TradeLogEntry } from "./types";
+import { TradeLogEntry } from "./types.ts";
 
 export interface PredictionResult {
   prediction: 'WIN' | 'LOSS' | 'NEUTRAL';
@@ -37,7 +37,7 @@ class AIEngine {
       `;
 
       const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "models/gemini-1.5-flash",
         contents: prompt,
       });
 
@@ -101,7 +101,7 @@ class AIEngine {
       `;
 
       const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "models/gemini-1.5-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -187,7 +187,7 @@ class AIEngine {
     try {
       console.log(`[AI-STOCK] Analyzing ${stockContext.symbol}...`);
       const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "models/gemini-1.5-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",

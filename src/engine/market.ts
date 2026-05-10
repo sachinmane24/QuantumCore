@@ -4,7 +4,7 @@
  */
 
 import { config } from './config.ts';
-import { OptionChainData } from './types';
+import { OptionChainData } from './types.ts';
 
 export interface Tick {
   tradable: boolean;

@@ -120,34 +120,33 @@ async function startServer() {
     // Request Logger with Versioning
     app.use((req, res, next) => {
       const timestamp = new Date().toISOString();
-      console.log(`[V5.2-DIAG] ${timestamp} - ${req.method} ${req.url}`);
+      console.log(`[V5.3-DIAG] ${timestamp} - ${req.method} ${req.url}`);
       next();
     });
 
+    app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4" }));
+    app.get("/ping", (req, res) => res.send("pong"));
+
     // Start listening ASAP for health checks
     app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`[V5.2] Quantum Server listening on port ${PORT}`);
+      console.log(`[V5.4] Quantum Server listening on port ${PORT}`);
     });
 
-    // Load persisted data in background
-    Promise.all([
-      loadKiteSession(),
-      loadRiskConfig(),
-      loadMarketStructure()
-    ]).then(() => {
-      console.log("[INIT] Persistent data loaded successfully.");
-      if (apiKey && !kiteInstance) {
-        console.log("[INIT] Initializing Kite with loaded session...");
-        kiteInstance = new KiteConnect({ api_key: apiKey });
-        if (accessToken) {
-          kiteInstance.setAccessToken(accessToken);
+    // Load persisted data in background (Unwaited)
+    loadPersistentData("system", "kite_session").then(data => {
+      if (data) {
+        if (data.key) apiKey = data.key;
+        if (data.secret) apiSecret = data.secret;
+        if (data.token) accessToken = data.token;
+        console.log("[INIT] Kite session loaded.");
+        if (apiKey && !kiteInstance) {
+          kiteInstance = new KiteConnect({ api_key: apiKey });
+          if (accessToken) kiteInstance.setAccessToken(accessToken);
         }
       }
-      // Start market loop after data load
       marketLoop();
     }).catch(err => {
-      console.error("[INIT] One or more data loads failed:", err);
-      // Start loop anyway as fallback
+      console.error("[INIT] Background load failed:", err);
       marketLoop();
     });
 

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config } from './config';
-import { marketEngine } from './market';
+import { config } from './config.ts';
+import { marketEngine } from './market.ts';
 
 export interface TradeParams {
   stopLossPrice: number;

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { adminDb as db } from './firebase-server';
+import { adminDb as db } from './firebase-server.ts';
 import { FieldValue } from 'firebase-admin/firestore';
-import { TradeLogEntry } from './types';
+import { TradeLogEntry } from './types.ts';
 import fs from 'fs-extra';
 import path from 'path';
 
