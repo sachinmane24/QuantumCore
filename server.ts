@@ -97,10 +97,22 @@ async function loadMarketStructure() {
 }
 
 async function startServer() {
-  try {
-    const app = express();
-    const PORT = process.env.PORT || 3000;
+  const app = express();
+  const PORT = process.env.PORT || 3000;
 
+  // Shared state within startServer
+  let kiteInstance: any = null;
+  let niftyInstruments: any[] = [];
+  let allExpiries: string[] = [];
+  let lastRawQuotes: any = null;
+  let lastFetchTimestamp: string | null = null;
+  let lastFetchError: string | null = null;
+  let loopCount = 0;
+  let nfoCache: any[] = [];
+  let lastNfoRefresh: number = 0;
+  let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
+
+  try {
     app.use(cors({ origin: true, credentials: true }));
     app.use(express.json());
     app.use(cookieParser());
@@ -138,20 +150,6 @@ async function startServer() {
       // Start loop anyway as fallback
       marketLoop();
     });
-
-  // Kite instance (single session for this dev app)
-  let kiteInstance: any = null;
-  let niftyInstruments: any[] = [];
-  let allExpiries: string[] = [];
-  let lastRawQuotes: any = null;
-  let lastFetchTimestamp: string | null = null;
-  let lastFetchError: string | null = null;
-  let loopCount = 0;
-  let nfoCache: any[] = [];
-  let lastNfoRefresh: number = 0;
-  let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
-
-  // Remove the immediate check here since it's now handled in the Promise.all.then
 
     async function refreshNfoCache() {
       if (!kiteInstance || !accessToken) return;
