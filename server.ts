@@ -142,7 +142,12 @@ async function startServer() {
         console.log("[INIT] Kite session loaded.");
         if (apiKey && !kiteInstance) {
           kiteInstance = new KiteConnect({ api_key: apiKey });
-          if (accessToken) kiteInstance.setAccessToken(accessToken);
+          if (accessToken) {
+            kiteInstance.setAccessToken(accessToken);
+            // Default to LIVE mode once session is loaded
+            config.DATA_SOURCE = 'LIVE';
+            console.log("[SYSTEM] Active session found. Defaulting to LIVE DATA mode.");
+          }
         }
       }
       marketLoop();
@@ -562,6 +567,18 @@ async function startServer() {
     ]);
   });
 
+  apiRouter.get("/debug/kite-status", (req, res) => {
+    res.json({
+      loggedIn: !!accessToken,
+      dataSource: config.DATA_SOURCE,
+      nfoCacheSize: nfoCache.length,
+      lastNfoRefresh: new Date(lastNfoRefresh).toISOString(),
+      niftyInstrumentsCount: niftyInstruments.length,
+      hasKiteInstance: !!kiteInstance,
+      foStocksEndpointPreview: Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT' || i.segment === 'NFO-FUT').map(i => i.name))).slice(0, 10)
+    });
+  });
+
   apiRouter.get("/debug/kite", async (req, res) => {
     let samples = [];
     if (apiKey && accessToken) {
@@ -681,7 +698,12 @@ async function startServer() {
 
   apiRouter.post("/toggle-data-mode", (req, res) => {
     const { mode } = req.body;
-    setDataMode(mode);
+    // Force to LIVE if we have an active session
+    if (accessToken) {
+      setDataMode('LIVE');
+    } else {
+      setDataMode(mode);
+    }
     marketEngine.syncMode();
     res.json({ status: "success", dataSource: config.DATA_SOURCE });
   });

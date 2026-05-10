@@ -884,8 +884,7 @@ export default function App() {
           )}
           <div className="flex items-center gap-3 p-1 pl-3 bg-slate-900/50 border border-terminal-line rounded-lg">
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Data:</span>
-            <button 
-              onClick={() => handleToggleDataMode()}
+            <div 
               className={cn(
                 "px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all",
                 execution?.dataSource === 'MOCK' 
@@ -895,8 +894,8 @@ export default function App() {
                       : "bg-emerald-600/20 text-emerald-500 border border-emerald-600/30")
               )}
             >
-              {execution?.dataSource === 'LIVE' && marketInfo?.isMarketClosed ? 'LIVE ANALYSIS' : (execution?.dataSource || 'MOCK')}
-            </button>
+              {(execution?.dataSource === 'LIVE') ? 'LIVE ANALYSIS' : 'MOCK ENGINE'}
+            </div>
             <div className="w-px h-4 bg-white/5" />
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Trade:</span>
             <button 
