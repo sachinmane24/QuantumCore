@@ -195,6 +195,8 @@ export interface StockIntel {
   price: number;
   change: number;
   changePercent: number;
+  high?: number;
+  low?: number;
   optionsStats?: {
     pcr: number;
     totalCallOI: number;

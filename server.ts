@@ -796,7 +796,7 @@ async function startServer() {
         if (quotes[fullSymbol]) {
           const q = quotes[fullSymbol];
           price = q.last_price;
-          ohlc = q.ohlc;
+          ohlc = q.ohlc || { open: 0, high: 0, low: 0, close: 0 };
           change = q.net_change || (price - ohlc.close);
           changePercent = ohlc.close > 0 ? (change / ohlc.close) * 100 : 0;
           isLive = true;
@@ -829,8 +829,17 @@ async function startServer() {
           console.log(`[STOCK-INTEL] Found ${stockOptions.length} total options for ${symbol}`);
 
           if (stockOptions.length > 0) {
-            const expiries = Array.from(new Set(stockOptions.map((i: any) => i.expiry))).sort() as string[];
-            const nearestExpiry = expiries.find(e => new Date(e) >= new Date()) || expiries[0];
+            const expiries = Array.from(new Set(stockOptions.map((i: any) => i.expiry)))
+              .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime()) as string[];
+            
+            // Find nearest expiry that is today or later
+            const nearestExpiry = expiries.find(e => {
+              const expDate = new Date(e);
+              const today = new Date();
+              today.setHours(0,0,0,0);
+              return expDate >= today;
+            }) || expiries[0];
+
             const currentExpiryOptions = stockOptions.filter((i: any) => i.expiry === nearestExpiry);
             const lotSize = currentExpiryOptions[0]?.lot_size || 0;
             stockMetadataCache.set(symbol, { token: q.instrument_token, lotSize });
@@ -936,6 +945,8 @@ async function startServer() {
     const stockContext = {
       symbol,
       price,
+      high: ohlc.high,
+      low: ohlc.low,
       change,
       changePercent,
       optionsStats,

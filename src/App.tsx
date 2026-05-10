@@ -1765,8 +1765,14 @@ export default function App() {
                         <div className="terminal-card p-4">
                            <span className="terminal-label">Spot Price</span>
                            <div className="text-lg font-black text-white">₹{stockIntel.price.toFixed(2)}</div>
-                           <div className={cn("text-[10px] font-bold", stockIntel.change >= 0 ? "text-emerald-400" : "text-rose-400")}>
-                              {stockIntel.change >= 0 ? '+' : ''}{stockIntel.change.toFixed(2)} ({stockIntel.changePercent.toFixed(2)}%)
+                           <div className="flex items-center justify-between mt-1">
+                              <div className={cn("text-[10px] font-bold", stockIntel.change >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                                 {stockIntel.change >= 0 ? '+' : ''}{stockIntel.change.toFixed(2)} ({stockIntel.changePercent.toFixed(2)}%)
+                              </div>
+                              <div className="flex gap-2">
+                                 <div className="text-[8px] font-black uppercase text-slate-500">H: <span className="text-white">₹{stockIntel.high?.toFixed(1) || '0'}</span></div>
+                                 <div className="text-[8px] font-black uppercase text-slate-500">L: <span className="text-white">₹{stockIntel.low?.toFixed(1) || '0'}</span></div>
+                              </div>
                            </div>
                         </div>
                         <div className="terminal-card p-4">
@@ -1784,7 +1790,7 @@ export default function App() {
                         <div className="terminal-card p-4">
                            <span className="terminal-label">Max Pain</span>
                            <div className="text-lg font-black text-purple-400">{stockIntel.optionsStats?.maxPain || 'N/A'}</div>
-                           <div className="text-[9px] text-slate-500 font-bold uppercase">Ex: {stockIntel.optionsStats?.expiry}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">Ex: {stockIntel.optionsStats?.expiry ? new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : 'N/A'}</div>
                         </div>
                      </div>
 
@@ -1801,7 +1807,7 @@ export default function App() {
                      <section className="terminal-card flex-1 flex flex-col overflow-hidden min-h-0">
                         <div className="px-5 py-3 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                               Liquid Option Chain ({stockIntel.optionsStats?.expiry ? `Expiry: ${stockIntel.optionsStats.expiry}` : 'Near Month'})
+                               Liquid Option Chain ({stockIntel.optionsStats?.expiry ? `Expiry: ${new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : 'Near Month'})
                             </h4>
                            <div className="flex gap-4">
                               <div className="flex items-center gap-1.5">
