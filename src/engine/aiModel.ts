@@ -230,15 +230,24 @@ class AIEngine {
       const result = JSON.parse(text);
       console.log(`[AI-STOCK] ${stockContext.symbol} Analysis Complete: ${result.verdict.bias} (${result.verdict.score}%)`);
       return result;
-    } catch (e) {
+    } catch (e: any) {
       console.error("[AI-STOCK] Analysis Error:", e);
+      let errorMessage = "AI synchronization issue. Check console logs.";
+      
+      if (e.message?.includes("RESOURCE_EXHAUSTED") || e.status === "RESOURCE_EXHAUSTED" || e.code === 429) {
+        errorMessage = "AI Quota Exhausted. Your monthly free tier spending cap has been reached. Please rely on institutional data blocks below for now.";
+      } else if (e.message?.includes("SAFETY")) {
+        errorMessage = "AI Safety Filter triggered. Analysis restricted for this volatility profile.";
+      }
+
       return {
         verdict: { 
           bias: 'NEUTRAL', 
           score: 50, 
-          reasoning: `AI synchronization issue: ${e instanceof Error ? e.message : 'Unknown'}. Check console logs.`, 
+          reasoning: errorMessage, 
           sl: 0, 
-          target: 0 
+          target: 0,
+          strategy: "Manual analysis recommended due to AI downtime."
         },
         institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
       };

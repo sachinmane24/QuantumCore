@@ -1738,7 +1738,7 @@ export default function App() {
                         </div>
 
                         <div className="space-y-4">
-                           <div className="p-4 bg-white/5 rounded-lg border border-white/5">
+                           <div className="p-4 bg-white/5 rounded-lg border border-white/5 max-h-[140px] overflow-y-auto custom-scrollbar">
                               <p className="text-[11px] text-slate-300 font-bold leading-relaxed">{stockIntel.verdict.reasoning}</p>
                            </div>
 

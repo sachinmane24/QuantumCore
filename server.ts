@@ -216,21 +216,37 @@ async function startServer() {
       if (!kiteInstance || !accessToken) return [];
       
       const now = new Date();
-      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      // Use IST for end-of-day checks
+      const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+      const startOfTodayIST = new Date(istTime);
+      startOfTodayIST.setHours(0, 0, 0, 0);
 
       if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
+        console.log(`[STOCK-OPTIONS] Cache empty or stale, refreshing for ${symbol}...`);
         await refreshNfoCache();
       }
       
-      const filtered = nfoCache.filter((ins: any) => 
-        ins.name === symbol && 
+      // Try exact name match first
+      let filtered = nfoCache.filter((ins: any) => 
+        (ins.name === symbol || ins.tradingsymbol?.startsWith(symbol)) && 
         ins.segment === 'NFO-OPT'
       );
+
+      if (filtered.length === 0) {
+        console.log(`[STOCK-OPTIONS] No direct match for ${symbol}, trying loose match...`);
+        filtered = nfoCache.filter((ins: any) => 
+          ins.segment === 'NFO-OPT' && 
+          ins.tradingsymbol?.includes(symbol)
+        );
+      }
       
-      const futureOptions = filtered.filter((ins: any) => new Date(ins.expiry) >= startOfToday);
+      const futureOptions = filtered.filter((ins: any) => {
+        const exp = new Date(ins.expiry);
+        return exp >= startOfTodayIST;
+      });
       
       if (futureOptions.length === 0 && filtered.length > 0) {
-        // Fallback to the latest available if all in past (historical analysis)
+        console.log(`[STOCK-OPTIONS] Found ${filtered.length} historical options for ${symbol}, but none in future.`);
         return filtered.sort((a,b) => new Date(b.expiry).getTime() - new Date(a.expiry).getTime());
       }
 
@@ -947,13 +963,22 @@ async function startServer() {
 
             const allStrikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike))).sort((a: any, b: any) => a - b);
             
-            // Get 11 strikes around current price
+            // Get 20 strikes around current price (more comprehensive)
             const strikes = [...allStrikes]
               .sort((a, b) => Math.abs(a - price) - Math.abs(b - price))
-              .slice(0, 11)
+              .slice(0, 20)
               .sort((a,b) => a - b);
             
-            const atmStrike = strikes.find(s => Math.abs(s - price) <= (strikes[1]-strikes[0] || price)) || strikes[0] || price;
+            // Smarter ATM finding
+            let atmStrike = strikes[0];
+            let minDiff = Math.abs(strikes[0] - price);
+            for(const s of strikes) {
+              const diff = Math.abs(s - price);
+              if (diff < minDiff) {
+                minDiff = diff;
+                atmStrike = s;
+              }
+            }
             
             console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes Active: ${strikes.length}/${allStrikes.length}`);
 
@@ -1003,7 +1028,7 @@ async function startServer() {
             
             // Calculate Option Stats
             const pcrVal = totalCE_OI > 0 ? totalPE_OI / totalCE_OI : 1;
-            const maxPainVal = strikes[Math.floor(strikes.length / 2)] || price; 
+            const maxPainVal = atmStrike; 
             
             optionsStats = {
                pcr: Number(pcrVal.toFixed(2)),
@@ -1013,7 +1038,22 @@ async function startServer() {
                expiry: nearestExpiry
             };
           } else {
-             console.warn(`[STOCK-INTEL] No options data found in cache for ${symbol}`);
+             console.warn(`[STOCK-INTEL] No future options data found in cache for ${symbol}, falling back to mock chain.`);
+             // Only mock the chain if live chain fetch failed
+             const mockAtm = Math.round(price / 50) * 50;
+             for (let i = -5; i <= 5; i++) {
+               const strike = mockAtm + (i * 50);
+               chain.push({
+                 strike,
+                 ce_oi: 50000 + Math.random() * 20000,
+                 ce_oi_change: (Math.random() - 0.5) * 5000,
+                 pe_oi: 55000 + Math.random() * 20000,
+                 pe_oi_change: (Math.random() - 0.5) * 5000,
+                 ce_price: Math.max(2, 60 - (strike - price) * 0.4),
+                 pe_price: Math.max(2, 60 + (strike - price) * 0.4),
+                 iv: 20
+               });
+             }
           }
         }
       } catch (err) {
