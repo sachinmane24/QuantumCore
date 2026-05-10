@@ -253,14 +253,18 @@ async function startServer() {
 
       // 1. Data Sync
       loopCount++;
+
+      // Always try to refresh NFO cache if empty or stale, as long as we are logged in
+      const isStale = nfoCache.length > 0 && (Date.now() - lastNfoRefresh > 6 * 60 * 60 * 1000);
+      if (kiteInstance && accessToken && (nfoCache.length === 0 || isStale)) {
+        await refreshNfoCache().catch(e => console.error("[LOOP] NFO Refresh background failed:", e));
+      }
+
       if (config.DATA_SOURCE === 'LIVE' && kiteInstance && accessToken) {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
           
-          // Ensure we have regular instrument refreshes
-          const isStale = nfoCache.length > 0 && (Date.now() - lastNfoRefresh > 6 * 60 * 60 * 1000);
-
-          if (niftyInstruments.length <= 1 || isStale) {
+          if (niftyInstruments.length <= 1) {
             await refreshNfoCache();
           }
 
@@ -512,13 +516,13 @@ async function startServer() {
   // ... existing code ...
   apiRouter.get("/fo-stocks", async (req, res) => {
     // Try cache first
-    let stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
+    let stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT' || i.segment === 'NFO-FUT').map(i => i.name)))
       .filter(name => !!name)
       .sort();
     
     const localPath = path.join(process.cwd(), 'fo_stocks_cache.json');
     
-    if (stocks.length > 0) {
+    if (stocks.length > 50) { // Ensure we have a decent number of stocks
       // Update local storage if we have fresh data
       await fs.writeJson(localPath, stocks).catch(() => {});
       return res.json(stocks);
@@ -528,16 +532,33 @@ async function startServer() {
     try {
       if (await fs.pathExists(localPath)) {
         const cached = await fs.readJson(localPath);
-        if (cached && cached.length > 0) {
+        if (cached && cached.length > 50) {
           console.log(`[STOCK-INTEL] Using local FO stock cache (${cached.length} stocks)`);
           return res.json(cached);
         }
       }
     } catch (e) {}
     
-    // Final fallback to top volume FO stocks
+    // Final fallback to a curated comprehensive list
     res.json([
-      "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "ITC", "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA"
+      "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN",
+      "LICI", "ITC", "HINDUNILVR", "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA", "TITAN", "AXISBANK",
+      "ULTRACEMCO", "KOTAKBANK", "ADANIPORTS", "ONGC", "ASIANPAINT", "NTPC", "JSWSTEEL", "M&M", "POWERGRID", "TATASTEEL",
+      "BAJAJ-AUTO", "ADANIPOWER", "COALINDIA", "TATAMOTORS", "HCLTECH", "SBILIFE", "GRASIM", "NESTLEIND", "INDUSINDBK", "TECHM",
+      "WIPRO", "HINDALCO", "BRITANNIA", "DIVISLAB", "CIPLA", "APOLLOHOSP", "EICHERMOT", "BPCL", "HEROMOTOCO", "DRREDDY",
+      "BAJAJFINSV", "360ONE", "ABB", "ABBOTINDIA", "ABCAPITAL", "ABFRL", "ACC", "ADANIGREEN", "ADANIENSOL", "ALKEM", "AMBUJACEM", "AMBER", "ANGELONE",
+      "APOLLOTYRE", "APLAPOLLO", "ASHOKLEY", "ASTRAL", "AUBANK", "AUROPHARMA", "BAJAJHIND", "BALKRISIND", "BALRAMCHIN", "BANDHANBNK", "BANKBARODA", "BANKINDIA",
+      "BATAINDIA", "BDL", "BEL", "BHEL", "BIOCON", "BLUESTARCO", "BOSCHLTD", "BSOFT", "CANBK", "CANFINHOME", "CDSL", "CHAMBLFERT", "CHOLAFIN", "COFORGE", "COLPAL", "CAMS",
+      "CONCOR", "COROMANDEL", "CROMPTON", "CUMMINSIND", "DABUR", "DALBHARAT", "DEEPAKNTR", "DELHIVERY", "DLF", "DIXON", "ESCORTS", "EXIDEIND", "ETERNAL",
+      "FEDERALBNK", "FORCEMOT", "FORTIS", "GAIL", "GLENMARK", "GMRINFRA", "GMRAIRPORT", "GNFC", "GODREJCP", "GODREJPROP", "GODFRYPHLP", "GUJGASLTD", "HAL", "HAVELLS",
+      "HDFCAMC", "HDFCLIFE", "HINDCOPPER", "HINDPETRO", "HUDCO", "HYUNDAI", "ICICIGI", "ICICIPRULI", "IDFCFIRSTB", "IEX", "IGL", "INDHOTEL", "INDIACEM", "INDIAMART", "INDIANB",
+      "INDIGO", "INDUSTOWER", "INOXWIND", "IPCALAB", "IRB", "IRCTC", "IRFC", "IREDA", "JESWENERGY", "JIOFIN", "JKCEMENT", "JSL", "JSWENERGY", "JUBLFOOD",
+      "KALYANKJIL", "KAYNES", "KEI", "KFINTECH", "KPITTECH", "L&TFH", "LALPATHLAB", "LAURUSLABS", "LICHSGFIN", "LODHA", "LTTS", "LTIM", "LTM", "LUPIN", "MANAPPURAM", "MANKIND", "MARICO", "MAXHEALTH", "MAZDOCK", "MCX",
+      "METROPOLIS", "MFSL", "MGL", "MOTHERSON", "MOTILALOFS", "MPHASIS", "MRF", "MUTHOOTFIN", "NAM-INDIA", "NATIONALUM", "NAUKRI", "NAVINFLUOR", "NBCC", "NHPC", "NUVAMA",
+      "NMDC", "OBEROIRLTY", "OFSS", "OIL", "PAGEIND", "PATANJALI", "PAYTM", "PEL", "PERSISTENT", "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "POLICYBZR",
+      "PNB", "PNBHOUSING", "POLYCAB", "POWERINDIA", "PREMIERENE", "PRESTIGE", "PVRINOX", "RAMCOCEM", "RBLBANK", "RECLTD", "RVNL", "SAIL", "SAMMAANCAP", "SBICARD", "SHREECEM", "SHRIRAMFIN",
+      "SIEMENS", "SOLARINDS", "SONACOMS", "SRF", "SUNTV", "SUPREMEIND", "SUZLON", "SWIGGY", "SYNGENE", "TATACOMM", "TATACONSUM", "TATAELXSI", "TATAPOWER", "TATASTEEL", "TIINDIA", "TMPV", "TORNTPHARM", "TRENT", "TVSMOTOR",
+      "UBL", "UHAL", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", "UNOMINDA", "UPL", "VBL", "VEDL", "VMM", "VOLTAS", "WAAREEENER", "WIPRO", "YESBANK", "ZEEL", "ZYDUSLIFE"
     ]);
   });
 
