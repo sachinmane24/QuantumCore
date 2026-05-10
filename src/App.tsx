@@ -333,9 +333,9 @@ export default function App() {
     if (!execution || !marketInfo) return;
     try {
       const newMode = targetMode || (execution.dataSource === 'MOCK' ? 'LIVE' : 'MOCK');
+      // MODIFICATION: Allow LIVE mode during off-market hours for analysis
       if (newMode === 'LIVE' && marketInfo.isMarketClosed) {
-         console.warn("Market is closed. Cannot switch to LIVE mode.");
-         return;
+         console.log("Entering Analysis Mode: Accessing last institutional data snapshot.");
       }
       const res = await fetch('/api/toggle-data-mode', {
         method: 'POST',
@@ -832,10 +832,18 @@ export default function App() {
 
         <div className="flex items-center space-x-6">
           {marketInfo?.isMarketClosed && (
-            <div className="px-4 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center gap-2">
-               <ShieldAlert className="w-3 h-3 text-rose-500" />
-               <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest animate-pulse">
-                  Market is closed
+            <div className={cn(
+              "px-4 py-1.5 border rounded-lg flex items-center gap-2",
+              execution?.dataSource === 'LIVE' 
+                ? "bg-blue-500/10 border-blue-500/20" 
+                : "bg-rose-500/10 border-rose-500/20"
+            )}>
+               <ShieldAlert className={cn("w-3 h-3", execution?.dataSource === 'LIVE' ? "text-blue-400" : "text-rose-500")} />
+               <span className={cn(
+                 "text-[9px] font-black uppercase tracking-widest",
+                 execution?.dataSource === 'LIVE' ? "text-blue-400" : "text-rose-500"
+               )}>
+                  {execution?.dataSource === 'LIVE' ? "Institutional Analysis (Off-Market)" : "Market is closed"}
                </span>
             </div>
           )}
@@ -857,15 +865,17 @@ export default function App() {
           <div className="flex items-center gap-3 p-1 pl-3 bg-slate-900/50 border border-terminal-line rounded-lg">
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Data:</span>
             <button 
-              onClick={handleToggleDataMode}
+              onClick={() => handleToggleDataMode()}
               className={cn(
                 "px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all",
                 execution?.dataSource === 'MOCK' 
                   ? "bg-amber-600/20 text-amber-500 border border-amber-600/30"
-                  : "bg-emerald-600/20 text-emerald-500 border border-emerald-600/30"
+                  : (marketInfo?.isMarketClosed 
+                      ? "bg-blue-600/20 text-blue-400 border border-blue-600/30" 
+                      : "bg-emerald-600/20 text-emerald-500 border border-emerald-600/30")
               )}
             >
-              {execution?.dataSource || 'MOCK'}
+              {execution?.dataSource === 'LIVE' && marketInfo?.isMarketClosed ? 'LIVE ANALYSIS' : (execution?.dataSource || 'MOCK')}
             </button>
             <div className="w-px h-4 bg-white/5" />
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Trade:</span>

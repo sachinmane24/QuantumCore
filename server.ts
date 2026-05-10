@@ -154,12 +154,8 @@ async function startServer() {
           console.log("[SYSTEM] Market hours ended (4 PM IST). Disabling Auto Mode.");
           setAutoMode(false);
         }
-        // Optionally stop the data sync too
-        if (config.DATA_SOURCE === 'LIVE') {
-          console.log("[SYSTEM] Market hours ended. Reverting to MOCK data for simulation.");
-          setDataMode('MOCK');
-          marketEngine.syncMode();
-        }
+        // MODIFICATION: Allow LIVE mode to persist for evening/weekend analysis
+        // We no longer force revert to MOCK here.
       }
 
       // 1. Data Sync
