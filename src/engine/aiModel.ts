@@ -37,7 +37,7 @@ class AIEngine {
       `;
 
       const response = await this.ai.models.generateContent({
-        model: "models/gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: prompt,
       });
 
@@ -101,7 +101,7 @@ class AIEngine {
       `;
 
       const response = await this.ai.models.generateContent({
-        model: "models/gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -187,7 +187,7 @@ class AIEngine {
     try {
       console.log(`[AI-STOCK] Analyzing ${stockContext.symbol}...`);
       const response = await this.ai.models.generateContent({
-        model: "models/gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: prompt,
         config: {
           responseMimeType: "application/json",

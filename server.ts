@@ -188,14 +188,29 @@ async function startServer() {
 
     async function getStockOptions(symbol: string) {
       if (!kiteInstance || !accessToken) return [];
+      
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
       if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
         await refreshNfoCache();
       }
-      return nfoCache.filter((ins: any) => 
-        ins.name === symbol && 
+      
+      const filtered = nfoCache.filter((ins: any) => 
+        (ins.name === symbol || ins.tradingsymbol?.startsWith(symbol)) && 
         ins.segment === 'NFO-OPT' &&
-        new Date(ins.expiry) >= new Date()
+        new Date(ins.expiry) >= startOfToday
       );
+      
+      const ceCount = filtered.filter(f => f.instrument_type === 'CE').length;
+      const peCount = filtered.filter(f => f.instrument_type === 'PE').length;
+
+      console.log(`[STOCK-OPTIONS] Found ${filtered.length} instruments for ${symbol} (${ceCount} CE, ${peCount} PE)`);
+
+      if (filtered.length === 0) {
+        console.warn(`[STOCK-OPTIONS] No options found for ${symbol}. Checked ${nfoCache.length} instruments.`);
+      }
+      return filtered;
     }
 
     // Background Trading Loop
@@ -818,7 +833,9 @@ async function startServer() {
             const atmStrike = Math.round(price / 5) * 5; 
             const strikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike)))
               .sort((a: any, b: any) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
-              .slice(0, 7); // More strikes
+              .slice(0, 11); // More strikes for better depth
+            
+            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Strikes Found: ${strikes.length}`);
 
             const optionSymbols = [];
             for (const strike of strikes) {
