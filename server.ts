@@ -157,6 +157,17 @@ async function startServer() {
         console.log("[SYSTEM] Refreshing Global NFO cache...");
         nfoCache = await kiteInstance.getInstruments(["NFO"]);
         lastNfoRefresh = Date.now();
+
+        // Save FO stocks list to local cache for robustness
+        try {
+          const stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
+            .filter(name => !!name)
+            .sort();
+          if (stocks.length > 0) {
+            fs.writeJson(path.join(process.cwd(), 'fo_stocks_cache.json'), stocks).catch(() => {});
+            console.log(`[SYSTEM] Initialized FO stock cache with ${stocks.length} symbols`);
+          }
+        } catch (e) {}
         
         // Update NIFTY instruments specifically for the main loop
         const startOfTodayIST = new Date(new Date().getTime() + (5.5 * 60 * 60 * 1000));
@@ -498,18 +509,36 @@ async function startServer() {
     }
   });
 
-  apiRouter.get("/fo-stocks", (req, res) => {
-    const stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
+  // ... existing code ...
+  apiRouter.get("/fo-stocks", async (req, res) => {
+    // Try cache first
+    let stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
       .filter(name => !!name)
       .sort();
     
-    if (stocks.length === 0) {
-      // Fallback to top volume FO stocks
-      return res.json([
-        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "ITC", "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA"
-      ]);
+    const localPath = path.join(process.cwd(), 'fo_stocks_cache.json');
+    
+    if (stocks.length > 0) {
+      // Update local storage if we have fresh data
+      await fs.writeJson(localPath, stocks).catch(() => {});
+      return res.json(stocks);
     }
-    res.json(stocks);
+
+    // Fallback to local stored list
+    try {
+      if (await fs.pathExists(localPath)) {
+        const cached = await fs.readJson(localPath);
+        if (cached && cached.length > 0) {
+          console.log(`[STOCK-INTEL] Using local FO stock cache (${cached.length} stocks)`);
+          return res.json(cached);
+        }
+      }
+    } catch (e) {}
+    
+    // Final fallback to top volume FO stocks
+    res.json([
+      "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "ITC", "LT", "BAJFINANCE", "ADANIENT", "MARUTI", "SUNPHARMA"
+    ]);
   });
 
   apiRouter.get("/debug/kite", async (req, res) => {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   TrendingUp, TrendingDown, Activity, AlertTriangle, 
   ShieldCheck, LayoutDashboard, History, Zap,
@@ -257,81 +257,80 @@ export default function App() {
     { name: 'May 24', value: 124570 },
   ];
 
+  const fetchData = useCallback(async () => {
+    if (!isLoggedIn) return;
+    try {
+      const endpoints = [
+        '/api/market-data',
+        '/api/strategy-data',
+        '/api/execution-state',
+        '/api/trade-logs',
+        '/api/market-info'
+      ];
+
+      const results = await Promise.all(endpoints.map(async (url) => {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const contentType = res.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              return await res.json();
+            }
+          }
+        } catch (e) {
+          console.error(`Network error fetching ${url}:`, e);
+        }
+        return null;
+      }));
+      
+      const [marketData, strategyData, executionData, tradeLogsData, marketInfoData] = results;
+
+      if (marketData) setMarket(marketData);
+      if (strategyData) setStrategy(strategyData);
+      if (executionData) setExecution(executionData);
+      if (tradeLogsData) setTradeLogs(tradeLogsData);
+      if (marketInfoData) setMarketInfo(marketInfoData);
+
+      // Fetch config once
+      if (!appConfig) {
+        fetch('/api/config').then(r => r.json()).then(setAppConfig);
+      }
+
+      if (marketData && strategyData && executionData) {
+        setHistory(prev => {
+          const newPoint: HistoryPoint = {
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            pnl: executionData.pnl || 0,
+            score: strategyData.score.total || 0,
+            vix: marketData.vix || 0,
+            spot: marketData.spot || 0,
+            rsi: marketData.indicators?.rsi || null,
+            macd: marketData.indicators?.macd?.macd || null,
+            macdSignal: marketData.indicators?.macd?.signal || null,
+            macdHist: marketData.indicators?.macd?.histogram || null,
+            bbUpper: marketData.indicators?.bollinger?.upper || null,
+            bbLower: marketData.indicators?.bollinger?.lower || null,
+            bbMiddle: marketData.indicators?.bollinger?.middle || null
+          };
+          if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
+          return [...prev, newPoint].slice(-60);
+        });
+      }
+      
+      setLastSync(new Date());
+      setLoading(false);
+    } catch (err) {
+      console.error("Fetch Data Critical Error:", err);
+      setLoading(false);
+    }
+  }, [isLoggedIn, appConfig]);
+
   // Data Fetching
   useEffect(() => {
-    const fetchData = async () => {
-      if (!isLoggedIn) return;
-      try {
-        const endpoints = [
-          '/api/market-data',
-          '/api/strategy-data',
-          '/api/execution-state',
-          '/api/trade-logs',
-          '/api/market-info'
-        ];
-
-        const results = await Promise.all(endpoints.map(async (url) => {
-          try {
-            const res = await fetch(url);
-            if (res.ok) {
-              const contentType = res.headers.get('content-type');
-              if (contentType && contentType.includes('application/json')) {
-                return await res.json();
-              }
-            }
-          } catch (e) {
-            console.error(`Network error fetching ${url}:`, e);
-          }
-          return null;
-        }));
-        
-        const [marketData, strategyData, executionData, tradeLogsData, marketInfoData] = results;
-
-        if (marketData) setMarket(marketData);
-        if (strategyData) setStrategy(strategyData);
-        if (executionData) setExecution(executionData);
-        if (tradeLogsData) setTradeLogs(tradeLogsData);
-        if (marketInfoData) setMarketInfo(marketInfoData);
-
-        // Fetch config once
-        if (!appConfig) {
-          fetch('/api/config').then(r => r.json()).then(setAppConfig);
-        }
-
-        if (marketData && strategyData && executionData) {
-          setHistory(prev => {
-            const newPoint: HistoryPoint = {
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              pnl: executionData.pnl || 0,
-              score: strategyData.score.total || 0,
-              vix: marketData.vix || 0,
-              spot: marketData.spot || 0,
-              rsi: marketData.indicators?.rsi || null,
-              macd: marketData.indicators?.macd?.macd || null,
-              macdSignal: marketData.indicators?.macd?.signal || null,
-              macdHist: marketData.indicators?.macd?.histogram || null,
-              bbUpper: marketData.indicators?.bollinger?.upper || null,
-              bbLower: marketData.indicators?.bollinger?.lower || null,
-              bbMiddle: marketData.indicators?.bollinger?.middle || null
-            };
-            // Only add if time is different from last point to avoid duplicates in fast polling
-            if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
-            return [...prev, newPoint].slice(-60); // Keep last 60 points (approx 1 min if 1s poll)
-          });
-        }
-        
-        setLastSync(new Date());
-        setLoading(false);
-      } catch (err) {
-        console.error("Fetch Data Critical Error:", err);
-        setLoading(false);
-      }
-    };
-
     fetchData();
     const interval = setInterval(fetchData, 1000);
     return () => clearInterval(interval);
-  }, [isLoggedIn]);
+  }, [fetchData]);
 
   const handleExecute = async (bias: 'BULLISH' | 'BEARISH') => {
     await fetch('/api/execute', {
@@ -360,6 +359,11 @@ export default function App() {
       });
       const data = await res.json();
       setExecution(prev => prev ? { ...prev, dataSource: data.dataSource } : null);
+      
+      // Trigger immediate fetch to reduce visual delay
+      setIsSearchingStock(true);
+      await Promise.all([fetchData(), fetchStockIntel(selectedStock)]);
+      setIsSearchingStock(false);
     } catch (e) {
       console.error("Failed to toggle data mode", e);
     }
