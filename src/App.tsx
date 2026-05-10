@@ -1705,8 +1705,16 @@ export default function App() {
                                 stockIntel.verdict.bias === 'BULLISH' ? "text-emerald-400" : stockIntel.verdict.bias === 'BEARISH' ? "text-rose-400" : "text-slate-400"
                               )}>{stockIntel.verdict.bias} TRADE</h3>
                            </div>
-                           <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex flex-col items-center">
-                              <span className="text-[10px] font-black text-white">{stockIntel.verdict.score}%</span>
+                           <div className={cn(
+                              "p-3 rounded-xl border flex flex-col items-center",
+                              stockIntel.verdict.score >= 75 ? "bg-emerald-500/10 border-emerald-500/20" :
+                              stockIntel.verdict.score >= 50 ? "bg-amber-500/10 border-amber-500/20" : "bg-rose-500/10 border-rose-500/20"
+                           )}>
+                              <span className={cn(
+                                 "text-[10px] font-black",
+                                 stockIntel.verdict.score >= 75 ? "text-emerald-400" :
+                                 stockIntel.verdict.score >= 50 ? "text-amber-400" : "text-rose-400"
+                              )}>{stockIntel.verdict.score}%</span>
                               <span className="text-[7px] text-slate-500 font-bold uppercase">Confidence</span>
                            </div>
                         </div>

@@ -786,6 +786,7 @@ async function startServer() {
     let isLive = false;
     let rsi = 50;
     let deliveryPercentage = 45;
+    let optionsStats: any = null;
 
     if (kiteInstance && accessToken) {
       try {
@@ -825,22 +826,26 @@ async function startServer() {
 
           // Fetch Options for this stock
           const stockOptions = await getStockOptions(symbol);
+          console.log(`[STOCK-INTEL] Found ${stockOptions.length} total options for ${symbol}`);
 
           if (stockOptions.length > 0) {
             const expiries = Array.from(new Set(stockOptions.map((i: any) => i.expiry))).sort() as string[];
-            const nearestExpiry = expiries[0];
+            const nearestExpiry = expiries.find(e => new Date(e) >= new Date()) || expiries[0];
             const currentExpiryOptions = stockOptions.filter((i: any) => i.expiry === nearestExpiry);
-            const lotSize = currentExpiryOptions[0].lot_size;
+            const lotSize = currentExpiryOptions[0]?.lot_size || 0;
             stockMetadataCache.set(symbol, { token: q.instrument_token, lotSize });
 
             const allStrikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike))).sort((a: any, b: any) => a - b);
-            const strikes = allStrikes
-              .sort((a: any, b: any) => Math.abs(a - price) - Math.abs(b - price))
-              .slice(0, 11); 
             
-            const atmStrike = strikes[0];
+            // Get 11 strikes around current price
+            const strikes = [...allStrikes]
+              .sort((a, b) => Math.abs(a - price) - Math.abs(b - price))
+              .slice(0, 11)
+              .sort((a,b) => a - b);
             
-            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes: ${strikes.length}`);
+            const atmStrike = strikes.find(s => Math.abs(s - price) <= (strikes[1]-strikes[0] || price)) || strikes[0] || price;
+            
+            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes Active: ${strikes.length}/${allStrikes.length}`);
 
             const optionSymbols = [];
             let totalCE_OI = 0;
@@ -853,42 +858,52 @@ async function startServer() {
               if (pe) optionSymbols.push(`NFO:${pe.tradingsymbol}`);
             }
 
-            const optQuotes = await kiteInstance.getQuote(optionSymbols);
-            
-            for (const strike of strikes.sort((a:any, b:any) => a-b)) {
-              const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
-              const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
-              const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
-              const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
+            if (optionSymbols.length > 0) {
+                try {
+                    const optQuotes = await kiteInstance.getQuote(optionSymbols);
+                    console.log(`[STOCK-INTEL] Fetched ${Object.keys(optQuotes).length} quotes for ${symbol}`);
+                    
+                    for (const strike of strikes) {
+                        const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
+                        const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
+                        
+                        const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
+                        const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
 
-              const ce_oi = ceQ?.oi || 0;
-              const pe_oi = peQ?.oi || 0;
-              totalCE_OI += ce_oi;
-              totalPE_OI += pe_oi;
+                        const ce_oi = ceQ?.oi || 0;
+                        const pe_oi = peQ?.oi || 0;
+                        totalCE_OI += ce_oi;
+                        totalPE_OI += pe_oi;
 
-              chain.push({
-                strike,
-                ce_oi,
-                ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
-                pe_oi,
-                pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
-                ce_price: ceQ?.last_price || 0,
-                pe_price: peQ?.last_price || 0,
-                iv: ceQ?.iv || 22
-              });
+                        chain.push({
+                            strike,
+                            ce_oi,
+                            ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
+                            pe_oi,
+                            pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
+                            ce_price: ceQ?.last_price || 0,
+                            pe_price: peQ?.last_price || 0,
+                            iv: ceQ?.iv || 22
+                        });
+                    }
+                } catch (qErr) {
+                    console.error(`[STOCK-INTEL] Quote fetch failed for ${symbol}:`, qErr);
+                }
             }
-
-            // Calculate Option Stats
-            const pcr = totalCE_OI > 0 ? totalPE_OI / totalCE_OI : 1;
-            const maxPainStrike = strikes[Math.floor(strikes.length / 2)]; // Simplified Max Pain approximation
             
-            (stockContext as any).optionsStats = {
-               pcr: Number(pcr.toFixed(2)),
+            // Calculate Option Stats
+            const pcrVal = totalCE_OI > 0 ? totalPE_OI / totalCE_OI : 1;
+            const maxPainVal = strikes[Math.floor(strikes.length / 2)] || price; 
+            
+            optionsStats = {
+               pcr: Number(pcrVal.toFixed(2)),
                totalCallOI: totalCE_OI,
                totalPutOI: totalPE_OI,
-               maxPain: maxPainStrike,
+               maxPain: maxPainVal,
                expiry: nearestExpiry
             };
+          } else {
+             console.warn(`[STOCK-INTEL] No options data found in cache for ${symbol}`);
           }
         }
       } catch (err) {
@@ -923,6 +938,7 @@ async function startServer() {
       price,
       change,
       changePercent,
+      optionsStats,
       indicators: {
         rsi,
         macd: { macd: 1.5, signal: 1.2, histogram: 0.3 },
