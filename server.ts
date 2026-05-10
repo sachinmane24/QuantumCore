@@ -65,6 +65,7 @@ async function loadRiskConfig() {
     const data = await loadPersistentData("system", "risk_config");
     if (data) {
       updateConfig(data);
+      if (accessToken) setDataMode('LIVE');
       console.log("[STORAGE] Risk config loaded from Firestore.");
     }
   } catch (err) {
@@ -138,7 +139,11 @@ async function startServer() {
       if (data) {
         if (data.key) apiKey = data.key;
         if (data.secret) apiSecret = data.secret;
-        if (data.token) accessToken = data.token;
+        if (data.token) {
+          accessToken = data.token;
+          setDataMode('LIVE');
+          console.log("[INIT] Session restored from persistence. Mode set to LIVE.");
+        }
         console.log("[INIT] Kite session loaded.");
         if (apiKey && !kiteInstance) {
           kiteInstance = new KiteConnect({ api_key: apiKey });
@@ -462,6 +467,10 @@ async function startServer() {
       const response = await kiteInstance.generateSession(request_token.toString(), apiSecret);
       accessToken = response.access_token;
       kiteInstance.setAccessToken(accessToken);
+      
+      // Force LIVE data mode once authenticated
+      setDataMode('LIVE');
+      console.log("[AUTH] Session generated successfully. Mode set to LIVE.");
 
       await saveKiteSession({ token: accessToken });
 

@@ -886,15 +886,14 @@ export default function App() {
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Data:</span>
             <div 
               className={cn(
-                "px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all",
-                execution?.dataSource === 'MOCK' 
-                  ? "bg-amber-600/20 text-amber-500 border border-amber-600/30"
-                  : (marketInfo?.isMarketClosed 
-                      ? "bg-blue-600/20 text-blue-400 border border-blue-600/30" 
-                      : "bg-emerald-600/20 text-emerald-500 border border-emerald-600/30")
+                "px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all flex items-center gap-1.5",
+                execution?.dataSource === 'LIVE' 
+                  ? (marketInfo?.isMarketClosed ? "bg-blue-500/10 text-blue-400 border border-blue-500/20" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20")
+                  : "bg-amber-500/10 text-amber-500 border border-amber-500/20"
               )}
             >
-              {(execution?.dataSource === 'LIVE') ? 'LIVE ANALYSIS' : 'MOCK ENGINE'}
+              <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", execution?.dataSource === 'LIVE' ? "bg-emerald-500" : "bg-amber-500")} />
+              <span>{execution?.dataSource === 'LIVE' ? (marketInfo?.isMarketClosed ? 'LIVE ANALYSIS' : 'LIVE ENGINE') : 'MOCK ENGINE'}</span>
             </div>
             <div className="w-px h-4 bg-white/5" />
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Trade:</span>
