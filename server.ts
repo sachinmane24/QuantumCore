@@ -197,20 +197,23 @@ async function startServer() {
       }
       
       const filtered = nfoCache.filter((ins: any) => 
-        (ins.name === symbol || ins.tradingsymbol?.startsWith(symbol)) && 
-        ins.segment === 'NFO-OPT' &&
-        new Date(ins.expiry) >= startOfToday
+        ins.name === symbol && 
+        ins.segment === 'NFO-OPT'
       );
       
-      const ceCount = filtered.filter(f => f.instrument_type === 'CE').length;
-      const peCount = filtered.filter(f => f.instrument_type === 'PE').length;
-
-      console.log(`[STOCK-OPTIONS] Found ${filtered.length} instruments for ${symbol} (${ceCount} CE, ${peCount} PE)`);
-
-      if (filtered.length === 0) {
-        console.warn(`[STOCK-OPTIONS] No options found for ${symbol}. Checked ${nfoCache.length} instruments.`);
+      const futureOptions = filtered.filter((ins: any) => new Date(ins.expiry) >= startOfToday);
+      
+      if (futureOptions.length === 0 && filtered.length > 0) {
+        // Fallback to the latest available if all in past (historical analysis)
+        return filtered.sort((a,b) => new Date(b.expiry).getTime() - new Date(a.expiry).getTime());
       }
-      return filtered;
+
+      const ceCount = futureOptions.filter(f => f.instrument_type === 'CE').length;
+      const peCount = futureOptions.filter(f => f.instrument_type === 'PE').length;
+
+      console.log(`[STOCK-OPTIONS] Found ${futureOptions.length} instruments for ${symbol} (${ceCount} CE, ${peCount} PE)`);
+
+      return futureOptions;
     }
 
     // Background Trading Loop
@@ -830,14 +833,19 @@ async function startServer() {
             const lotSize = currentExpiryOptions[0].lot_size;
             stockMetadataCache.set(symbol, { token: q.instrument_token, lotSize });
 
-            const atmStrike = Math.round(price / 5) * 5; 
-            const strikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike)))
-              .sort((a: any, b: any) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
-              .slice(0, 11); // More strikes for better depth
+            const allStrikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike))).sort((a: any, b: any) => a - b);
+            const strikes = allStrikes
+              .sort((a: any, b: any) => Math.abs(a - price) - Math.abs(b - price))
+              .slice(0, 11); 
             
-            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Strikes Found: ${strikes.length}`);
+            const atmStrike = strikes[0];
+            
+            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes: ${strikes.length}`);
 
             const optionSymbols = [];
+            let totalCE_OI = 0;
+            let totalPE_OI = 0;
+            
             for (const strike of strikes) {
               const ce = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
               const pe = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
@@ -846,23 +854,41 @@ async function startServer() {
             }
 
             const optQuotes = await kiteInstance.getQuote(optionSymbols);
+            
             for (const strike of strikes.sort((a:any, b:any) => a-b)) {
               const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
               const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
               const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
               const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
 
+              const ce_oi = ceQ?.oi || 0;
+              const pe_oi = peQ?.oi || 0;
+              totalCE_OI += ce_oi;
+              totalPE_OI += pe_oi;
+
               chain.push({
                 strike,
-                ce_oi: ceQ?.oi || 0,
-                ce_oi_change: (ceQ?.oi_day_high || 0) - (ceQ?.oi_day_low || 0),
-                pe_oi: peQ?.oi || 0,
-                pe_oi_change: (peQ?.oi_day_high || 0) - (peQ?.oi_day_low || 0),
+                ce_oi,
+                ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
+                pe_oi,
+                pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
                 ce_price: ceQ?.last_price || 0,
                 pe_price: peQ?.last_price || 0,
                 iv: ceQ?.iv || 22
               });
             }
+
+            // Calculate Option Stats
+            const pcr = totalCE_OI > 0 ? totalPE_OI / totalCE_OI : 1;
+            const maxPainStrike = strikes[Math.floor(strikes.length / 2)]; // Simplified Max Pain approximation
+            
+            (stockContext as any).optionsStats = {
+               pcr: Number(pcr.toFixed(2)),
+               totalCallOI: totalCE_OI,
+               totalPutOI: totalPE_OI,
+               maxPain: maxPainStrike,
+               expiry: nearestExpiry
+            };
           }
         }
       } catch (err) {

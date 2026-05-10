@@ -175,7 +175,8 @@ class AIEngine {
           "score": number (0-100),
           "reasoning": "Detailed institutional analysis",
           "sl": number,
-          "target": number
+          "target": number,
+          "strategy": "Final trade strategy (e.g., Buy 1400 CE if price breaks 1410)"
         },
         "institutionalActivity": {
           "oiTrend": "ACCUMULATION" | "DISTRIBUTION" | "SHORT_COVERING" | "LONG_UNWINDING",
@@ -201,9 +202,10 @@ class AIEngine {
                   score: { type: Type.NUMBER },
                   reasoning: { type: Type.STRING },
                   sl: { type: Type.NUMBER },
-                  target: { type: Type.NUMBER }
+                  target: { type: Type.NUMBER },
+                  strategy: { type: Type.STRING }
                 },
-                required: ["bias", "score", "reasoning", "sl", "target"]
+                required: ["bias", "score", "reasoning", "sl", "target", "strategy"]
               },
               institutionalActivity: {
                 type: Type.OBJECT,

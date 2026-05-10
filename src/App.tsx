@@ -1769,22 +1769,32 @@ export default function App() {
                            </div>
                         </div>
                         <div className="terminal-card p-4">
-                           <span className="terminal-label">MACD Signal</span>
-                           <div className="text-lg font-black text-emerald-400">{stockIntel.indicators.macd.histogram.toFixed(2)}</div>
-                           <div className="text-[9px] text-slate-500 font-bold uppercase">Momentum Trend</div>
+                           <span className="terminal-label">OI PCR</span>
+                           <div className="text-lg font-black text-emerald-400">{stockIntel.optionsStats?.pcr || '1.00'}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">Option Sentiment</div>
                         </div>
                         <div className="terminal-card p-4">
-                           <span className="terminal-label">Bollinger Squeeze</span>
-                           <div className="text-lg font-black text-purple-400">
-                              {((stockIntel.indicators.bollinger.upper - stockIntel.indicators.bollinger.lower) / stockIntel.indicators.bollinger.middle * 100).toFixed(1)}%
-                           </div>
-                           <div className="text-[9px] text-slate-500 font-bold uppercase">BB Width Breakdown</div>
+                           <span className="terminal-label">Max Pain</span>
+                           <div className="text-lg font-black text-purple-400">{stockIntel.optionsStats?.maxPain || 'N/A'}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">Ex: {stockIntel.optionsStats?.expiry}</div>
                         </div>
                      </div>
 
+                     {stockIntel.verdict.strategy && (
+                        <div className="terminal-card p-4 border-l-4 border-l-blue-500 bg-blue-500/5">
+                           <div className="flex items-center gap-2 mb-2">
+                              <Target className="w-3 h-3 text-blue-500" />
+                              <span className="text-[10px] font-black text-white uppercase tracking-widest">Quantum Execution Strategy</span>
+                           </div>
+                           <p className="text-xs font-bold text-blue-100">{stockIntel.verdict.strategy}</p>
+                        </div>
+                     )}
+
                      <section className="terminal-card flex-1 flex flex-col overflow-hidden min-h-0">
                         <div className="px-5 py-3 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
-                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Liquid Option Chain (Near Month)</h4>
+                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                               Liquid Option Chain ({stockIntel.optionsStats?.expiry ? `Expiry: ${stockIntel.optionsStats.expiry}` : 'Near Month'})
+                            </h4>
                            <div className="flex gap-4">
                               <div className="flex items-center gap-1.5">
                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />

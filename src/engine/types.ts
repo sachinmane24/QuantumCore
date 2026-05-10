@@ -195,6 +195,13 @@ export interface StockIntel {
   price: number;
   change: number;
   changePercent: number;
+  optionsStats?: {
+    pcr: number;
+    totalCallOI: number;
+    totalPutOI: number;
+    maxPain: number;
+    expiry: string;
+  };
   indicators: {
     rsi: number;
     macd: { macd: number; signal: number; histogram: number };
@@ -207,6 +214,7 @@ export interface StockIntel {
     reasoning: string;
     sl: number;
     target: number;
+    strategy?: string;
   };
   institutionalActivity: {
     oiTrend: string;
