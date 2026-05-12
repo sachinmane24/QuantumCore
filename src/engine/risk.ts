@@ -5,6 +5,7 @@
 
 import { config } from './config.ts';
 import type { Position } from './execution.ts';
+import { StatePersistenceManager } from './state_persistence.ts';
 
 interface RiskStats {
   tradesToday: number;
@@ -52,11 +53,13 @@ class RiskEngine {
 
     this.calculateRiskScore(positions);
     this.checkThresholds();
+    this.saveState();
   }
 
   recordTradeEntry() {
     this.entriesToday++;
     this.checkThresholds();
+    this.saveState();
   }
 
   recordTradeResult(pnl: number) {
@@ -67,6 +70,7 @@ class RiskEngine {
       this.stats.consecutiveLosses = 0;
     }
     this.checkThresholds();
+    this.saveState();
   }
 
   private calculateRiskScore(positions: Position[]) {
@@ -127,6 +131,27 @@ class RiskEngine {
     this.stats.isKillSwitchActive = true;
     this.stats.killReason = reason;
     console.warn(`[RISK ENGINE] KILL SWITCH ACTIVATED: ${reason}`);
+    this.saveState();
+  }
+
+  private async saveState() {
+    const data = {
+      stats: this.stats,
+      entriesToday: this.entriesToday,
+      lastResetDate: this.lastResetDate
+    };
+    await StatePersistenceManager.saveRiskStats(data);
+  }
+
+  public async loadState() {
+    const data = await StatePersistenceManager.loadRiskStats();
+    if (data) {
+      console.log("[RISK] Restoring risk stats from persistence.");
+      this.stats = { ...this.stats, ...data.stats };
+      this.entriesToday = data.entriesToday || 0;
+      this.lastResetDate = data.lastResetDate;
+      this.checkForDailyReset();
+    }
   }
 
   private checkForDailyReset() {
@@ -208,6 +233,7 @@ class RiskEngine {
       isKillSwitchActive: false,
       killReason: null,
     };
+    this.saveState();
   }
 }
 

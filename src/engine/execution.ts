@@ -11,6 +11,8 @@ import { riskEngine } from './risk.ts';
 
 import { intelligenceEngine } from './intelligence.ts';
 import type { TradeParams } from './intelligence.ts';
+import { StatePersistenceManager } from './state_persistence.ts';
+import { ExecutionState } from './types.ts';
 
 export interface Position {
   strike: number;
@@ -125,12 +127,34 @@ class ExecutionEngine {
     this.currentIsExpiryDay = expiryStatus.isExpiryDay;
     this.currentIsMonthlyExpiry = expiryStatus.isMonthlyExpiry;
 
-    const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE') => {
+    // Expiry Day Safety: No new entries after threshold (e.g., 2:30 PM) to avoid zero-gamma-risk
+    if (this.currentIsExpiryDay && !isManual) {
+      const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+      const hours = istTime.getUTCHours();
+      const minutes = istTime.getUTCMinutes();
+      const [hLimit, mLimit] = config.EXPIRY_NO_TRADE_TIME.split(':').map(Number);
+      if (hours > hLimit || (hours === hLimit && minutes >= mLimit)) {
+        const reason = `Expiry No-Trade Zone (after ${config.EXPIRY_NO_TRADE_TIME})`;
+        this.lastTradeSuppression = { reason, timestamp: Date.now() };
+        console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
+        return;
+      }
+    }
+
+    const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE', minPremium: number = 0) => {
       const chain = marketEngine.getOptionChain();
       if (chain.length === 0) return Math.round(spot / 50) * 50;
-      let closest = chain[0];
+      
+      // Filter by min premium if selling (heuristic)
+      const validOptions = minPremium > 0 
+        ? chain.filter(opt => (type === 'CE' ? opt.ce_price : opt.pe_price) >= minPremium)
+        : chain;
+      
+      const sourceChain = validOptions.length > 0 ? validOptions : chain;
+      
+      let closest = sourceChain[0];
       let minDiff = Infinity;
-      chain.forEach(opt => {
+      sourceChain.forEach(opt => {
         let delta = (type === 'CE' ? opt.delta : (opt as any).pe_delta) || 0.5;
         if (type === 'PE' && delta < 0) delta = Math.abs(delta);
         const diff = Math.abs(delta - targetDelta);
@@ -163,9 +187,11 @@ class ExecutionEngine {
       case 'BULL_CALL_SPREAD': {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike + 150;
+        const sellPrice = getLTP(sellStrike, 'CE');
+        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
         newPositions.push(
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
-          { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' }
+          { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }
         );
         break;
       }
@@ -173,15 +199,17 @@ class ExecutionEngine {
       case 'BEAR_PUT_SPREAD': {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike - 150;
+        const sellPrice = getLTP(sellStrike, 'PE');
+        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
         newPositions.push(
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
-          { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' }
+          { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }
         );
         break;
       }
 
       case 'BULL_PUT_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.40, 'PE');
+        const sellStrike = getStrikeByDelta(0.40, 'PE', config.MIN_CREDIT_PREMIUM);
         const buyStrike = sellStrike - 100;
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -191,7 +219,7 @@ class ExecutionEngine {
       }
 
       case 'BEAR_CALL_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.40, 'CE');
+        const sellStrike = getStrikeByDelta(0.40, 'CE', config.MIN_CREDIT_PREMIUM);
         const buyStrike = sellStrike + 100;
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -201,9 +229,9 @@ class ExecutionEngine {
       }
 
       case 'IRON_CONDOR': {
-        const sellPE = getStrikeByDelta(0.15, 'PE');
+        const sellPE = getStrikeByDelta(0.15, 'PE', config.MIN_CREDIT_PREMIUM);
         const buyPE = sellPE - 100;
-        const sellCE = getStrikeByDelta(0.15, 'CE');
+        const sellCE = getStrikeByDelta(0.15, 'CE', config.MIN_CREDIT_PREMIUM);
         const buyCE = sellCE + 100;
         newPositions.push(
           { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -238,16 +266,20 @@ class ExecutionEngine {
         if (bias === 'BULLISH') {
           const buyStrike = atmStrike;
           const sellStrike = atmStrike + 200;
+          const sellPrice = getLTP(sellStrike, 'CE');
+          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
           newPositions.push(
             { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
-            { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE * 2, side: 'SELL' }
+            { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE * 2, side: 'SELL' }
           );
         } else {
           const buyStrike = atmStrike;
           const sellStrike = atmStrike - 200;
+          const sellPrice = getLTP(sellStrike, 'PE');
+          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
           newPositions.push(
             { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
-            { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE * 2, side: 'SELL' }
+            { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE * 2, side: 'SELL' }
           );
         }
         break;
@@ -370,6 +402,7 @@ class ExecutionEngine {
 
     riskEngine.recordTradeEntry();
     this.lastTradeSuppression = null;
+    await this.saveState();
   }
 
   async updatePnL() {
@@ -441,6 +474,15 @@ class ExecutionEngine {
       if (this.pnl > 0 && this.activePositions.length > 0) {
         console.log("[EXECUTION] Monthly Expiry Afternoon Shift: Securing profits before roll-over volatility.");
         await this.exitAll("Monthly Expiry 1:30 PM Protective Exit");
+        return;
+      }
+    }
+
+    // 2:45 PM Shift on Weekly Expiry - Standard expiry liquidity drain
+    if (expiryStatus.isWeekly && totalMin >= 885) {
+      if (this.activePositions.length > 0) {
+        console.log("[EXECUTION] Weekly Expiry 2:45 PM: Closing positions to avoid settlement spikes.");
+        await this.exitAll("Weekly Expiry 2:45 PM Protective Exit");
         return;
       }
     }
@@ -759,6 +801,62 @@ class ExecutionEngine {
     this.currentTradeBias = null;
     this.currentEntryTime = 0;
     this.currentTradeParams = null;
+    await this.saveState();
+  }
+
+  public async saveState() {
+    const state: any = {
+      activePositions: this.activePositions,
+      pnl: this.pnl,
+      peakPnL: this.peakPnL,
+      currentTradeParams: this.currentTradeParams,
+      currentActiveSL: this.currentActiveSL,
+      rollsToday: this.rollsToday,
+      lastTradeEndTime: this.lastTradeEndTime,
+      lastTradeScore: this.lastTradeScore,
+      currentTradeBias: this.currentTradeBias,
+      currentEntryTime: this.currentEntryTime,
+      currentSpotAtEntry: this.currentSpotAtEntry,
+      currentStrikeAtEntry: this.currentStrikeAtEntry,
+      currentVixAtEntry: this.currentVixAtEntry,
+      currentIsExpiryDay: this.currentIsExpiryDay,
+      currentIsMonthlyExpiry: this.currentIsMonthlyExpiry,
+      currentEntryNetDelta: this.currentEntryNetDelta,
+      currentEntryNetGamma: this.currentEntryNetGamma,
+      currentIndicatorsAtEntry: this.currentIndicatorsAtEntry,
+      hedgeLogs: this.hedgeLogs,
+    };
+    await StatePersistenceManager.syncState(state as any);
+  }
+
+  public async loadState() {
+    const data = await StatePersistenceManager.loadState();
+    if (data) {
+      console.log("[EXECUTION] Restoring engine state from persistence.");
+      const s = data as any;
+      this.activePositions = s.activePositions || [];
+      this.pnl = s.pnl || 0;
+      this.peakPnL = s.peakPnL || 0;
+      this.currentTradeParams = s.currentTradeParams || null;
+      this.currentActiveSL = s.currentActiveSL || 0;
+      this.rollsToday = s.rollsToday || 0;
+      this.lastTradeEndTime = s.lastTradeEndTime || 0;
+      this.lastTradeScore = s.lastTradeScore || null;
+      this.currentTradeBias = s.currentTradeBias || null;
+      this.currentEntryTime = s.currentEntryTime || 0;
+      this.currentSpotAtEntry = s.currentSpotAtEntry || 0;
+      this.currentStrikeAtEntry = s.currentStrikeAtEntry || 0;
+      this.currentVixAtEntry = s.currentVixAtEntry || 0;
+      this.currentIsExpiryDay = s.currentIsExpiryDay || false;
+      this.currentIsMonthlyExpiry = s.currentIsMonthlyExpiry || false;
+      this.currentEntryNetDelta = s.currentEntryNetDelta || 0;
+      this.currentEntryNetGamma = s.currentEntryNetGamma || 0;
+      this.currentIndicatorsAtEntry = s.currentIndicatorsAtEntry || null;
+      this.hedgeLogs = s.hedgeLogs || [];
+      
+      this.calculatePortfolioGreeks();
+      this.calculateCapitalDeployed();
+    }
   }
 
   getState() {

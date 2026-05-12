@@ -150,8 +150,14 @@ class IntelligenceEngine {
   }
 
   private calculateATR(): number {
-    // In a real data scenario, this uses historical candles.
-    // In mock, we derive it from VIX expectancy
+    // Attempt to use real market swings first
+    const swings = marketEngine.getSwingLevels(50);
+    const swingRange = swings.high - swings.low;
+    if (swingRange > 0 && swingRange < 500) {
+      return swingRange / 4; // ATR approx from recent channel
+    }
+
+    // Fallback: uses historical candles / VIX expectancy
     const vix = marketEngine.getVix();
     const spot = marketEngine.getSpotPrice();
     // Daily range expectancy: Spot * (VIX / 100) / sqrt(252)
@@ -168,14 +174,16 @@ class IntelligenceEngine {
     peakPnL: number,
     params: TradeParams
   ): number {
-    if (currentPnL < params.trailingSlTrigger) return -params.stopLossRupees;
+    // Protective: Move to Cost plus small buffer once 35% target hit
+    if (currentPnL >= params.targetRupees * 0.35) {
+      const breakEven = Math.max(0, currentPnL * 0.2); // Lock at least 20% of current gain
+      const baseSL = -params.stopLossRupees;
+      return Math.max(baseSL, breakEven);
+    }
 
-    // Implementation of aggressive trailing:
-    // Move SL to Cost once 50% target hit
-    // Then trail at 20% of current profit
-    if (currentPnL >= params.targetRupees * 0.5) {
-      const lockAmount = Math.max(0, currentPnL - (params.targetRupees * 0.2));
-      return lockAmount;
+    // Aggressive: If 70% target reached, lock half of target
+    if (currentPnL >= params.targetRupees * 0.70) {
+      return params.targetRupees * 0.40;
     }
 
     return -params.stopLossRupees;

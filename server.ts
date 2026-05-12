@@ -13,6 +13,7 @@ import { KiteConnect } from "kiteconnect";
 import { marketEngine } from "./src/engine/market.ts";
 import { strategyEngine } from "./src/engine/strategy.ts";
 import { executionEngine } from "./src/engine/execution.ts";
+import { riskEngine } from "./src/engine/risk.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
 import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
@@ -1201,6 +1202,8 @@ async function startServer() {
       }
       loadRiskConfig();
       loadMarketStructure();
+      executionEngine.loadState().catch(e => console.error("Execution load state failed", e));
+      riskEngine.loadState().catch(e => console.error("Risk load state failed", e));
       marketLoop();
     }).catch(err => {
       console.error("[INIT] Background load failed:", err);
