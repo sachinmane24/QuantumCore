@@ -45,14 +45,23 @@ class ExecutionEngine {
   private netTheta: number = 0;
   private netVega: number = 0;
   private capitalDeployed: number = 0;
+  private netPremium: number = 0;
   private maxRisk: number = 0;
   private maxReward: number = 0;
   private lastHedgeTime: number = 0;
+  private lastTradeEndTime: number = 0;
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
 
   async executeTrade(bias: 'BULLISH' | 'BEARISH') {
     if (this.activePositions.length > 0) return;
+
+    // Entry Cooldown: 15 minute break between trades to prevent over-trading/churning
+    const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
+    if (timeSinceLastTrade < 900) {
+      console.log(`[EXECUTION] Entry Suppressed: Cooldown active (${Math.round((900 - timeSinceLastTrade)/60)}m left).`);
+      return;
+    }
 
     const spot = marketEngine.getSpotPrice();
     const score = strategyEngine.calculateScore();
@@ -265,6 +274,32 @@ class ExecutionEngine {
       }
     }
 
+    // Risk/Reward Validation: Enforce 1:2 Minimum RR for Spreads
+    if (newPositions.length >= 2) {
+      const sellLeg = newPositions.find(p => p.side === 'SELL');
+      const buyLeg = newPositions.find(p => p.side === 'BUY');
+      
+      if (sellLeg && buyLeg && sellLeg.type === buyLeg.type) {
+        const width = Math.abs(buyLeg.strike - sellLeg.strike);
+        const netCredit = Math.abs(sellLeg.entryPrice - buyLeg.entryPrice);
+        const risk = width - netCredit;
+        const reward = netCredit;
+        const rr = reward > 0 ? risk / reward : 100;
+        
+        // If RR is worse than 1:2 (risk is more than double the reward), reject
+        if (rr > 2.05) { 
+          console.warn(`[EXECUTION] Entry Aborted: Poor Risk/Reward Ratio (1:${(1/rr).toFixed(2)}). At least 1:2 required.`);
+          await tradeLogger.logAudit({
+            timestamp: new Date().toISOString(),
+            type: 'TRADE_SKIP',
+            message: `Poor RR (1:${(1/rr).toFixed(2)}) for ${score.strategyType}. At least 1:2 required.`,
+            details: { risk, reward, rr, width }
+          });
+          return;
+        }
+      }
+    }
+
     this.activePositions = newPositions;
     console.log(`[EXECUTION] AI AUTO-DECIDE: Structure [${score.strategyType}] selected based on VIX ${this.currentVixAtEntry.toFixed(2)} and Score ${score.total}.`);
     
@@ -437,19 +472,35 @@ class ExecutionEngine {
       return;
     }
 
+    const buyLegs = this.activePositions.filter(p => p.side === 'BUY');
+    const sellLegs = this.activePositions.filter(p => p.side === 'SELL');
+    
+    // Total Units 
+    const totalQty = Math.max(...this.activePositions.map(p => p.qty)) || config.LOT_SIZE;
+    
     const netPremium = this.activePositions.reduce((sum, p) => {
       const val = p.entryPrice * p.qty;
       return sum + (p.side === 'BUY' ? val : -val);
     }, 0);
+    this.netPremium = netPremium;
 
-    // Capital Deployed: For buying it's premium paid. 
-    // For selling, user requested "premium cost" so we show net premium if it's a cost (debit).
-    // If it's a credit, we show 0 as "Premium Capital" or we show the absolute credit?
-    // Let's show the net cash impact as requested.
-    this.capitalDeployed = netPremium;
+    // Capital Deployed (Margin Requirement)
+    if (sellLegs.length > 0) {
+      // Option Selling requires Margin
+      const isHedged = buyLegs.length > 0;
+      
+      // Based on Kotak Neo / Reference: 
+      // Hedged Spread Margin ~ ₹415 per unit (approx ₹10.3k for 25 qty lot, or ₹31k for 75 qty)
+      // Naked Sell Margin ~ ₹4500 per unit (approx ₹1.1L for 25 qty lot)
+      const marginPerUnit = isHedged ? 415 : 4500;
+      this.capitalDeployed = marginPerUnit * totalQty;
+    } else {
+      // Option Buying: Capital is the premium paid
+      this.capitalDeployed = buyLegs.reduce((sum, p) => sum + (p.entryPrice * p.qty), 0);
+    }
 
     // Calculate Max Risk/Reward for the spread
-    if (this.activePositions.length === 2 && this.activePositions[0].type === this.activePositions[1].type && this.activePositions[0].side !== this.activePositions[1].side) {
+    if (this.activePositions.length >= 2) {
       // It's a spread
       const sellLeg = this.activePositions.find(p => p.side === 'SELL')!;
       const buyLeg = this.activePositions.find(p => p.side === 'BUY')!;
@@ -655,10 +706,12 @@ class ExecutionEngine {
     }
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);
     this.activePositions = [];
+    this.lastTradeEndTime = Date.now();
     this.pnl = 0; 
     this.capitalDeployed = 0;
     this.currentTradeBias = null;
     this.currentEntryTime = 0;
+    this.currentTradeParams = null;
   }
 
   getState() {
@@ -670,6 +723,7 @@ class ExecutionEngine {
       activeSL: this.currentActiveSL,
       rollsToday: this.rollsToday,
       capitalDeployed: Math.round(this.capitalDeployed),
+      netPremium: Math.round(this.netPremium),
       maxRisk: this.maxRisk,
       maxReward: this.maxReward,
       netDelta: Number(this.netDelta.toFixed(3)),

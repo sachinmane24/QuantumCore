@@ -1270,7 +1270,7 @@ export default function App() {
                           PNL: ₹{execution?.pnl}
                         </div>
                         <div className="px-3 py-1 rounded text-[10px] font-black text-blue-400 bg-blue-400/10 ring-1 ring-blue-500/20 uppercase tracking-tighter">
-                          {execution?.capitalDeployed >= 0 ? 'Debit' : 'Credit'}: ₹{Math.abs(execution?.capitalDeployed || 0).toLocaleString()}
+                          MARGIN: ₹{execution?.capitalDeployed?.toLocaleString() || 0}
                         </div>
                       </div>
                    </div>
@@ -1675,33 +1675,37 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="bg-slate-900/60 backdrop-blur border border-white/5 p-5 rounded-xl space-y-4 my-8">
-                  <div className="flex justify-between items-center text-[10px]">
-                     <span className="terminal-label !mb-0">Win Prob.</span>
-                     <span className="terminal-value text-emerald-400">
-                        {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
-                     </span>
-                  </div>
-                  <div className="flex justify-between items-center text-[10px]">
-                     <span className="terminal-label !mb-0">{strategy?.score.mode === 'MOMENTUM_SNIPER' ? 'Est. Premium' : 'Est. Margin'}</span>
-                     <span className="terminal-value text-white">
-                        {strategy?.score?.mode === 'MOMENTUM_SNIPER' 
-                          ? `₹${(Math.round((market?.chain?.[0]?.ce_price || 100) * 25))?.toLocaleString() || '0'}`
-                          : (strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON'))
-                            ? `₹${(Math.round((market?.chain?.[0]?.ce_price || 100) * 0.15 * 65)).toLocaleString()} (Spread Premium)`
-                            : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score?.total || 50) - 55) * 0.02)))?.toFixed(2)}L`
-                        }
-                     </span>
-                  </div>
-                  {(strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON')) && (
-                    <div className="flex justify-between items-center text-[10px] pt-1 border-t border-white/5 mt-1">
-                      <span className="terminal-label !mb-0 text-amber-400">Target Yield</span>
-                      <span className="terminal-value text-amber-400">
-                        {strategy?.score.mode === 'INST_SPREAD' ? '0.8% - 1.5% / Day' : '15% - 40% / Scalp'}
+                  <div className="bg-slate-900/60 backdrop-blur border border-white/5 p-5 rounded-xl space-y-4 my-8">
+                   <div className="flex justify-between items-center text-[10px]">
+                      <span className="terminal-label !mb-0">Win Prob. (Edge)</span>
+                      <span className="terminal-value text-emerald-400">
+                         {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
                       </span>
-                    </div>
-                  )}
-                </div>
+                   </div>
+                   <div className="flex justify-between items-center text-[10px]">
+                      <span className="terminal-label !mb-0">Exp. Value (EV)</span>
+                      <span className="terminal-value text-blue-400">
+                         +₹{Math.round((appConfig?.TARGET_RUPEES || 4000) * 0.6 - (appConfig?.SL_RUPEES || 2000) * 0.4)} / Trade
+                      </span>
+                   </div>
+                   <div className="flex justify-between items-center text-[10px]">
+                      <span className="terminal-label !mb-0">Required Margin</span>
+                      <span className="terminal-value text-white">
+                         ₹{execution?.capitalDeployed > 0 ? execution.capitalDeployed.toLocaleString() : 
+                           (strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON'))
+                             ? (415 * (appConfig?.LOT_SIZE || 25)).toLocaleString()
+                             : '1.15L+'}
+                      </span>
+                   </div>
+                   {(strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON')) && (
+                     <div className="flex justify-between items-center text-[10px] pt-1 border-t border-white/5 mt-1">
+                       <span className="terminal-label !mb-0 text-amber-400">Management Bias</span>
+                       <span className="terminal-value text-amber-400">
+                         {strategy?.score.bias === 'NEUTRAL' ? 'Gamma Scalp' : 'Theta Harvest'}
+                       </span>
+                     </div>
+                   )}
+                 </div>
 
                 <button 
                   onClick={() => handleExecute(strategy?.score.bias === 'BULLISH' ? 'BULLISH' : 'BEARISH')}
@@ -2148,11 +2152,9 @@ export default function App() {
                              <span className="text-slate-500 font-mono">
                                 {Math.round((((execution?.risk as any)?.entriesToday || 0) / (execution?.risk?.limits.maxTrades || 1)) * 100)}% Used
                              </span>
-                          </div>
-                       </div>
                         <div className="terminal-card p-4 space-y-4 border-blue-500/20 bg-blue-500/[0.02]">
                            <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-blue-400">
-                              <span>Option Premium Value</span>
+                              <span>Required Margin (Capital)</span>
                               <span className="text-slate-500">₹{(appConfig?.CAPITAL_BASE || 1000000).toLocaleString()} Base</span>
                            </div>
                            <div className="grid grid-cols-2 gap-4">
@@ -2165,13 +2167,19 @@ export default function App() {
                                  <div className="text-xs font-black text-rose-400">₹{execution?.maxRisk?.toLocaleString() || '--'}</div>
                               </div>
                            </div>
-                           <div className="flex justify-between text-[10px] items-center pt-2 border-t border-white/5">
-                              <span className="font-black text-blue-400 uppercase">
-                                 Net Premium: ₹{Math.abs(execution?.capitalDeployed || 0).toLocaleString()} {execution?.capitalDeployed >= 0 ? '(DR)' : '(CR)'}
-                              </span>
-                              <span className="text-slate-500 font-mono">
-                                 RR 1:{(execution?.maxRisk && execution?.maxReward) ? (execution.maxRisk / execution.maxReward).toFixed(1) : '--'}
-                              </span>
+                           <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                              <div className="flex justify-between text-[10px] items-center">
+                                 <span className="font-black text-white uppercase">Margin Requirement</span>
+                                 <span className="text-white font-mono">₹{execution?.capitalDeployed?.toLocaleString() || 0}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px] items-center">
+                                 <span className="font-black text-blue-400 uppercase">Net Premium</span>
+                                 <span className="text-blue-400 font-mono">
+                                    ₹{Math.abs(execution?.netPremium || 0).toLocaleString()} {execution?.netPremium >= 0 ? '(DR)' : '(CR)'}
+                                 </span>
+                              </div>
+                           </div>
+                        </div>
                            </div>
                         </div>
                     </div>

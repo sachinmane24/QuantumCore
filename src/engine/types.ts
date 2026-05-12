@@ -135,6 +135,7 @@ export interface ExecutionState {
   pnl: number;
   rollsToday: number;
   capitalDeployed: number;
+  netPremium: number;
   maxRisk: number;
   maxReward: number;
   netDelta: number;

@@ -56,7 +56,7 @@ export const config: Config = {
   TARGET_RUPEES: 4000,
   MAX_ROLLS: 2,
   GAMMA_THRESHOLD: 0.05,
-  DELTA_TOLERANCE: 0.5,
+  DELTA_TOLERANCE: 0.8,
   
   // Risk Defaults
   CAPITAL_BASE: 1000000,
