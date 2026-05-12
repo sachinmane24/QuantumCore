@@ -265,16 +265,18 @@ export default function App() {
     { name: 'May 24', value: 124570 },
   ];
 
+  const strategyRef = React.useRef<StrategyData | null>(null);
+
   // Data Fetching
   const fetchData = useCallback(async (type: 'fast' | 'slow' = 'fast') => {
     if (!isLoggedIn) return;
     try {
       const fastEndpoints = [
         '/api/market-data',
-        '/api/execution-state'
+        '/api/execution-state',
+        '/api/strategy-data'
       ];
       const slowEndpoints = [
-        '/api/strategy-data',
         '/api/trade-logs',
         '/api/market-info'
       ];
@@ -297,16 +299,20 @@ export default function App() {
       }));
       
       if (type === 'fast') {
-        const [marketData, executionData] = results;
+        const [marketData, executionData, strategyData] = results;
         if (marketData) setMarket(marketData);
         if (executionData) setExecution(executionData);
+        if (strategyData) {
+          setStrategy(strategyData);
+          strategyRef.current = strategyData;
+        }
 
         if (marketData && executionData) {
           setHistory(prev => {
             const newPoint: HistoryPoint = {
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
               pnl: executionData.pnl || 0,
-              score: strategy?.score.total || 0,
+              score: strategyData?.score.total || strategyRef.current?.score.total || 0,
               vix: marketData.vix || 0,
               spot: marketData.spot || 0,
               rsi: marketData.indicators?.rsi || null,
@@ -322,8 +328,7 @@ export default function App() {
           });
         }
       } else {
-        const [strategyData, tradeLogsData, marketInfoData] = results;
-        if (strategyData) setStrategy(strategyData);
+        const [tradeLogsData, marketInfoData] = results;
         if (tradeLogsData) setTradeLogs(tradeLogsData);
         if (marketInfoData) setMarketInfo(marketInfoData);
       }
@@ -338,7 +343,7 @@ export default function App() {
     } catch (err) {
       console.error("Fetch Data Critical Error:", err);
     }
-  }, [isLoggedIn, appConfig, strategy]);
+  }, [isLoggedIn, appConfig]);
 
   // Data Fetching Intervals
   useEffect(() => {
@@ -348,10 +353,10 @@ export default function App() {
     fetchData('fast');
     fetchData('slow');
 
-    // Fast polling: 2s (improved from 5s)
-    const fastInterval = setInterval(() => fetchData('fast'), 2000);
-    // Slow polling: 30s
-    const slowInterval = setInterval(() => fetchData('slow'), 30000);
+    // Fast polling: 1.5s (optimized for responsiveness)
+    const fastInterval = setInterval(() => fetchData('fast'), 1500);
+    // Slow polling: 15s (improved from 30s)
+    const slowInterval = setInterval(() => fetchData('slow'), 15000);
 
     return () => {
       clearInterval(fastInterval);
@@ -795,23 +800,36 @@ export default function App() {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                  <span className="text-slate-500">SYNC</span>
-                 <div className="flex items-center gap-1">
-                    <div className={cn(
-                      "w-1.5 h-1.5 rounded-full transition-all duration-300",
-                      loading ? "bg-slate-700" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
-                    )} />
-                    <span className="text-white font-mono">
-                      {lastSync ? (Math.floor((new Date().getTime() - lastSync.getTime()) / 1000) === 0 ? 'JWT' : `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s`) : '---'}
+                 <div className="flex items-center gap-1 group bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                    <motion.div 
+                      key={lastSync?.getTime()}
+                      initial={{ scale: 2, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className={cn(
+                        "w-1.5 h-1.5 rounded-full transition-all duration-300",
+                        loading ? "bg-slate-700" : "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]"
+                      )} 
+                    />
+                    <span className={cn(
+                      "text-[8px] font-mono transition-colors",
+                      lastSync && (new Date().getTime() - lastSync.getTime() < 3000) ? "text-emerald-400" : "text-amber-400/50"
+                    )}>
+                      {lastSync ? `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s` : 'OFFLINE'}
                     </span>
                  </div>
               </div>
               <div className="hidden md:flex gap-10">
                  <div className="flex items-center gap-2">
                   <span className="text-slate-500">ATM Straddle Premium</span>
-                  <span className="text-emerald-400">
+                  <motion.span 
+                    key={market?.spot}
+                    initial={{ opacity: 0.5 }}
+                    animate={{ opacity: 1 }}
+                    className="text-emerald-400"
+                  >
                     ₹{((market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
                        (market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0)).toFixed(1)}
-                  </span>
+                  </motion.span>
                 </div>
               </div>
             </div>
