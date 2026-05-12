@@ -104,14 +104,38 @@ class MarketEngine {
     const ema12 = computeEMA(prices, 12);
     const ema26 = computeEMA(prices, 26);
     const macdValue = ema12 - ema26;
-    // For Signal, we'd ideally need history of MACD values, but for now we approximate or use last few.
-    // Simplifying: Histogram as proxy if we don't have MACD history
     
     return {
       rsi: computeRSI(prices),
       macd: { macd: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
       bollinger: computeBBands(prices)
     };
+  }
+
+  // Black-Scholes Delta Approximation
+  public calculateDelta(spot: number, strike: number, type: 'CE' | 'PE', iv?: number): number {
+    const sigma = (iv || 15) / 100;
+    const t = 1/252; // Extreme approx for 1 day / 0 DTE
+    const r = 0.07;
+    
+    const d1 = (Math.log(spot / strike) + (r + sigma * sigma / 2) * t) / (sigma * Math.sqrt(t));
+    
+    // Normal distribution approx
+    const n_d1 = (x: number) => {
+      const b1 = 0.319381530;
+      const b2 = -0.356563782;
+      const b3 = 1.781477937;
+      const b4 = -1.821255978;
+      const b5 = 1.330274429;
+      const p = 0.2316419;
+      const c = 0.39894228;
+      const t = 1.0 / (1.0 + p * Math.abs(x));
+      const val = 1.0 - c * Math.exp(-x * x / 2.0) * t * (t * (t * (t * (t * b5 + b4) + b3) + b2) + b1);
+      return x >= 0 ? val : 1 - val;
+    };
+
+    if (type === 'CE') return n_d1(d1);
+    return n_d1(d1) - 1;
   }
 
   constructor() {

@@ -409,16 +409,24 @@ async function startServer() {
               const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
               
               if (ceQuote || peQuote) {
+                const cePrice = ceQuote?.last_price || 0;
+                const pePrice = peQuote?.last_price || 0;
+                const ceIv = ceQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random());
+                const peIv = peQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random());
+
                 chainData.push({
                   strike,
                   ce_oi: ceQuote?.oi || 0,
                   ce_oi_change: ((ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0)) || 0,
                   pe_oi: peQuote?.oi || 0,
                   pe_oi_change: ((peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0)) || 0,
-                  ce_price: ceQuote?.last_price || 0,
-                  pe_price: peQuote?.last_price || 0,
-                  iv: ceQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random()),
-                  delta: ceQuote?.delta || 0.5,
+                  ce_price: cePrice,
+                  pe_price: pePrice,
+                  ce_iv: ceIv,
+                  pe_iv: peIv,
+                  iv: (ceIv + peIv) / 2,
+                  delta: ceQuote?.delta || marketEngine.calculateDelta(spot, strike, 'CE', ceIv),
+                  pe_delta: peQuote?.delta || marketEngine.calculateDelta(spot, strike, 'PE', peIv),
                 });
               }
             }
@@ -430,7 +438,7 @@ async function startServer() {
             }
 
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
-               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}`);
+               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}`);
             }
           }
         } catch (err: any) {

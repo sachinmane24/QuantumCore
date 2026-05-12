@@ -42,6 +42,10 @@ class ExecutionEngine {
   private currentIndicatorsAtEntry: any = null;
   private netDelta: number = 0;
   private netGamma: number = 0;
+  private netTheta: number = 0;
+  private netVega: number = 0;
+  private capitalDeployed: number = 0;
+  private lastHedgeTime: number = 0;
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
 
@@ -96,7 +100,7 @@ class ExecutionEngine {
       let closest = chain[0];
       let minDiff = Infinity;
       chain.forEach(opt => {
-        let delta = opt.delta || 0.5;
+        let delta = (type === 'CE' ? opt.delta : (opt as any).pe_delta) || 0.5;
         if (type === 'PE' && delta < 0) delta = Math.abs(delta);
         const diff = Math.abs(delta - targetDelta);
         if (diff < minDiff) {
@@ -275,6 +279,7 @@ class ExecutionEngine {
     });
 
     this.calculatePortfolioGreeks();
+    this.calculateCapitalDeployed();
     this.currentEntryNetDelta = this.netDelta;
     this.currentEntryNetGamma = this.netGamma;
 
@@ -318,6 +323,9 @@ class ExecutionEngine {
 
     // Calculate Portfolio Greeks
     this.calculatePortfolioGreeks();
+    
+    // Update Capital Deployed (Margin/Premium)
+    this.calculateCapitalDeployed();
 
     // Check Rolling 
     await this.checkRolling();
@@ -376,8 +384,11 @@ class ExecutionEngine {
 
   private calculatePortfolioGreeks() {
     const chain = marketEngine.getOptionChain();
+    const vix = marketEngine.getVix();
     let d = 0;
     let g = 0;
+    let t = 0;
+    let v = 0;
 
     this.activePositions.forEach(pos => {
       if (pos.type === 'FUT') {
@@ -387,21 +398,55 @@ class ExecutionEngine {
 
       const opt = chain.find(o => o.strike === pos.strike);
       if (opt) {
+        const multiplier = pos.side === 'BUY' ? 1 : -1;
+        const units = pos.qty / config.LOT_SIZE;
+
         // Delta logic: CE Delta (0 to 1), PE Delta (-1 to 0)
         let delta = opt.delta || 0.5;
         if (pos.type === 'PE' && delta > 0) delta = delta - 1; 
         
         const gamma = opt.gamma || 0.01;
-        const multiplier = pos.side === 'BUY' ? 1 : -1;
-        const units = pos.qty / config.LOT_SIZE;
+        
+        // Approximate Theta and Vega if not in chain data
+        // For Nifty: Theta is approx -0.5 to -2% of premium per day
+        const ltp = pos.type === 'CE' ? opt.ce_price : opt.pe_price;
+        const iv = opt.iv || vix;
+        const theta = opt.theta || -((ltp * (iv/100) * 0.5) / Math.sqrt(252));
+        const vega = opt.vega || (ltp * 0.05);
 
         d += delta * multiplier * units;
         g += gamma * multiplier * units;
+        t += theta * multiplier * units;
+        v += vega * multiplier * units;
       }
     });
 
     this.netDelta = d;
     this.netGamma = g;
+    this.netTheta = t;
+    this.netVega = v;
+  }
+
+  private calculateCapitalDeployed() {
+    if (this.activePositions.length === 0) {
+      this.capitalDeployed = 0;
+      return;
+    }
+
+    const buyLegs = this.activePositions.filter(p => p.side === 'BUY');
+    const sellLegs = this.activePositions.filter(p => p.side === 'SELL');
+    
+    const primaryQty = this.activePositions[0]?.qty || config.LOT_SIZE;
+    const lots = primaryQty / config.LOT_SIZE;
+
+    if (sellLegs.length > 0) {
+      // Option Selling / Spreads Margin Heuristic
+      const isHedged = buyLegs.length > 0;
+      this.capitalDeployed = (isHedged ? 38000 : 115000) * lots;
+    } else {
+      // Option Buying: Real cost calculation
+      this.capitalDeployed = buyLegs.reduce((sum, p) => sum + (p.entryPrice * p.qty), 0);
+    }
   }
 
   private async checkRolling() {
@@ -430,6 +475,15 @@ class ExecutionEngine {
   private async checkGammaScalp() {
     if (this.activePositions.length === 0) return;
     
+    const now = Date.now();
+    const timeSinceLastHedge = (now - this.lastHedgeTime) / 1000;
+    
+    // Cooldown: Don't hedge more than once every 5 minutes unless delta is extreme (> 1.5)
+    // This allows the trade to breathe and follow path dependency.
+    if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) {
+       return;
+    }
+
     // If net delta exceeds tolerance, we need to scalp/hedge
     if (Math.abs(this.netDelta) > config.DELTA_TOLERANCE) {
       const spot = marketEngine.getSpotPrice();
@@ -438,14 +492,18 @@ class ExecutionEngine {
       const hedgeStrike = Math.round((spot + hedgeBias) / 50) * 50;
       
       const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; 
-      const hedgeQty = Math.round(Math.abs(this.netDelta) / 0.5) * config.LOT_SIZE;
+      // Use floor to under-hedge slightly, maintaining directional edge
+      const hedgeQty = Math.max(1, Math.floor(Math.abs(this.netDelta) / 0.5)) * config.LOT_SIZE;
       
       if (hedgeQty > 0) {
-        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance. Hedging ${hedgeQty} ${hedgeType} at ${hedgeStrike}...`);
+        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance (${config.DELTA_TOLERANCE}). Hedging ${hedgeQty} ${hedgeType} at ${hedgeStrike}...`);
         
         const chain = marketEngine.getOptionChain();
         const opt = chain.find(o => o.strike === hedgeStrike);
         const price = opt ? (hedgeType === 'CE' ? opt.ce_price : opt.pe_price) : 100;
+
+        // Update state
+        this.lastHedgeTime = now;
 
         // Check if we already have a position at this strike to net it out
         const existingIdx = this.activePositions.findIndex(p => p.strike === hedgeStrike && p.type === hedgeType);
@@ -462,7 +520,7 @@ class ExecutionEngine {
               const remaining = hedgeQty - existing.qty;
               existing.qty = remaining;
               existing.side = 'SELL';
-              existing.entryPrice = price; // Update to mid-entry
+              existing.entryPrice = price; 
             }
           } else {
             // Both are SELL sides, just add qty
@@ -480,7 +538,7 @@ class ExecutionEngine {
           });
         }
 
-        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString()}] Net Delta shifted to ${this.netDelta.toFixed(2)}. Hedged with ${hedgeQty} qty ${hedgeType} @ ${hedgeStrike}`);
+        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Delta threshold crossed (${this.netDelta.toFixed(2)}). Hedged with ${hedgeQty} qty ${hedgeType}.`);
         if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
         
         // Recalculate after hedge
@@ -495,7 +553,7 @@ class ExecutionEngine {
       const durationSeconds = Math.round((now - this.currentEntryTime) / 1000);
       
       // Determine market phase
-      const hours = new Date().getHours();
+      const hours = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
       let phase = 'MID-SESSION';
       if (hours < 11) phase = 'MARKET OPEN';
       else if (hours >= 14) phase = 'RE-SETTLEMENT';
@@ -574,6 +632,7 @@ class ExecutionEngine {
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);
     this.activePositions = [];
     this.pnl = 0; 
+    this.capitalDeployed = 0;
     this.currentTradeBias = null;
     this.currentEntryTime = 0;
   }
@@ -586,8 +645,11 @@ class ExecutionEngine {
       params: this.currentTradeParams,
       activeSL: this.currentActiveSL,
       rollsToday: this.rollsToday,
+      capitalDeployed: Math.round(this.capitalDeployed),
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),
+      netTheta: Number(this.netTheta.toFixed(2)),
+      netVega: Number(this.netVega.toFixed(2)),
       hedgeLogs: this.hedgeLogs,
       risk: riskEngine.getStats(),
       lastRiskValidation: this.lastRiskValidation

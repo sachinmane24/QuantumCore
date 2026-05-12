@@ -225,12 +225,28 @@ export default function App() {
       const res = await fetch('/api/kite/url');
       const { url } = await res.json();
       
-      // Breaking out of iframe to the top window is the most reliable login method
-      if (window.top) {
-        window.top.location.href = url;
-      } else {
-        window.location.href = url;
-      }
+      const width = 600;
+      const height = 700;
+      const left = window.innerWidth / 2 - width / 2;
+      const top = window.innerHeight / 2 - height / 2;
+      
+      const popup = window.open(
+        url, 
+        "KiteConnect", 
+        `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
+      );
+
+      // Listener for completion message from the callback page
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data.type === 'KITE_AUTH_SUCCESS') {
+          console.log(`[AUTH] Kite login successful for ${event.data.user}`);
+          fetchData(); // Trigger immediate refresh
+          window.removeEventListener('message', handleMessage);
+          if (popup) popup.close();
+        }
+      };
+      
+      window.addEventListener('message', handleMessage);
     } catch (e) {
       console.error("Failed to get Kite URL", e);
     }
@@ -310,7 +326,7 @@ export default function App() {
         if (marketData && executionData) {
           setHistory(prev => {
             const newPoint: HistoryPoint = {
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              time: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
               pnl: executionData.pnl || 0,
               score: strategyData?.score.total || strategyRef.current?.score.total || 0,
               vix: marketData.vix || 0,
@@ -487,7 +503,7 @@ export default function App() {
           const pnlValue = Math.round(priceChange * pnlMultiplier * 5000); // 5000 is exposure proxy
           
           balance += pnlValue;
-          const timestamp = new Date(candle.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit' });
+          const timestamp = new Date(candle.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit' });
           
           trades.push({ 
             pnl: pnlValue, 
@@ -510,7 +526,7 @@ export default function App() {
         }
 
         equityCurve.push({
-          name: new Date(candle.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit' }),
+          name: new Date(candle.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit' }),
           value: balance + (candle.close - candles[0].close) * 10 // Mix of realized + unrealized proxy
         });
       }
@@ -887,7 +903,7 @@ export default function App() {
                 "terminal-value text-[10px] font-mono mt-1 transition-colors",
                 market?.error ? "text-rose-400 animate-pulse" : "text-slate-400"
               )}>
-                {market?.lastUpdated ? new Date(market.lastUpdated).toLocaleTimeString() : (lastSync ? lastSync.toLocaleTimeString() : '--:--:--')}
+                {market?.lastUpdated ? new Date(market.lastUpdated).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : (lastSync ? lastSync.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : '--:--:--')}
               </div>
               {market?.error && (
                 <div className="absolute top-full right-0 mt-1 bg-rose-500/90 text-white text-[7px] px-2 py-1 rounded whitespace-nowrap z-[100] shadow-xl border border-white/10 uppercase tracking-tighter">
@@ -903,14 +919,14 @@ export default function App() {
                   <div className="flex items-center gap-3">
                     <div className="flex flex-col">
                       <span className="text-[10px] text-blue-400 font-black leading-none">
-                        {marketInfo.expiry.weekly ? new Date(marketInfo.expiry.weekly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
+                        {marketInfo.expiry.weekly ? new Date(marketInfo.expiry.weekly).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }) : '---'}
                       </span>
                       <span className="text-[7px] text-slate-500 font-bold uppercase mt-1">Weekly ({marketInfo.expiry.daysToExpiry} DTE)</span>
                     </div>
                     <div className="w-px h-4 bg-white/10" />
                     <div className="flex flex-col">
                       <span className="text-[10px] text-purple-400 font-black leading-none">
-                        {marketInfo.expiry.monthly ? new Date(marketInfo.expiry.monthly).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '---'}
+                        {marketInfo.expiry.monthly ? new Date(marketInfo.expiry.monthly).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }) : '---'}
                       </span>
                       <span className="text-[7px] text-slate-500 font-bold uppercase mt-1">Monthly</span>
                     </div>
@@ -919,7 +935,7 @@ export default function App() {
                 <div className="flex flex-col px-4">
                   <span className="terminal-label !mb-0.5 text-[7px] uppercase tracking-widest text-slate-500">Holiday Wall</span>
                   <div className={cn("terminal-value text-[9px] font-black", marketInfo.holiday.isUpcoming ? "text-amber-500" : "text-slate-500")}>
-                    {marketInfo.holiday.next ? new Date(marketInfo.holiday.next).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : 'CLEAR'}
+                    {marketInfo.holiday.next ? new Date(marketInfo.holiday.next).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }) : 'CLEAR'}
                     {marketInfo.holiday.isUpcoming && <span className="text-[7px] border border-amber-500/30 px-1 rounded ml-2 animate-pulse leading-none py-0.5">UPCOMING</span>}
                   </div>
                 </div>
@@ -1744,7 +1760,7 @@ export default function App() {
                     {tradeLogs.slice(0, 5).map((log, i) => (
                       <div key={i} className="p-4 border-b border-white/5 flex flex-col gap-1">
                          <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                            <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                            <span>{new Date(log.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>
                             <span className={log.win ? 'text-emerald-500' : 'text-rose-500'}>{log.win ? '+WIN' : '-LOSS'}</span>
                          </div>
                          <div className="flex justify-between items-center">
@@ -1906,7 +1922,7 @@ export default function App() {
                         <div className="terminal-card p-4">
                            <span className="terminal-label">Max Pain</span>
                            <div className="text-lg font-black text-purple-400">{stockIntel.optionsStats?.maxPain || 'N/A'}</div>
-                           <div className="text-[9px] text-slate-500 font-bold uppercase">Ex: {stockIntel.optionsStats?.expiry ? new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : 'N/A'}</div>
+                           <div className="text-[9px] text-slate-500 font-bold uppercase">Ex: {stockIntel.optionsStats?.expiry ? new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' }) : 'N/A'}</div>
                         </div>
                      </div>
 
@@ -1923,7 +1939,7 @@ export default function App() {
                      <section className="terminal-card flex-1 flex flex-col overflow-hidden min-h-0">
                         <div className="px-5 py-3 border-b border-white/5 bg-white/[0.02] flex justify-between items-center">
                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                               Liquid Option Chain ({stockIntel.optionsStats?.expiry ? `Expiry: ${new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : 'Near Month'})
+                               Liquid Option Chain ({stockIntel.optionsStats?.expiry ? `Expiry: ${new Date(stockIntel.optionsStats.expiry).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })}` : 'Near Month'})
                             </h4>
                            <div className="flex gap-4">
                               <div className="flex items-center gap-1.5">
@@ -2121,7 +2137,7 @@ export default function App() {
                        </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                        <div className="terminal-card p-4 bg-white/[0.01]">
                           <Zap className="w-4 h-4 text-amber-500 mb-2" />
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Consecutive Losses</h4>
@@ -2139,6 +2155,14 @@ export default function App() {
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Profit Lock</h4>
                           <div className="text-xl font-black text-emerald-400">₹{execution?.risk?.peakPnLToday || 0}</div>
                           <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Trailing protection active</p>
+                       </div>
+                       <div className="terminal-card p-4 bg-white/[0.01] border-blue-500/20">
+                          <Layers className="w-4 h-4 text-blue-400 mb-2" />
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Capital Blocked</h4>
+                          <div className="text-xl font-black text-blue-400">₹{execution?.capitalDeployed?.toLocaleString() || 0}</div>
+                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">
+                             {Math.round(((execution?.capitalDeployed || 0) / (appConfig?.CAPITAL_BASE || 1)) * 100)}% Utilization
+                          </p>
                        </div>
                     </div>
 
@@ -2171,6 +2195,33 @@ export default function App() {
                              <div>
                                 <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">ADAPTIVE POSITION SIZING</div>
                                 <div className="text-[9px] text-blue-400/70 font-bold mt-1 uppercase">DYNAMICALLY ADJUSTING LOTS BASED ON VIX ({market?.vix?.toFixed(1) || '---'})</div>
+                             </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pb-2">
+                             <div className="p-3 bg-white/5 border border-white/5 rounded-lg flex flex-col">
+                                <span className="text-[8px] font-black text-slate-500 uppercase mb-1">Delta (NET)</span>
+                                <div className={cn("text-xs font-black", Math.abs(execution?.netDelta || 0) > 1.0 ? "text-rose-400" : Math.abs(execution?.netDelta || 0) > 0.5 ? "text-amber-400" : "text-white")}>
+                                   {execution?.netDelta?.toFixed(3) || '0.000'}
+                                </div>
+                             </div>
+                             <div className="p-3 bg-white/5 border border-white/5 rounded-lg flex flex-col">
+                                <span className="text-[8px] font-black text-slate-500 uppercase mb-1">Gamma (NET)</span>
+                                <div className="text-xs font-black text-white">
+                                   {execution?.netGamma?.toFixed(4) || '0.0000'}
+                                </div>
+                             </div>
+                             <div className="p-3 bg-white/5 border border-white/5 rounded-lg flex flex-col">
+                                <span className="text-[8px] font-black text-slate-500 uppercase mb-1">Theta (DECAY)</span>
+                                <div className={cn("text-xs font-black", (execution?.netTheta || 0) > 0 ? "text-emerald-400" : "text-rose-400")}>
+                                   {execution?.netTheta?.toFixed(2) || '0.00'}
+                                </div>
+                             </div>
+                             <div className="p-3 bg-white/5 border border-white/5 rounded-lg flex flex-col">
+                                <span className="text-[8px] font-black text-slate-500 uppercase mb-1">Vega (VOL)</span>
+                                <div className="text-xs font-black text-blue-400">
+                                   {execution?.netVega?.toFixed(2) || '0.00'}
+                                </div>
                              </div>
                           </div>
                        </div>
@@ -3003,7 +3054,7 @@ export default function App() {
                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                <span className="font-bold uppercase tracking-widest">Feed: Realtime</span>
             </div>
-            <div className="opacity-40">{new Date().toLocaleTimeString()} IST</div>
+            <div className="opacity-40">{new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</div>
           </div>
         </div>
       </footer>
