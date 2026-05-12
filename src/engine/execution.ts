@@ -55,8 +55,27 @@ class ExecutionEngine {
   private lastTradeSuppression: { reason: string; timestamp: number } | null = null;
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
+  private isProcessing: boolean = false;
+
+  private async withLock<T>(fn: () => Promise<T>): Promise<T | null> {
+    if (this.isProcessing) {
+      return null;
+    }
+    this.isProcessing = true;
+    try {
+      return await fn();
+    } finally {
+      this.isProcessing = false;
+    }
+  }
 
   async executeTrade(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
+    return await this.withLock(async () => {
+      await this.executeTradeInternal(bias, isManual);
+    });
+  }
+
+  private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
     // Entry Cooldown: 5 minute break between trades for Auto-Mode only
@@ -406,6 +425,8 @@ class ExecutionEngine {
   }
 
   async updatePnL() {
+    // Pure PnL update does not need lock as it just reads and updates primitive state
+    // But management actions inside it DO need protection.
     if (this.activePositions.length === 0) {
       riskEngine.updatePnL(0, []);
       return;
@@ -443,71 +464,73 @@ class ExecutionEngine {
     // Calculate Portfolio Greeks
     this.calculatePortfolioGreeks();
     
-    // Update Capital Deployed (Margin/Premium)
     this.calculateCapitalDeployed();
 
-    // Check Rolling 
-    await this.checkRolling();
+    // Shield management logic with lock
+    await this.withLock(async () => {
+      // Check Rolling 
+      await this.checkRolling();
 
-    // Check Gamma Scalping
-    await this.checkGammaScalp();
+      // Check Gamma Scalping
+      await this.checkGammaScalp();
 
-    // Check Risk Management
-    const riskStats = riskEngine.getStats();
-    if (riskStats.isKillSwitchActive) {
-      await tradeLogger.logAudit({
-        timestamp: new Date().toISOString(),
-        type: 'RISK_ALERT',
-        message: `Kill Switch Triggered mid-trade: ${riskStats.killReason}`,
-        details: { pnl: this.pnl }
-      });
-      await this.exitAll(`Risk Kill Switch: ${riskStats.killReason}`);
-      return;
-    }
-
-    const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
-    const totalMin = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
-    const expiryStatus = marketEngine.getExpiryStatus();
-
-    // 1:30 PM Shift on Monthly Expiry - Aggressive profit taking or narrowing
-    if (expiryStatus.isMonthlyExpiry && totalMin >= 810) {
-      if (this.pnl > 0 && this.activePositions.length > 0) {
-        console.log("[EXECUTION] Monthly Expiry Afternoon Shift: Securing profits before roll-over volatility.");
-        await this.exitAll("Monthly Expiry 1:30 PM Protective Exit");
+      // Check Risk Management
+      const riskStats = riskEngine.getStats();
+      if (riskStats.isKillSwitchActive) {
+        await tradeLogger.logAudit({
+          timestamp: new Date().toISOString(),
+          type: 'RISK_ALERT',
+          message: `Kill Switch Triggered mid-trade: ${riskStats.killReason}`,
+          details: { pnl: this.pnl }
+        });
+        await this.exitAllInternal(`Risk Kill Switch: ${riskStats.killReason}`);
         return;
       }
-    }
 
-    // 2:45 PM Shift on Weekly Expiry - Standard expiry liquidity drain
-    if (expiryStatus.isWeekly && totalMin >= 885) {
-      if (this.activePositions.length > 0) {
-        console.log("[EXECUTION] Weekly Expiry 2:45 PM: Closing positions to avoid settlement spikes.");
-        await this.exitAll("Weekly Expiry 2:45 PM Protective Exit");
-        return;
-      }
-    }
+      const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+      const totalMin = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
+      const expiryStatus = marketEngine.getExpiryStatus();
 
-    if (this.currentTradeParams) {
-      // Time-Based Decay Intelligence (Option Buying specific)
-      const durationMins = (Date.now() - this.currentEntryTime) / 60000;
-      if (this.lastTradeScore?.mode === 'MOMENTUM_SNIPER' && durationMins > 45) {
-         if (this.pnl < this.currentTradeParams.targetRupees * 0.25) {
-            await this.exitAll(`Time-Decay Exit: 45m Stagnation Threshold Reached`);
-            return;
-         }
+      // 1:30 PM Shift on Monthly Expiry - Aggressive profit taking or narrowing
+      if (expiryStatus.isMonthlyExpiry && totalMin >= 810) {
+        if (this.pnl > 0 && this.activePositions.length > 0) {
+          console.log("[EXECUTION] Monthly Expiry Afternoon Shift: Securing profits before roll-over volatility.");
+          await this.exitAllInternal("Monthly Expiry 1:30 PM Protective Exit");
+          return;
+        }
       }
 
-      if (this.pnl <= this.currentActiveSL) {
-        await this.exitAll(`Stop Loss Hit (₹${this.currentActiveSL})`);
-      } else if (this.pnl >= this.currentTradeParams.targetRupees) {
-        await this.exitAll(`Target Hit (₹${this.currentTradeParams.targetRupees})`);
+      // 2:45 PM Shift on Weekly Expiry - Standard expiry liquidity drain
+      if (expiryStatus.isWeekly && totalMin >= 885) {
+        if (this.activePositions.length > 0) {
+          console.log("[EXECUTION] Weekly Expiry 2:45 PM: Closing positions to avoid settlement spikes.");
+          await this.exitAllInternal("Weekly Expiry 2:45 PM Protective Exit");
+          return;
+        }
       }
-    } else {
-      // Fallback
-      if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
-        await this.exitAll('SL/Target Hit');
+
+      if (this.currentTradeParams) {
+        // Time-Based Decay Intelligence (Option Buying specific)
+        const durationMins = (Date.now() - this.currentEntryTime) / 60000;
+        if (this.lastTradeScore?.mode === 'MOMENTUM_SNIPER' && durationMins > 45) {
+           if (this.pnl < this.currentTradeParams.targetRupees * 0.25) {
+              await this.exitAllInternal(`Time-Decay Exit: 45m Stagnation Threshold Reached`);
+              return;
+           }
+        }
+
+        if (this.pnl <= this.currentActiveSL) {
+          await this.exitAllInternal(`Stop Loss Hit (₹${this.currentActiveSL})`);
+        } else if (this.pnl >= this.currentTradeParams.targetRupees) {
+          await this.exitAllInternal(`Target Hit (₹${this.currentTradeParams.targetRupees})`);
+        }
+      } else {
+        // Fallback
+        if (this.pnl <= -config.SL_RUPEES || this.pnl >= config.TARGET_RUPEES) {
+          await this.exitAllInternal('SL/Target Hit');
+        }
       }
-    }
+    });
   }
 
   private calculatePortfolioGreeks() {
@@ -631,8 +654,8 @@ class ExecutionEngine {
       console.log('Rolling Position...');
       this.rollsToday++;
       this.lastRollTime = now;
-      await this.exitAll('Rolling');
-      await this.executeTrade(sellPos.type === 'PE' ? 'BULLISH' : 'BEARISH');
+      await this.exitAllInternal('Rolling');
+      await this.executeTradeInternal(sellPos.type === 'PE' ? 'BULLISH' : 'BEARISH');
     }
   }
 
@@ -712,6 +735,12 @@ class ExecutionEngine {
   }
 
   async exitAll(reason: string) {
+    return await this.withLock(async () => {
+      await this.exitAllInternal(reason);
+    });
+  }
+
+  private async exitAllInternal(reason: string) {
     if (this.activePositions.length > 0) {
       const now = Date.now();
       const durationSeconds = Math.round((now - this.currentEntryTime) / 1000);
