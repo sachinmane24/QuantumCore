@@ -157,6 +157,81 @@ async function startServer() {
     });
   });
 
+  // Kite Auth Routes
+  apiRouter.get("/kite/url", (req, res) => {
+    if (!apiKey) {
+      return res.status(400).json({ error: "KITE_API_KEY not configured" });
+    }
+    
+    // AI Studio uses proxies, so we check for forwarded headers first
+    const host = req.get("x-forwarded-host") || req.get("host");
+    const protocol = req.get("x-forwarded-proto") || (host?.includes("localhost") ? "http" : "https");
+    
+    const redirectUrl = process.env.KITE_REDIRECT_URL || `${protocol}://${host}/api/kite/callback`;
+    console.log(`[AUTH] Generating login URL with redirect: ${redirectUrl}`);
+    
+    const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}`;
+    res.json({ url: loginUrl });
+  });
+
+  apiRouter.get("/kite/callback", async (req, res) => {
+    const { request_token } = req.query;
+    if (!request_token || !apiSecret) {
+      return res.status(400).send("Invalid request or missing config");
+    }
+
+    try {
+      if (!kiteInstance && apiKey) {
+        kiteInstance = new KiteConnect({ api_key: apiKey });
+      }
+      
+      if (!kiteInstance) {
+        return res.status(500).send("Kite instance not initialized");
+      }
+
+      const response = await kiteInstance.generateSession(request_token.toString(), apiSecret);
+      accessToken = response.access_token;
+      kiteInstance.setAccessToken(accessToken);
+      
+      // Force LIVE data mode once authenticated
+      setDataMode('LIVE');
+      marketEngine.syncMode();
+      console.log(`[AUTH] Session generated for ${response.user_name}. Mode set to LIVE.`);
+
+      await saveKiteSession({ key: apiKey, secret: apiSecret, token: accessToken });
+
+      // Trigger background instrument refresh
+      refreshNfoCache().catch(e => console.error("Post-auth instrument fetch failed", e));
+
+      res.send(`
+        <html>
+          <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 20px;">
+            <div style="text-align: center;">
+              <h2 style="margin-bottom: 8px;">Authentication Successful</h2>
+              <p style="color: #64748b; font-size: 14px;">Synchronizing with Quantum Core...</p>
+            </div>
+            <script>
+              setTimeout(() => {
+                try {
+                  if (window.opener) {
+                    window.opener.postMessage({ type: 'KITE_AUTH_SUCCESS', user: ${JSON.stringify(response.user_name)} }, '*');
+                    window.close();
+                  }
+                } catch (e) {
+                  console.error("Popup communication failed", e);
+                }
+                window.location.href = '/';
+              }, 1500);
+            </script>
+          </body>
+        </html>
+      `);
+    } catch (err) {
+      console.error("Kite session error:", err);
+      res.status(500).send("Authentication failed");
+    }
+  });
+
   async function refreshNfoCache() {
       if (!kiteInstance || !accessToken) return;
       try {
