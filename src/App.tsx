@@ -47,7 +47,8 @@ export default function App() {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean }>({ connected: false, hasConfig: false });
+  const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean; error?: string | null }>({ connected: false, hasConfig: false });
+  const [networkError, setNetworkError] = useState<string | null>(null);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
   
@@ -166,10 +167,12 @@ export default function App() {
 
   // Data Fetching
   useEffect(() => {
-    const fetchKiteStatus = async () => {
+    const fetchKiteStatus = async (retryCount = 0) => {
       try {
         const res = await fetch('/api/kite/status');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        setNetworkError(null);
         
         // If server has no config but we do, sync it
         const saved = localStorage.getItem('kite_config');
@@ -190,8 +193,13 @@ export default function App() {
         }
         
         setKiteStatus(data);
-      } catch (e) {
+      } catch (e: any) {
         console.error("Failed to fetch Kite status", e);
+        if (retryCount < 3) {
+           setTimeout(() => fetchKiteStatus(retryCount + 1), 2000);
+        } else {
+           setNetworkError("Server unreachable. Please check if backend is running.");
+        }
       }
     };
 
@@ -257,16 +265,21 @@ export default function App() {
     { name: 'May 24', value: 124570 },
   ];
 
-  const fetchData = useCallback(async () => {
+  // Data Fetching
+  const fetchData = useCallback(async (type: 'fast' | 'slow' = 'fast') => {
     if (!isLoggedIn) return;
     try {
-      const endpoints = [
+      const fastEndpoints = [
         '/api/market-data',
+        '/api/execution-state'
+      ];
+      const slowEndpoints = [
         '/api/strategy-data',
-        '/api/execution-state',
         '/api/trade-logs',
         '/api/market-info'
       ];
+
+      const endpoints = type === 'fast' ? fastEndpoints : slowEndpoints;
 
       const results = await Promise.all(endpoints.map(async (url) => {
         try {
@@ -283,54 +296,68 @@ export default function App() {
         return null;
       }));
       
-      const [marketData, strategyData, executionData, tradeLogsData, marketInfoData] = results;
+      if (type === 'fast') {
+        const [marketData, executionData] = results;
+        if (marketData) setMarket(marketData);
+        if (executionData) setExecution(executionData);
 
-      if (marketData) setMarket(marketData);
-      if (strategyData) setStrategy(strategyData);
-      if (executionData) setExecution(executionData);
-      if (tradeLogsData) setTradeLogs(tradeLogsData);
-      if (marketInfoData) setMarketInfo(marketInfoData);
+        if (marketData && executionData) {
+          setHistory(prev => {
+            const newPoint: HistoryPoint = {
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+              pnl: executionData.pnl || 0,
+              score: strategy?.score.total || 0,
+              vix: marketData.vix || 0,
+              spot: marketData.spot || 0,
+              rsi: marketData.indicators?.rsi || null,
+              macd: marketData.indicators?.macd?.macd || null,
+              macdSignal: marketData.indicators?.macd?.signal || null,
+              macdHist: marketData.indicators?.macd?.histogram || null,
+              bbUpper: marketData.indicators?.bollinger?.upper || null,
+              bbLower: marketData.indicators?.bollinger?.lower || null,
+              bbMiddle: marketData.indicators?.bollinger?.middle || null
+            };
+            if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
+            return [...prev, newPoint].slice(-60);
+          });
+        }
+      } else {
+        const [strategyData, tradeLogsData, marketInfoData] = results;
+        if (strategyData) setStrategy(strategyData);
+        if (tradeLogsData) setTradeLogs(tradeLogsData);
+        if (marketInfoData) setMarketInfo(marketInfoData);
+      }
 
       // Fetch config once
       if (!appConfig) {
         fetch('/api/config').then(r => r.json()).then(setAppConfig);
-      }
-
-      if (marketData && strategyData && executionData) {
-        setHistory(prev => {
-          const newPoint: HistoryPoint = {
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            pnl: executionData.pnl || 0,
-            score: strategyData.score.total || 0,
-            vix: marketData.vix || 0,
-            spot: marketData.spot || 0,
-            rsi: marketData.indicators?.rsi || null,
-            macd: marketData.indicators?.macd?.macd || null,
-            macdSignal: marketData.indicators?.macd?.signal || null,
-            macdHist: marketData.indicators?.macd?.histogram || null,
-            bbUpper: marketData.indicators?.bollinger?.upper || null,
-            bbLower: marketData.indicators?.bollinger?.lower || null,
-            bbMiddle: marketData.indicators?.bollinger?.middle || null
-          };
-          if (prev.length > 0 && prev[prev.length - 1].time === newPoint.time) return prev;
-          return [...prev, newPoint].slice(-60);
-        });
       }
       
       setLastSync(new Date());
       setLoading(false);
     } catch (err) {
       console.error("Fetch Data Critical Error:", err);
-      setLoading(false);
     }
-  }, [isLoggedIn, appConfig]);
+  }, [isLoggedIn, appConfig, strategy]);
 
-  // Data Fetching
+  // Data Fetching Intervals
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 1000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    if (!isLoggedIn) return;
+
+    // Initial load
+    fetchData('fast');
+    fetchData('slow');
+
+    // Fast polling: 5s (reduced from 1s)
+    const fastInterval = setInterval(() => fetchData('fast'), 5000);
+    // Slow polling: 30s
+    const slowInterval = setInterval(() => fetchData('slow'), 30000);
+
+    return () => {
+      clearInterval(fastInterval);
+      clearInterval(slowInterval);
+    };
+  }, [fetchData, isLoggedIn]);
 
   const handleExecute = async (bias: 'BULLISH' | 'BEARISH') => {
     await fetch('/api/execute', {
@@ -673,6 +700,12 @@ export default function App() {
 
   return (
     <div className="h-screen bg-[#070b14] text-slate-300 font-sans flex overflow-hidden">
+      {networkError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-red-500/90 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-2 animate-pulse shadow-lg backdrop-blur-md border border-white/10">
+          <AlertTriangle size={12} className="fill-white/20" />
+          {networkError}
+        </div>
+      )}
       
       {/* --- SIDEBAR NAVIGATION --- */}
       <aside className="w-20 border-r border-terminal-line bg-black/40 backdrop-blur-3xl flex flex-col items-center py-8 gap-10 z-20">

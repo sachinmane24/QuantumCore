@@ -10,8 +10,18 @@ import fs from 'fs-extra';
 import path from 'path';
 
 const tradesCollection = db.collection('trades');
+const auditCollection = db.collection('audit_logs');
 
 let firestoreEnabled = true;
+
+// Define Audit Entry Type
+export interface AuditLogEntry {
+  id?: string;
+  timestamp: string;
+  type: 'INFO' | 'WARNING' | 'ERROR' | 'TRADE_TRIGGER' | 'TRADE_SKIP' | 'RISK_ALERT';
+  message: string;
+  details?: any;
+}
 
 // Connection test
 (async () => {
@@ -30,16 +40,53 @@ let firestoreEnabled = true;
 })();
 
 class TradeLogger {
-  private async saveLocal(entry: TradeLogEntry) {
+  private async saveLocal(entry: TradeLogEntry | AuditLogEntry, file: string = 'trades_fallback.json') {
     try {
-      const fallbackPath = path.join(process.cwd(), 'trades_fallback.json');
+      const fallbackPath = path.join(process.cwd(), file);
       const existing = await fs.readJson(fallbackPath).catch(() => []);
       existing.push(entry);
       await fs.writeJson(fallbackPath, existing);
-      console.log("[LOGGER] Trade saved to local JSON.");
     } catch (e) {
       console.error("[LOGGER] Local save failed:", e);
     }
+  }
+
+  async logAudit(entry: AuditLogEntry) {
+    console.log(`[AUDIT] [${entry.type}] ${entry.message}`);
+    if (!firestoreEnabled) {
+      await this.saveLocal(entry, 'audit_fallback.json');
+      return;
+    }
+    try {
+      await auditCollection.add({
+        ...entry,
+        serverTimestamp: FieldValue.serverTimestamp()
+      });
+    } catch (err) {
+      await this.saveLocal(entry, 'audit_fallback.json');
+    }
+  }
+
+  async getAuditLogs(): Promise<AuditLogEntry[]> {
+    let logs: AuditLogEntry[] = [];
+    if (firestoreEnabled) {
+      try {
+        const snapshot = await auditCollection.orderBy('timestamp', 'desc').limit(50).get();
+        logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AuditLogEntry[];
+      } catch (err) {}
+    }
+    
+    try {
+      const fallbackPath = path.join(process.cwd(), 'audit_fallback.json');
+      if (await fs.pathExists(fallbackPath)) {
+        const fallbackLogs = await fs.readJson(fallbackPath);
+        logs = [...fallbackLogs.slice(-50), ...logs]
+          .sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+          .slice(0, 50);
+      }
+    } catch (e) {}
+
+    return logs;
   }
 
   async logTrade(entry: TradeLogEntry) {

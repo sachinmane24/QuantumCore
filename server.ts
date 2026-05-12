@@ -104,6 +104,8 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  console.log("[INIT] Initializing Quantum Core Server...");
+
   // Shared state within startServer
   let kiteInstance: any = null;
   let niftyInstruments: any[] = [];
@@ -116,57 +118,46 @@ async function startServer() {
   let lastNfoRefresh: number = 0;
   let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
 
-  try {
-    app.use(cors({ origin: true, credentials: true }));
-    app.use(express.json());
-    app.use(cookieParser());
+  // Basic Middlewares
+  app.use(cors({ origin: true, credentials: true }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(cookieParser());
 
-    // Request Logger with Versioning
-    app.use((req, res, next) => {
-      const timestamp = new Date().toISOString();
-      console.log(`[V5.4-DIAG] ${timestamp} - ${req.method} ${req.url}`);
-      next();
+  // Request Diagnostics
+  app.use((req, res, next) => {
+    if (req.url.startsWith('/api')) {
+      console.log(`[DIAG] ${new Date().toISOString()} - ${req.method} ${req.url}`);
+    }
+    next();
+  });
+
+  // Basic Health Routes
+  app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.3", uptime: process.uptime() }));
+  app.get("/ping", (req, res) => res.send("pong"));
+
+  const apiRouter = express.Router();
+
+  apiRouter.post("/kite/config", async (req, res) => {
+    const { key, secret } = req.body;
+    if (key) apiKey = key;
+    if (secret) apiSecret = secret;
+    
+    if (key) {
+      kiteInstance = new KiteConnect({ api_key: key });
+      niftyInstruments = []; 
+      allExpiries = [];
+      console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
+    }
+    
+    await saveKiteSession({ key: apiKey, secret: apiSecret });
+    
+    res.json({ 
+      success: true, 
+      hasConfig: !!(apiKey && apiSecret) 
     });
+  });
 
-    app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.1" }));
-    app.get("/ping", (req, res) => res.send("pong"));
-
-    console.log(`[INIT] Attempting to listen on port: ${PORT}`);
-    // Start listening ASAP for health checks
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`[V5.4.2] Quantum Server listening on port ${PORT}`);
-    });
-
-    // Load persisted data in background (Unwaited)
-    loadPersistentData("system", "kite_session").then(data => {
-      if (data) {
-        if (data.key) apiKey = data.key;
-        if (data.secret) apiSecret = data.secret;
-        if (data.token) {
-          accessToken = data.token;
-          setDataMode('LIVE');
-          marketEngine.syncMode();
-          console.log("[INIT] Session restored from persistence. Mode set to LIVE.");
-        }
-        console.log("[INIT] Kite session loaded.");
-        if (apiKey && !kiteInstance) {
-          kiteInstance = new KiteConnect({ api_key: apiKey });
-          if (accessToken) {
-            kiteInstance.setAccessToken(accessToken);
-            // Default to LIVE mode once session is loaded
-            setDataMode('LIVE');
-            marketEngine.syncMode();
-            console.log("[SYSTEM] Active session found. Defaulting to LIVE DATA mode.");
-          }
-        }
-      }
-      marketLoop();
-    }).catch(err => {
-      console.error("[INIT] Background load failed:", err);
-      marketLoop();
-    });
-
-    async function refreshNfoCache() {
+  async function refreshNfoCache() {
       if (!kiteInstance || !accessToken) return;
       try {
         console.log("[SYSTEM] Refreshing Global NFO cache...");
@@ -436,120 +427,9 @@ async function startServer() {
       setTimeout(marketLoop, 1000);
     }
   }
-  
-  app.get("/ping", (req, res) => res.send("pong"));
 
-  const apiRouter = express.Router();
-
-  apiRouter.post("/kite/config", async (req, res) => {
-    const { key, secret } = req.body;
-    if (key) apiKey = key;
-    if (secret) apiSecret = secret;
-    
-    if (key) {
-      kiteInstance = new KiteConnect({ api_key: key });
-      niftyInstruments = []; 
-      allExpiries = [];
-      console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
-    }
-    
-    await saveKiteSession({ key: apiKey, secret: apiSecret });
-    
-    res.json({ 
-      success: true, 
-      hasConfig: !!(apiKey && apiSecret) 
-    });
-  });
-
-  // Kite Auth Routes
-  apiRouter.get("/kite/url", (req, res) => {
-    if (!apiKey) {
-      return res.status(400).json({ error: "KITE_API_KEY not configured" });
-    }
-    
-    // AI Studio uses proxies, so we check for forwarded headers first
-    const host = req.get("x-forwarded-host") || req.get("host");
-    const protocol = req.get("x-forwarded-proto") || (host?.includes("localhost") ? "http" : "https");
-    
-    const redirectUrl = process.env.KITE_REDIRECT_URL || `${protocol}://${host}/api/kite/callback`;
-    console.log(`[AUTH] Generating login URL with redirect: ${redirectUrl}`);
-    
-    const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}`;
-    res.json({ url: loginUrl });
-  });
-
-  apiRouter.get("/kite/callback", async (req, res) => {
-    const { request_token } = req.query;
-    if (!request_token || !kiteInstance || !apiSecret) {
-      return res.status(400).send("Invalid request or missing config");
-    }
-
-    try {
-      const response = await kiteInstance.generateSession(request_token.toString(), apiSecret);
-      accessToken = response.access_token;
-      kiteInstance.setAccessToken(accessToken);
-      
-      // Force LIVE data mode once authenticated
-      setDataMode('LIVE');
-      marketEngine.syncMode();
-      console.log("[AUTH] Session generated successfully. Mode set to LIVE.");
-
-      await saveKiteSession({ token: accessToken });
-
-      // Background Fetch Instruments
-      try {
-        console.log("[SYSTEM] Fetching NFO instruments for NIFTY...");
-        const instruments = await kiteInstance.getInstruments(["NFO"]);
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
-
-        const niftyAll = instruments.filter((ins: any) => 
-          ins.name === 'NIFTY' && 
-          ins.segment === 'NFO-OPT' &&
-          new Date(ins.expiry) >= startOfToday
-        );
-        
-        allExpiries = Array.from(new Set(niftyAll.map((i: any) => i.expiry))).sort() as string[];
-        const nearestExpiry = allExpiries[0];
-        niftyInstruments = niftyAll.filter((i: any) => i.expiry === nearestExpiry);
-        
-        console.log(`[SYSTEM] Cached ${niftyInstruments.length} NIFTY instruments for nearest expiry ${nearestExpiry}`);
-        console.log(`[SYSTEM] Detected expiries: ${allExpiries.slice(0, 3).join(', ')}...`);
-      } catch (e) {
-        console.error("Failed to fetch instruments:", e);
-      }
-
-      res.send(`
-        <html>
-          <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 20px;">
-            <div style="text-align: center;">
-              <h2 style="margin-bottom: 8px;">Authentication Successful</h2>
-              <p style="color: #64748b; font-size: 14px;">Synchronizing with Quantum Core...</p>
-            </div>
-            <script>
-              setTimeout(() => {
-                try {
-                  if (window.opener) {
-                    window.opener.postMessage({ type: 'KITE_AUTH_SUCCESS', user: ${JSON.stringify(response.user_name)} }, '*');
-                    window.close();
-                  }
-                } catch (e) {
-                  console.error("Popup communication failed", e);
-                }
-                // Fallback redirect if window didn't close or wasn't a popup
-                window.location.href = '/';
-              }, 1500);
-            </script>
-          </body>
-        </html>
-      `);
-    } catch (err) {
-      console.error("Kite session error:", err);
-      res.status(500).send("Authentication failed");
-    }
-  });
-
-  // ... existing code ...
+  // Start the loop
+  marketLoop();
   apiRouter.get("/fo-stocks", async (req, res) => {
     // Try cache first
     let stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT' || i.segment === 'NFO-FUT').map(i => i.name)))
@@ -751,7 +631,13 @@ async function startServer() {
     res.json({ status: "success", autoMode: config.AUTO_MODE });
   });
 
+  let marketInfoCache: any = null;
+  let lastMarketInfoFetch = 0;
   apiRouter.get("/market-info", (req, res) => {
+    if (marketInfoCache && (Date.now() - lastMarketInfoFetch < 60000)) {
+      return res.json(marketInfoCache);
+    }
+
     const holidays = [
       "2026-01-26", "2026-03-08", "2026-03-25", "2026-03-29", "2026-04-11",
       "2026-04-17", "2026-05-01", "2026-06-17", "2026-07-17", "2026-08-15",
@@ -848,7 +734,7 @@ async function startServer() {
 
     const daysToExpiry = weeklyExpiryStr ? Math.ceil((new Date(weeklyExpiryStr).getTime() - istTime.getTime()) / (1000 * 60 * 60 * 24)) : 0;
     
-    res.json({
+    const result = {
       expiry: {
         weekly: weeklyExpiryStr,
         monthly: monthlyExpiryStr,
@@ -859,16 +745,41 @@ async function startServer() {
         isUpcoming: nextHoliday === today || (nextHoliday && (new Date(nextHoliday).getTime() - now.getTime()) / (1000 * 60 * 60 * 24) < 3)
       },
       isMarketClosed
-    });
+    };
+
+    marketInfoCache = result;
+    lastMarketInfoFetch = Date.now();
+    res.json(result);
   });
 
+  // In-memory caches for rate-limiting Firestore reads
+  let tradeLogsCache: any = null;
+  let lastTradeLogsFetch = 0;
   apiRouter.get("/trade-logs", async (req, res) => {
-    const logs = await tradeLogger.getLogs();
-    res.json(logs);
+    try {
+      if (tradeLogsCache && (Date.now() - lastTradeLogsFetch < 10000)) {
+        return res.json(tradeLogsCache);
+      }
+      const logs = await tradeLogger.getLogs();
+      tradeLogsCache = logs;
+      lastTradeLogsFetch = Date.now();
+      res.json(logs);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch trade logs" });
+    }
+  });
+
+  apiRouter.get("/audit-logs", async (req, res) => {
+    try {
+      const logs = await tradeLogger.getAuditLogs();
+      res.json(logs);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
   });
 
   apiRouter.get("/logger-status", async (req, res) => {
-    const logs = await tradeLogger.getLogs();
+    const logs = tradeLogsCache || await tradeLogger.getLogs();
     res.json({
       status: "online",
       logsCount: logs.length
@@ -1151,7 +1062,7 @@ async function startServer() {
     res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
   });
 
-  // Vite middleware for development
+  // Vite/SPA Middleware
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1160,15 +1071,65 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    } else {
+      console.warn("[INIT] dist directory not found - web client might not load.");
+    }
   }
 
+  // Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("[SERVER-ERROR]", err);
+    res.status(500).json({ error: "Internal server error", message: err.message });
+  });
+
+  try {
+    const server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[V5.4.3] Quantum Server listening on PORT ${PORT}`);
+    });
+    
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[FATAL] Port ${PORT} is already in use.`);
+      } else {
+        console.error("[FATAL] Server listener error:", err);
+      }
+    });
+
+    // Load persisted data in background (Unwaited) after listener is up
+    loadKiteSession().then(data => {
+      if (data && apiKey && !kiteInstance) {
+          kiteInstance = new KiteConnect({ api_key: apiKey });
+          if (accessToken) {
+            kiteInstance.setAccessToken(accessToken);
+            setDataMode('LIVE');
+            marketEngine.syncMode();
+            console.log("[SYSTEM] Background: Kite session restored.");
+          }
+      }
+      loadRiskConfig();
+      loadMarketStructure();
+      marketLoop();
+    }).catch(err => {
+      console.error("[INIT] Background load failed:", err);
+      marketLoop();
+    });
+
   } catch (err) {
-    console.error("FATAL: Server failed to start:", err);
+    console.error("FATAL: Failed to start server listener:", err);
   }
 }
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+});
 
 startServer();

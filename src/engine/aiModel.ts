@@ -16,6 +16,7 @@ export interface PredictionResult {
 
 class AIEngine {
   private ai: GoogleGenAI | null = null;
+  private cache: Map<string, { data: any, timestamp: number }> = new Map();
 
   constructor() {
     if (config.GEMINI_API_KEY) {
@@ -23,7 +24,23 @@ class AIEngine {
     }
   }
 
+  private getCached(key: string, ttlMs: number): any | null {
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.timestamp < ttlMs) {
+      return cached.data;
+    }
+    return null;
+  }
+
+  private setCache(key: string, data: any) {
+    this.cache.set(key, { data, timestamp: Date.now() });
+  }
+
   async predictWinProbability(currentFeatures: any, history: TradeLogEntry[]): Promise<number> {
+    const cacheKey = `win_prob_${JSON.stringify(currentFeatures)}_${history.length}`;
+    const cached = this.getCached(cacheKey, 30000); // 30s cache for probability
+    if (cached !== null) return cached;
+
     if (!this.ai) {
       return 0.5 + (Math.random() - 0.5) * 0.4;
     }
@@ -42,7 +59,9 @@ class AIEngine {
       });
 
       const prob = parseFloat(response.text || "0.5");
-      return isNaN(prob) ? 0.5 : prob;
+      const result = isNaN(prob) ? 0.5 : prob;
+      this.setCache(cacheKey, result);
+      return result;
     } catch (error) {
       console.error("AI Prediction Error:", error);
       return 0.5;
@@ -54,13 +73,17 @@ class AIEngine {
     strategyData: any,
     historicalTrades: TradeLogEntry[]
   ): Promise<PredictionResult> {
+    const cacheKey = `trade_pred_${marketData.spot}_${strategyData.score.total}`;
+    const cached = this.getCached(cacheKey, 60000); // 1 min cache
+    if (cached) return cached;
+
     if (!this.ai) {
-        return {
-            prediction: 'NEUTRAL',
-            confidence: 0,
-            reasoning: "AI engine not initialized (Missing API Key).",
-            suggestedAction: "Check configuration."
-        };
+      return {
+        prediction: 'NEUTRAL',
+        confidence: 0,
+        reasoning: "AI engine not initialized (Missing API Key).",
+        suggestedAction: "Check configuration."
+      };
     }
 
     try {
@@ -134,7 +157,9 @@ class AIEngine {
       const text = response.text;
       if (!text) throw new Error("Empty response from AI");
       
-      return JSON.parse(text) as PredictionResult;
+      const result = JSON.parse(text) as PredictionResult;
+      this.setCache(cacheKey, result);
+      return result;
     } catch (error) {
       console.error("[GEMINI] Prediction Error:", error);
       return {
@@ -147,6 +172,13 @@ class AIEngine {
   }
 
   async analyzeStockIntel(stockContext: any): Promise<any> {
+    const cacheKey = `stock_intel_${stockContext.symbol}`;
+    const cached = this.getCached(cacheKey, 15 * 60 * 1000); // 15 mins cache
+    if (cached) {
+      console.log(`[AI-STOCK] Returning cached analysis for ${stockContext.symbol}`);
+      return cached;
+    }
+
     if (!this.ai) {
       return {
         verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'AI Offline (No API Key).', sl: 0, target: 0 },
@@ -229,6 +261,7 @@ class AIEngine {
 
       const result = JSON.parse(text);
       console.log(`[AI-STOCK] ${stockContext.symbol} Analysis Complete: ${result.verdict.bias} (${result.verdict.score}%)`);
+      this.setCache(cacheKey, result);
       return result;
     } catch (e: any) {
       console.error("[AI-STOCK] Analysis Error:", e);

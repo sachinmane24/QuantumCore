@@ -9,9 +9,16 @@ import fs from 'fs-extra';
 import path from 'path';
 
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-const firebaseConfig = fs.readJsonSync(configPath);
+let firebaseConfig = { projectId: 'mock-project', firestoreDatabaseId: '(default)' };
+try {
+  if (fs.pathExistsSync(configPath)) {
+    firebaseConfig = fs.readJsonSync(configPath);
+  }
+} catch (e) {
+  console.error("[FIREBASE-SERVER] Failed to read firebase-applet-config.json:", e);
+}
 
-if (!getApps().length) {
+if (!getApps().length && firebaseConfig.projectId && firebaseConfig.projectId !== 'mock-project') {
   initializeApp({
     projectId: firebaseConfig.projectId,
   });

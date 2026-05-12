@@ -66,6 +66,12 @@ class ExecutionEngine {
     
     if (!validation.allowed) {
       console.warn(`[EXECUTION] Trade blocked by Risk Engine: ${validation.reason}`);
+      await tradeLogger.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'TRADE_SKIP',
+        message: `Trade blocked for ${bias} setup: ${validation.reason}`,
+        details: { score, riskScore: validation.score }
+      });
       return;
     }
 
@@ -255,6 +261,18 @@ class ExecutionEngine {
 
     this.activePositions = newPositions;
     console.log(`[EXECUTION] AI AUTO-DECIDE: Structure [${score.strategyType}] selected based on VIX ${this.currentVixAtEntry.toFixed(2)} and Score ${score.total}.`);
+    
+    await tradeLogger.logAudit({
+      timestamp: new Date().toISOString(),
+      type: 'TRADE_TRIGGER',
+      message: `${bias} Signal: Executing [${score.strategyType}] structure.`,
+      details: { 
+        spot, 
+        vix: this.currentVixAtEntry, 
+        score: score.total, 
+        params: this.currentTradeParams 
+      }
+    });
 
     this.calculatePortfolioGreeks();
     this.currentEntryNetDelta = this.netDelta;
@@ -310,6 +328,12 @@ class ExecutionEngine {
     // Check Risk Management
     const riskStats = riskEngine.getStats();
     if (riskStats.isKillSwitchActive) {
+      await tradeLogger.logAudit({
+        timestamp: new Date().toISOString(),
+        type: 'RISK_ALERT',
+        message: `Kill Switch Triggered mid-trade: ${riskStats.killReason}`,
+        details: { pnl: this.pnl }
+      });
       await this.exitAll(`Risk Kill Switch: ${riskStats.killReason}`);
       return;
     }

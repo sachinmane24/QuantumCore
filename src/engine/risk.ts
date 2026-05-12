@@ -33,9 +33,10 @@ class RiskEngine {
 
   private entriesToday: number = 0;
 
-  private dailyHistory: { pnl: number; timestamp: number }[] = [];
+  private lastResetDate: string | null = null;
 
   updatePnL(currentPnL: number, positions: Position[]) {
+    this.checkForDailyReset();
     this.stats.dailyPnL = currentPnL;
     
     // Track Drawdown
@@ -128,7 +129,18 @@ class RiskEngine {
     console.warn(`[RISK ENGINE] KILL SWITCH ACTIVATED: ${reason}`);
   }
 
+  private checkForDailyReset() {
+    const today = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata", dateStyle: "short"});
+    if (this.lastResetDate && this.lastResetDate !== today) {
+      console.log(`[RISK] New day detected (${today}). Resetting daily stats.`);
+      this.reset();
+    }
+    this.lastResetDate = today;
+  }
+
   validateEntry(qty: number, expectedSL: number): { allowed: boolean; reason: string | null; score: number } {
+    this.checkForDailyReset();
+    
     if (this.stats.isKillSwitchActive) {
       return { allowed: false, reason: `Kill Switch Active: ${this.stats.killReason}`, score: this.stats.riskScore };
     }
@@ -136,12 +148,23 @@ class RiskEngine {
     // Time Check (Convert to IST: UTC+5:30)
     const istTimeStr = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
     const istDate = new Date(istTimeStr);
+    const day = istDate.getDay(); // 0=Sun, 6=Sat
     const hours = istDate.getHours();
     const minutes = istDate.getMinutes();
     const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
     
+    // Weekend check
+    if (day === 0 || day === 6) {
+      return { allowed: false, reason: `Market Closed (Weekend)`, score: this.stats.riskScore };
+    }
+
     if (timeStr < config.START_TIME || timeStr > config.END_TIME) {
       return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };
+    }
+
+    // 15-Minute Market Open Cool-off (Safety first)
+    if (timeStr >= "09:15" && timeStr < "09:30") {
+      return { allowed: false, reason: `Market Warming Up. Cool-off active until 09:30 IST for stability.`, score: this.stats.riskScore };
     }
 
     // Risk per trade check
