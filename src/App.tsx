@@ -797,7 +797,7 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-10">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-metric">
               <div className="flex items-center gap-2">
                  <span className="text-slate-500">SYNC</span>
                  <div className="flex items-center gap-1 group bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
@@ -814,21 +814,21 @@ export default function App() {
                       "text-[8px] font-mono transition-colors",
                       lastSync && (new Date().getTime() - lastSync.getTime() < 3000) ? "text-emerald-400" : "text-amber-400/50"
                     )}>
-                      {lastSync ? `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s` : 'OFFLINE'}
+                      {market?.error ? 'FAIL' : (lastSync ? `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s` : 'OFFLINE')}
                     </span>
                  </div>
               </div>
               <div className="hidden md:flex gap-10">
                  <div className="flex items-center gap-2">
-                  <span className="text-slate-500">ATM Straddle Premium</span>
+                  <span className="text-slate-500 whitespace-nowrap">ATM Straddle Premium</span>
                   <motion.span 
                     key={market?.spot}
                     initial={{ opacity: 0.5 }}
                     animate={{ opacity: 1 }}
-                    className="text-emerald-400"
+                    className="text-emerald-400 font-bold"
                   >
-                    ₹{((market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
-                       (market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0)).toFixed(1)}
+                    ₹{((market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
+                       (market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0))?.toFixed(1) || '---'}
                   </motion.span>
                 </div>
               </div>
@@ -881,11 +881,19 @@ export default function App() {
               <span className="terminal-label !mb-0.5">PCR Ratio</span>
               <div className="terminal-value text-lg text-emerald-400">{market?.pcr ? market.pcr.toFixed(2) : '1.18'}</div>
             </div>
-            <div className="flex flex-col text-right">
+            <div className="flex flex-col text-right group relative">
               <span className="terminal-label !mb-0.5">Last Sync</span>
-              <div className="terminal-value text-[10px] text-slate-400 font-mono mt-1">
-                {lastSync ? lastSync.toLocaleTimeString() : '--:--:--'}
+              <div className={cn(
+                "terminal-value text-[10px] font-mono mt-1 transition-colors",
+                market?.error ? "text-rose-400 animate-pulse" : "text-slate-400"
+              )}>
+                {market?.lastUpdated ? new Date(market.lastUpdated).toLocaleTimeString() : (lastSync ? lastSync.toLocaleTimeString() : '--:--:--')}
               </div>
+              {market?.error && (
+                <div className="absolute top-full right-0 mt-1 bg-rose-500/90 text-white text-[7px] px-2 py-1 rounded whitespace-nowrap z-[100] shadow-xl border border-white/10 uppercase tracking-tighter">
+                  Kite API Exception: {market.error}
+                </div>
+              )}
             </div>
             {marketInfo && (
               <>
@@ -1490,7 +1498,27 @@ export default function App() {
                     </div>
                  </div>
 
-                 <div className="flex-1 w-full h-[300px]">
+                 <div className="flex-1 w-full h-[300px] relative transition-all duration-700">
+                    {(history.length < 3 || (market?.spot === 0)) && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-md rounded-xl border border-white/5 overflow-hidden">
+                        <div className="absolute inset-0 bg-blue-500/5 animate-pulse" />
+                        <motion.div 
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+                          className="relative z-20"
+                        >
+                          <Activity className="w-12 h-12 text-blue-500/20" />
+                        </motion.div>
+                        <div className="mt-4 text-center relative z-20 px-6 max-w-xs">
+                          <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.5em]">
+                            {market?.error ? "Stream Malfunction" : "Data Feed Calibration"}
+                          </p>
+                          <p className="text-[7px] text-slate-600 mt-2 uppercase font-bold tracking-widest leading-loose">
+                            {market?.error ? market.error : "Initializing high-frequency capture array... Attempting handshake with NSE servers via Zerodha."}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                    <ResponsiveContainer width="100%" height="100%">
                      <LineChart data={history.slice(-30)}>
                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />

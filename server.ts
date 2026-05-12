@@ -251,6 +251,7 @@ async function startServer() {
 
     // Background Trading Loop
     let isSyncing = false;
+    let liveFailureCount = 0;
     async function marketLoop() {
       if (isSyncing) {
         setTimeout(marketLoop, 500);
@@ -295,12 +296,7 @@ async function startServer() {
           const atmStrike = Math.round(currentSpot / 50) * 50;
 
           if (niftyInstruments.length > 1) {
-            // Pick 20 strikes around ATM (10 up, 10 down)
-            const strikesInRange = Array.from(new Set(niftyInstruments.map(i => i.strike)))
-              .sort((a, b) => Math.abs(a - atmStrike) - Math.abs(b - atmStrike))
-              .slice(0, 10); // Take 10 closest strikes first (to be safe with quote limits)
-              
-            // Actually let's just do -5 to +5 around ATM to guarantee density
+            // Pick density of strikes around ATM
             for (let i = -5; i <= 5; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
@@ -315,6 +311,7 @@ async function startServer() {
           lastRawQuotes = quotes;
           lastFetchTimestamp = new Date().toISOString();
           lastFetchError = null;
+          liveFailureCount = 0; // Reset on success
           
           if (quotes["NSE:NIFTY 50"]) {
             const spotQuote = quotes["NSE:NIFTY 50"];
@@ -340,9 +337,9 @@ async function startServer() {
                 chainData.push({
                   strike,
                   ce_oi: ceQuote?.oi || 0,
-                  ce_oi_change: ((ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0)) || (Math.random() * 5000 * (Math.random() > 0.5 ? 1 : -1)),
+                  ce_oi_change: ((ceQuote?.oi_day_high || 0) - (ceQuote?.oi_day_low || 0)) || 0,
                   pe_oi: peQuote?.oi || 0,
-                  pe_oi_change: ((peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0)) || (Math.random() * 5000 * (Math.random() > 0.5 ? 1 : -1)),
+                  pe_oi_change: ((peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0)) || 0,
                   ce_price: ceQuote?.last_price || 0,
                   pe_price: peQuote?.last_price || 0,
                   iv: ceQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random()),
@@ -353,21 +350,26 @@ async function startServer() {
 
             marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, changePercent);
             
-            // Persist market structure if significant values changed (e.g., first open or new High/Low)
-            if (loopCount % 60 === 0) { // Every 1 min approx
+            if (loopCount % 60 === 0) {
                await saveMarketStructure();
             }
 
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
-               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}, Chain: ${chainData.length} strikes`);
+               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN')} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}`);
             }
-          }
- else {
-            console.warn("[LIVE-SYNC] Received quotes but NIFTY 50 not found in response.");
           }
         } catch (err: any) {
           lastFetchError = err?.message || String(err);
-          console.error("Real-time data sync failed:", err);
+          liveFailureCount++;
+          console.error(`[LIVE-SYNC] Failure #${liveFailureCount}:`, lastFetchError);
+          
+          if (liveFailureCount >= 5 && (lastFetchError?.includes('api_key') || lastFetchError?.includes('token'))) {
+             console.warn("[AUTH] Session appears invalid. Clearing token to allow re-login.");
+             accessToken = null;
+             lastFetchError = "Session Expired or Invalid API Key. Please re-authenticate.";
+             setDataMode('MOCK');
+             marketEngine.syncMode();
+          }
         }
       }
 
@@ -570,7 +572,10 @@ async function startServer() {
       vwap: marketEngine.getVWAP(),
       indicators: marketEngine.getTechnicalIndicators(),
       todayOpen: marketEngine.getTodayOpen(),
-      yesterdayClose: marketEngine.getYesterdayClose()
+      yesterdayClose: marketEngine.getYesterdayClose(),
+      lastUpdated: lastFetchTimestamp || new Date().toISOString(),
+      error: lastFetchError,
+      dataSource: config.DATA_SOURCE
     });
   });
 
