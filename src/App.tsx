@@ -380,7 +380,7 @@ export default function App() {
     };
   }, [fetchData, isLoggedIn]);
 
-  const handleExecute = async (bias: 'BULLISH' | 'BEARISH') => {
+  const handleExecute = async (bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
     await fetch('/api/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1708,11 +1708,12 @@ export default function App() {
                  </div>
 
                 <button 
-                  onClick={() => handleExecute(strategy?.score.bias === 'BULLISH' ? 'BULLISH' : 'BEARISH')}
+                  onClick={() => handleExecute(strategy?.score.bias || 'NEUTRAL')}
                   className={cn(
                     "w-full py-5 font-black rounded-xl shadow-2xl border transition-all uppercase tracking-[0.2em] text-xs",
                     strategy?.score.bias === 'BULLISH' ? "bg-emerald-600 border-emerald-400/50 hover:bg-emerald-500" : 
                     strategy?.score.bias === 'BEARISH' ? "bg-rose-600 border-rose-400/50 hover:bg-rose-500" : 
+                    strategy?.score.bias === 'NEUTRAL' ? "bg-slate-700 border-slate-600 hover:bg-slate-500" :
                     "bg-slate-800 border-slate-700 opacity-50 cursor-not-allowed"
                   )}
                 >
@@ -1720,26 +1721,42 @@ export default function App() {
                 </button>
                  {execution?.autoMode && (
                   <div className="mt-4 p-4 border border-purple-500/20 bg-purple-500/5 rounded-xl space-y-3">
-                     <div className="flex items-start gap-4">
-                        <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center animate-pulse">
-                           <Activity className="w-3 h-3 text-white" />
+                     <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-4">
+                           <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center animate-pulse">
+                              <Activity className="w-3 h-3 text-white" />
+                           </div>
+                           <div>
+                              <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest block mb-1">Autonomous Guard Active</span>
+                              <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                                Continuous market scanning enabled.
+                              </p>
+                           </div>
                         </div>
-                        <div>
-                           <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest block mb-1">Autonomous Guard Active</span>
-                           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-                             Quantum Core will automatically handle execution logic. Manual override is always available.
-                           </p>
+                        <div className={`p-1.5 rounded-lg border ${execution.lastTradeSuppression ? 'border-amber-500/40 bg-amber-500/10' : 'border-emerald-500/40 bg-emerald-500/10'} flex items-center gap-2`}>
+                           <div className={`w-2 h-2 rounded-full ${execution.lastTradeSuppression ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]'}`} />
+                           <span className={`text-[9px] font-black uppercase ${execution.lastTradeSuppression ? 'text-amber-400' : 'text-emerald-400'}`}>
+                              {execution.lastTradeSuppression ? 'Paused' : 'Ready'}
+                           </span>
                         </div>
                      </div>
                      {execution?.lastTradeSuppression && (
-                       <div className="pt-2 border-t border-purple-500/10 flex items-center justify-between">
-                          <span className="text-[9px] font-black text-amber-500 uppercase flex items-center gap-1.5">
-                             <ShieldAlert className="w-3 h-3" />
-                             Entry Paused: {execution.lastTradeSuppression.reason}
-                          </span>
-                          <span className="text-[8px] font-mono text-slate-500">
-                             {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                          </span>
+                       <div className="pt-2 border-t border-purple-500/10 space-y-2">
+                          <div className="flex items-center justify-between">
+                             <span className="text-[9px] font-black text-amber-500 uppercase flex items-center gap-1.5">
+                                <ShieldAlert className="w-3 h-3" />
+                                {execution.lastTradeSuppression.reason}
+                             </span>
+                             <span className="text-[8px] font-mono text-slate-500">
+                                {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                             </span>
+                          </div>
+                          <div className="flex gap-1">
+                             <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden">
+                                <div className="h-full bg-amber-500/50 w-[70%]" />
+                             </div>
+                             <span className="text-[8px] text-slate-500 font-black">SCANNING...</span>
+                          </div>
                        </div>
                      )}
                   </div>

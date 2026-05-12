@@ -166,6 +166,7 @@ export interface ExecutionState {
   params?: any;
   activeSL?: number;
   peakPnL?: number;
+  lastTradeSuppression?: { reason: string; timestamp: number } | null;
 }
 
 export interface MarketInfo {

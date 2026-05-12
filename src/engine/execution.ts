@@ -54,20 +54,35 @@ class ExecutionEngine {
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
 
-  async executeTrade(bias: 'BULLISH' | 'BEARISH') {
+  async executeTrade(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
-    // Entry Cooldown: 15 minute break between trades to prevent over-trading/churning
-    const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
-    if (timeSinceLastTrade < 900) {
-      const reason = `Cooldown active (${Math.round((900 - timeSinceLastTrade)/60)}m left)`;
-      this.lastTradeSuppression = { reason, timestamp: Date.now() };
-      console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
-      return;
+    // Entry Cooldown: 5 minute break between trades for Auto-Mode only
+    if (!isManual) {
+      const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
+      if (timeSinceLastTrade < 300) {
+        const reason = `Cooldown active (${Math.round((300 - timeSinceLastTrade)/60)}m left)`;
+        if (!this.lastTradeSuppression || this.lastTradeSuppression.reason !== reason) {
+          console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
+        }
+        this.lastTradeSuppression = { reason, timestamp: Date.now() };
+        return;
+      }
     }
 
     const spot = marketEngine.getSpotPrice();
     const score = strategyEngine.calculateScore();
+    
+    // Score Validation: Minimum 70 required for Auto-Mode only
+    if (!isManual && score.total < 70) {
+      const reason = `Low Signal Score (${score.total})`;
+      if (!this.lastTradeSuppression || !this.lastTradeSuppression.reason.startsWith('Low Signal Score')) {
+        console.log(`[EXECUTION] Entry Suppressed: ${reason}. At least 70 required.`);
+      }
+      this.lastTradeSuppression = { reason, timestamp: Date.now() };
+      return;
+    }
+
     const atmStrike = Math.round(spot / 50) * 50;
     
     // Derive Dynamic SL/Target first
@@ -83,6 +98,8 @@ class ExecutionEngine {
     this.lastRiskValidation = validation;
     
     if (!validation.allowed) {
+      const reason = `Risk Block: ${validation.reason}`;
+      this.lastTradeSuppression = { reason, timestamp: Date.now() };
       console.warn(`[EXECUTION] Trade blocked by Risk Engine: ${validation.reason}`);
       await tradeLogger.logAudit({
         timestamp: new Date().toISOString(),
@@ -308,10 +325,11 @@ class ExecutionEngine {
           const rr = maxRewardPoints > 0 ? maxRiskPoints / maxRewardPoints : 100;
 
           // Relaxed threshold: Risk can be up to 4x the potential Reward for these setups.
-          // This allows 1:0.25 R:R which is common in high-win-rate option selling.
+          // This allows roughly a 4.5:1 Risk:Reward (Risking 4.5 units to make 1).
           if (rr > 4.5) { 
             const reason = `Poor RR ratio (1:${(1/rr).toFixed(2)})`;
             this.lastTradeSuppression = { reason, timestamp: Date.now() };
+            console.warn(`[EXECUTION] Entry Suppressed: ${reason}. Minimum 1:4.5 R:R required.`);
             return;
           }
         }

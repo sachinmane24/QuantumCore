@@ -493,13 +493,8 @@ async function startServer() {
 
           // Entry Logic (Only if no active position)
           if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
-             if (decision.bias === 'BULLISH' && decision.total >= 70) {
-                console.log("[AUTO] Bulls dominance detected. Entering PE Short...");
-                await executionEngine.executeTrade('BULLISH');
-             } else if (decision.bias === 'BEARISH' && decision.total >= 70) {
-                console.log("[AUTO] Bears dominance detected. Entering CE Short...");
-                await executionEngine.executeTrade('BEARISH');
-             }
+             const tradeBias = decision.bias === 'BULLISH' ? 'BULLISH' : 'BEARISH';
+             await executionEngine.executeTrade(tradeBias);
           }
         } catch (err) {
           console.error("Autonomous execution engine error:", err);
@@ -874,10 +869,15 @@ async function startServer() {
     });
   });
 
-  apiRouter.post("/execute", (req, res) => {
+  apiRouter.post("/execute", async (req, res) => {
     const { bias } = req.body;
-    executionEngine.executeTrade(bias);
-    res.json({ status: "success" });
+    try {
+      await executionEngine.executeTrade(bias, true);
+      res.json({ status: "success" });
+    } catch (err) {
+      console.error("[API] Manual Execution failed:", err);
+      res.status(500).json({ error: "Execution failed" });
+    }
   });
 
   apiRouter.post("/predict", async (req, res) => {
