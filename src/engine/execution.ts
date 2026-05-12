@@ -50,6 +50,7 @@ class ExecutionEngine {
   private maxReward: number = 0;
   private lastHedgeTime: number = 0;
   private lastTradeEndTime: number = 0;
+  private lastTradeSuppression: { reason: string; timestamp: number } | null = null;
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
 
@@ -59,7 +60,9 @@ class ExecutionEngine {
     // Entry Cooldown: 15 minute break between trades to prevent over-trading/churning
     const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
     if (timeSinceLastTrade < 900) {
-      console.log(`[EXECUTION] Entry Suppressed: Cooldown active (${Math.round((900 - timeSinceLastTrade)/60)}m left).`);
+      const reason = `Cooldown active (${Math.round((900 - timeSinceLastTrade)/60)}m left)`;
+      this.lastTradeSuppression = { reason, timestamp: Date.now() };
+      console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
       return;
     }
 
@@ -274,27 +277,54 @@ class ExecutionEngine {
       }
     }
 
-    // Risk/Reward Validation: Enforce 1:2 Minimum RR for Spreads
-    if (newPositions.length >= 2) {
-      const sellLeg = newPositions.find(p => p.side === 'SELL');
-      const buyLeg = newPositions.find(p => p.side === 'BUY');
-      
-      if (sellLeg && buyLeg && sellLeg.type === buyLeg.type) {
-        const width = Math.abs(buyLeg.strike - sellLeg.strike);
-        const netCredit = Math.abs(sellLeg.entryPrice - buyLeg.entryPrice);
-        const risk = width - netCredit;
-        const reward = netCredit;
+    // Risk/Reward Validation: Enforce Minimum RR for Spreads
+    if (newPositions.length >= 1) {
+      if (newPositions.length >= 2) {
+        const sellLegs = newPositions.filter(p => p.side === 'SELL');
+        const buyLegs = newPositions.filter(p => p.side === 'BUY');
+        
+        if (sellLegs.length > 0 && buyLegs.length > 0) {
+          // Calculate weighted net premium
+          const totalSellPrem = sellLegs.reduce((sum, p) => sum + p.entryPrice * p.qty, 0);
+          const totalBuyPrem = buyLegs.reduce((sum, p) => sum + p.entryPrice * p.qty, 0);
+          const netCredit = totalSellPrem - totalBuyPrem;
+          
+          // Width based risk for normal and ratio spreads
+          const width = Math.abs(buyLegs[0].strike - sellLegs[0].strike);
+          const primaryQty = buyLegs[0].qty;
+          
+          // For ratio spreads (e.g. Sell 2x), risk is higher but so is credit usually.
+          // We calculate actual max points of risk.
+          let maxRiskPoints = 0;
+          if (netCredit > 0) {
+             // Credit Spread/Ratio
+             maxRiskPoints = (width * primaryQty - netCredit) / primaryQty;
+          } else {
+             // Debit Spread
+             maxRiskPoints = Math.abs(netCredit) / primaryQty;
+          }
+
+          const maxRewardPoints = netCredit > 0 ? (netCredit / primaryQty) : (width - Math.abs(netCredit) / primaryQty);
+          const rr = maxRewardPoints > 0 ? maxRiskPoints / maxRewardPoints : 100;
+
+          // Relaxed threshold: Risk can be up to 4x the potential Reward for these setups.
+          // This allows 1:0.25 R:R which is common in high-win-rate option selling.
+          if (rr > 4.5) { 
+            const reason = `Poor RR ratio (1:${(1/rr).toFixed(2)})`;
+            this.lastTradeSuppression = { reason, timestamp: Date.now() };
+            return;
+          }
+        }
+      } else if (newPositions.length === 1 && newPositions[0].side === 'BUY') {
+        // Naked Buy: Risk is SL, Reward is Target
+        const risk = this.currentTradeParams?.stopLossRupees || config.SL_RUPEES;
+        const reward = this.currentTradeParams?.targetRupees || config.TARGET_RUPEES;
         const rr = reward > 0 ? risk / reward : 100;
         
-        // If RR is worse than 1:2 (risk is more than double the reward), reject
-        if (rr > 2.05) { 
-          console.warn(`[EXECUTION] Entry Aborted: Poor Risk/Reward Ratio (1:${(1/rr).toFixed(2)}). At least 1:2 required.`);
-          await tradeLogger.logAudit({
-            timestamp: new Date().toISOString(),
-            type: 'TRADE_SKIP',
-            message: `Poor RR (1:${(1/rr).toFixed(2)}) for ${score.strategyType}. At least 1:2 required.`,
-            details: { risk, reward, rr, width }
-          });
+        // For naked buys, we want at least 1:1.5
+        if (rr > 0.7) { // Risk is more than 70% of reward
+          const reason = `Naked Buy RR too low (1:${(1/rr).toFixed(1)})`;
+          this.lastTradeSuppression = { reason, timestamp: Date.now() };
           return;
         }
       }
@@ -321,6 +351,7 @@ class ExecutionEngine {
     this.currentEntryNetGamma = this.netGamma;
 
     riskEngine.recordTradeEntry();
+    this.lastTradeSuppression = null;
   }
 
   async updatePnL() {
@@ -501,23 +532,21 @@ class ExecutionEngine {
 
     // Calculate Max Risk/Reward for the spread
     if (this.activePositions.length >= 2) {
-      // It's a spread
-      const sellLeg = this.activePositions.find(p => p.side === 'SELL')!;
-      const buyLeg = this.activePositions.find(p => p.side === 'BUY')!;
-      const width = Math.abs(buyLeg.strike - sellLeg.strike);
-      const isCredit = sellLeg.entryPrice > buyLeg.entryPrice;
-      const netCredit = Math.abs(sellLeg.entryPrice - buyLeg.entryPrice);
+      const sellLegs = this.activePositions.filter(p => p.side === 'SELL');
+      const buyLegs = this.activePositions.filter(p => p.side === 'BUY');
       
-      if (isCredit) {
-        this.maxReward = Math.round(netCredit * sellLeg.qty);
-        this.maxRisk = Math.round((width - netCredit) * sellLeg.qty);
-      } else {
-        this.maxReward = Infinity; // Technically buying naked but it's a debit spread 
-        this.maxRisk = Math.round(netCredit * buyLeg.qty);
-        // Better debit spread logic
-        this.maxReward = Math.round((width - netCredit) * buyLeg.qty);
+      if (sellLegs.length > 0 && buyLegs.length > 0) {
+        const totalSellPrem = sellLegs.reduce((sum, p) => sum + p.entryPrice * p.qty, 0);
+        const totalBuyPrem = buyLegs.reduce((sum, p) => sum + p.entryPrice * p.qty, 0);
+        const netCredit = totalSellPrem - totalBuyPrem;
+        
+        const primaryQty = buyLegs[0].qty;
+        const width = Math.abs(buyLegs[0].strike - sellLegs[0].strike);
+        
+        this.maxReward = Math.round(netCredit > 0 ? netCredit : (width * primaryQty + netCredit));
+        this.maxRisk = Math.round(netCredit > 0 ? (width * primaryQty - netCredit) : Math.abs(netCredit));
       }
-    } else {
+    } else if (this.activePositions.length === 1) {
       // Simplified for other structures
       this.maxReward = this.activePositions.reduce((sum, p) => sum + (p.side === 'SELL' ? p.entryPrice * p.qty : 5000), 0);
       this.maxRisk = this.activePositions.reduce((sum, p) => sum + (p.side === 'BUY' ? p.entryPrice * p.qty : 1000 * p.qty), 0);
@@ -726,6 +755,7 @@ class ExecutionEngine {
       netPremium: Math.round(this.netPremium),
       maxRisk: this.maxRisk,
       maxReward: this.maxReward,
+      lastTradeSuppression: this.lastTradeSuppression,
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),
       netTheta: Number(this.netTheta.toFixed(2)),

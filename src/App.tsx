@@ -1718,17 +1718,30 @@ export default function App() {
                 >
                   {execution?.executionMode === 'PAPER' ? 'Execute Paper Trade' : 'Confirm LIVE Order'}
                 </button>
-                {execution?.autoMode && (
-                  <div className="mt-4 p-4 border border-purple-500/20 bg-purple-500/5 rounded-xl flex items-start gap-4">
-                     <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center animate-pulse">
-                        <Activity className="w-3 h-3 text-white" />
+                 {execution?.autoMode && (
+                  <div className="mt-4 p-4 border border-purple-500/20 bg-purple-500/5 rounded-xl space-y-3">
+                     <div className="flex items-start gap-4">
+                        <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center animate-pulse">
+                           <Activity className="w-3 h-3 text-white" />
+                        </div>
+                        <div>
+                           <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest block mb-1">Autonomous Guard Active</span>
+                           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                             Quantum Core will automatically handle execution logic. Manual override is always available.
+                           </p>
+                        </div>
                      </div>
-                     <div>
-                        <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest block mb-1">Autonomous Guard Active</span>
-                        <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-                          Quantum Core will automatically handle execution logic. Manual override is always available.
-                        </p>
-                     </div>
+                     {execution?.lastTradeSuppression && (
+                       <div className="pt-2 border-t border-purple-500/10 flex items-center justify-between">
+                          <span className="text-[9px] font-black text-amber-500 uppercase flex items-center gap-1.5">
+                             <ShieldAlert className="w-3 h-3" />
+                             Entry Paused: {execution.lastTradeSuppression.reason}
+                          </span>
+                          <span className="text-[8px] font-mono text-slate-500">
+                             {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                       </div>
+                     )}
                   </div>
                 )}
               </section>
