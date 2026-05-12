@@ -348,8 +348,8 @@ export default function App() {
     fetchData('fast');
     fetchData('slow');
 
-    // Fast polling: 5s (reduced from 1s)
-    const fastInterval = setInterval(() => fetchData('fast'), 5000);
+    // Fast polling: 2s (improved from 5s)
+    const fastInterval = setInterval(() => fetchData('fast'), 2000);
     // Slow polling: 30s
     const slowInterval = setInterval(() => fetchData('slow'), 30000);
 
@@ -778,6 +778,9 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Underlying Spot</span>
               <span className="text-white">₹{market?.spot?.toLocaleString(undefined, { minimumFractionDigits: 1 })}</span>
+              {marketInfo?.isMarketClosed && (
+                <span className="bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded text-[7px] border border-rose-500/30">CLOSED</span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Institutional VWAP</span>
@@ -788,13 +791,29 @@ export default function App() {
               <span className="text-amber-500">{marketInfo?.expiry.daysToExpiry} Days</span>
             </div>
           </div>
-          <div className="flex gap-10">
-             <div className="flex items-center gap-2">
-              <span className="text-slate-500">ATM Straddle Premium</span>
-              <span className="text-emerald-400">
-                ₹{((market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
-                   (market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0)).toFixed(1)}
-              </span>
+          <div className="flex items-center gap-10">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                 <span className="text-slate-500">SYNC</span>
+                 <div className="flex items-center gap-1">
+                    <div className={cn(
+                      "w-1.5 h-1.5 rounded-full transition-all duration-300",
+                      loading ? "bg-slate-700" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+                    )} />
+                    <span className="text-white font-mono">
+                      {lastSync ? (Math.floor((new Date().getTime() - lastSync.getTime()) / 1000) === 0 ? 'JWT' : `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s`) : '---'}
+                    </span>
+                 </div>
+              </div>
+              <div className="hidden md:flex gap-10">
+                 <div className="flex items-center gap-2">
+                  <span className="text-slate-500">ATM Straddle Premium</span>
+                  <span className="text-emerald-400">
+                    ₹{((market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
+                       (market?.chain.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0)).toFixed(1)}
+                  </span>
+                </div>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-slate-500">IV Rank / Percentile</span>
