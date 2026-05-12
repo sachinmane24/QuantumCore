@@ -45,6 +45,8 @@ class ExecutionEngine {
   private netTheta: number = 0;
   private netVega: number = 0;
   private capitalDeployed: number = 0;
+  private maxRisk: number = 0;
+  private maxReward: number = 0;
   private lastHedgeTime: number = 0;
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
@@ -150,7 +152,7 @@ class ExecutionEngine {
       }
 
       case 'BULL_PUT_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.25, 'PE');
+        const sellStrike = getStrikeByDelta(0.40, 'PE');
         const buyStrike = sellStrike - 100;
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -160,7 +162,7 @@ class ExecutionEngine {
       }
 
       case 'BEAR_CALL_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.25, 'CE');
+        const sellStrike = getStrikeByDelta(0.40, 'CE');
         const buyStrike = sellStrike + 100;
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -430,22 +432,44 @@ class ExecutionEngine {
   private calculateCapitalDeployed() {
     if (this.activePositions.length === 0) {
       this.capitalDeployed = 0;
+      this.maxRisk = 0;
+      this.maxReward = 0;
       return;
     }
 
-    const buyLegs = this.activePositions.filter(p => p.side === 'BUY');
-    const sellLegs = this.activePositions.filter(p => p.side === 'SELL');
-    
-    const primaryQty = this.activePositions[0]?.qty || config.LOT_SIZE;
-    const lots = primaryQty / config.LOT_SIZE;
+    const netPremium = this.activePositions.reduce((sum, p) => {
+      const val = p.entryPrice * p.qty;
+      return sum + (p.side === 'BUY' ? val : -val);
+    }, 0);
 
-    if (sellLegs.length > 0) {
-      // Option Selling / Spreads Margin Heuristic
-      const isHedged = buyLegs.length > 0;
-      this.capitalDeployed = (isHedged ? 38000 : 115000) * lots;
+    // Capital Deployed: For buying it's premium paid. 
+    // For selling, user requested "premium cost" so we show net premium if it's a cost (debit).
+    // If it's a credit, we show 0 as "Premium Capital" or we show the absolute credit?
+    // Let's show the net cash impact as requested.
+    this.capitalDeployed = netPremium;
+
+    // Calculate Max Risk/Reward for the spread
+    if (this.activePositions.length === 2 && this.activePositions[0].type === this.activePositions[1].type && this.activePositions[0].side !== this.activePositions[1].side) {
+      // It's a spread
+      const sellLeg = this.activePositions.find(p => p.side === 'SELL')!;
+      const buyLeg = this.activePositions.find(p => p.side === 'BUY')!;
+      const width = Math.abs(buyLeg.strike - sellLeg.strike);
+      const isCredit = sellLeg.entryPrice > buyLeg.entryPrice;
+      const netCredit = Math.abs(sellLeg.entryPrice - buyLeg.entryPrice);
+      
+      if (isCredit) {
+        this.maxReward = Math.round(netCredit * sellLeg.qty);
+        this.maxRisk = Math.round((width - netCredit) * sellLeg.qty);
+      } else {
+        this.maxReward = Infinity; // Technically buying naked but it's a debit spread 
+        this.maxRisk = Math.round(netCredit * buyLeg.qty);
+        // Better debit spread logic
+        this.maxReward = Math.round((width - netCredit) * buyLeg.qty);
+      }
     } else {
-      // Option Buying: Real cost calculation
-      this.capitalDeployed = buyLegs.reduce((sum, p) => sum + (p.entryPrice * p.qty), 0);
+      // Simplified for other structures
+      this.maxReward = this.activePositions.reduce((sum, p) => sum + (p.side === 'SELL' ? p.entryPrice * p.qty : 5000), 0);
+      this.maxRisk = this.activePositions.reduce((sum, p) => sum + (p.side === 'BUY' ? p.entryPrice * p.qty : 1000 * p.qty), 0);
     }
   }
 
@@ -646,6 +670,8 @@ class ExecutionEngine {
       activeSL: this.currentActiveSL,
       rollsToday: this.rollsToday,
       capitalDeployed: Math.round(this.capitalDeployed),
+      maxRisk: this.maxRisk,
+      maxReward: this.maxReward,
       netDelta: Number(this.netDelta.toFixed(3)),
       netGamma: Number(this.netGamma.toFixed(4)),
       netTheta: Number(this.netTheta.toFixed(2)),

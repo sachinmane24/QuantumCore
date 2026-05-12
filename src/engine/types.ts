@@ -134,8 +134,13 @@ export interface ExecutionState {
   positions: any[];
   pnl: number;
   rollsToday: number;
+  capitalDeployed: number;
+  maxRisk: number;
+  maxReward: number;
   netDelta: number;
   netGamma: number;
+  netTheta: number;
+  netVega: number;
   hedgeLogs: string[];
   risk: {
     tradesToday: number;

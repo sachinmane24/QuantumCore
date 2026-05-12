@@ -1262,11 +1262,16 @@ export default function App() {
                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Current Positions</h3>
                       </div>
-                      <div className={cn(
-                        "px-3 py-1 rounded text-[10px] font-black",
-                        (execution?.pnl || 0) >= 0 ? "text-emerald-400 bg-emerald-400/10" : "text-rose-400 bg-rose-400/10"
-                      )}>
-                        PNL: ₹{execution?.pnl}
+                      <div className="flex items-center gap-3">
+                        <div className={cn(
+                          "px-3 py-1 rounded text-[10px] font-black",
+                          (execution?.pnl || 0) >= 0 ? "text-emerald-400 bg-emerald-400/10" : "text-rose-400 bg-rose-400/10"
+                        )}>
+                          PNL: ₹{execution?.pnl}
+                        </div>
+                        <div className="px-3 py-1 rounded text-[10px] font-black text-blue-400 bg-blue-400/10 ring-1 ring-blue-500/20 uppercase tracking-tighter">
+                          {execution?.capitalDeployed >= 0 ? 'Debit' : 'Credit'}: ₹{Math.abs(execution?.capitalDeployed || 0).toLocaleString()}
+                        </div>
                       </div>
                    </div>
                    <div className="space-y-2">
@@ -1682,10 +1687,20 @@ export default function App() {
                      <span className="terminal-value text-white">
                         {strategy?.score?.mode === 'MOMENTUM_SNIPER' 
                           ? `₹${(Math.round((market?.chain?.[0]?.ce_price || 100) * 25))?.toLocaleString() || '0'}`
-                          : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score?.total || 50) - 55) * 0.02)))?.toFixed(2)}L`
+                          : (strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON'))
+                            ? `₹${(Math.round((market?.chain?.[0]?.ce_price || 100) * 0.15 * 65)).toLocaleString()} (Spread Premium)`
+                            : `₹${(Math.max(0.38, Math.min(2.5, 1.15 + ((strategy?.score?.total || 50) - 55) * 0.02)))?.toFixed(2)}L`
                         }
                      </span>
                   </div>
+                  {(strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON')) && (
+                    <div className="flex justify-between items-center text-[10px] pt-1 border-t border-white/5 mt-1">
+                      <span className="terminal-label !mb-0 text-amber-400">Target Yield</span>
+                      <span className="terminal-value text-amber-400">
+                        {strategy?.score.mode === 'INST_SPREAD' ? '0.8% - 1.5% / Day' : '15% - 40% / Scalp'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <button 
@@ -2088,7 +2103,7 @@ export default function App() {
 
                  {/* Portfolio Limits Tracking */}
                  <section className="col-span-12 lg:col-span-8 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                        <div className="terminal-card p-4 space-y-4">
                           <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-slate-400">
                              <span>Daily PnL Threshold</span>
@@ -2135,9 +2150,33 @@ export default function App() {
                              </span>
                           </div>
                        </div>
+                        <div className="terminal-card p-4 space-y-4 border-blue-500/20 bg-blue-500/[0.02]">
+                           <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-blue-400">
+                              <span>Option Premium Value</span>
+                              <span className="text-slate-500">₹{(appConfig?.CAPITAL_BASE || 1000000).toLocaleString()} Base</span>
+                           </div>
+                           <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-1">
+                                 <div className="text-[8px] font-black text-slate-500 uppercase">Max Reward</div>
+                                 <div className="text-xs font-black text-emerald-400">₹{execution?.maxReward?.toLocaleString() || '--'}</div>
+                              </div>
+                              <div className="space-y-1">
+                                 <div className="text-[8px] font-black text-slate-500 uppercase">Max Risk</div>
+                                 <div className="text-xs font-black text-rose-400">₹{execution?.maxRisk?.toLocaleString() || '--'}</div>
+                              </div>
+                           </div>
+                           <div className="flex justify-between text-[10px] items-center pt-2 border-t border-white/5">
+                              <span className="font-black text-blue-400 uppercase">
+                                 Net Premium: ₹{Math.abs(execution?.capitalDeployed || 0).toLocaleString()} {execution?.capitalDeployed >= 0 ? '(DR)' : '(CR)'}
+                              </span>
+                              <span className="text-slate-500 font-mono">
+                                 RR 1:{(execution?.maxRisk && execution?.maxReward) ? (execution.maxRisk / execution.maxReward).toFixed(1) : '--'}
+                              </span>
+                           </div>
+                        </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                        <div className="terminal-card p-4 bg-white/[0.01]">
                           <Zap className="w-4 h-4 text-amber-500 mb-2" />
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Consecutive Losses</h4>
@@ -2155,14 +2194,6 @@ export default function App() {
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Profit Lock</h4>
                           <div className="text-xl font-black text-emerald-400">₹{execution?.risk?.peakPnLToday || 0}</div>
                           <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Trailing protection active</p>
-                       </div>
-                       <div className="terminal-card p-4 bg-white/[0.01] border-blue-500/20">
-                          <Layers className="w-4 h-4 text-blue-400 mb-2" />
-                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Capital Blocked</h4>
-                          <div className="text-xl font-black text-blue-400">₹{execution?.capitalDeployed?.toLocaleString() || 0}</div>
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">
-                             {Math.round(((execution?.capitalDeployed || 0) / (appConfig?.CAPITAL_BASE || 1)) * 100)}% Utilization
-                          </p>
                        </div>
                     </div>
 
