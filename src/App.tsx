@@ -1483,161 +1483,99 @@ export default function App() {
                        <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Institutional VWAP</span>
                        <div className="text-sm font-black text-blue-400">₹{market?.vwap?.toFixed(1) || '----'}</div>
                     </div>
-                  </div>
-               </section>
-
-               {/* NIFTY Spot Intelligence Chart */}
-               <section className="terminal-card bg-black/40 border-terminal-line p-6 flex flex-col min-h-[400px]">
+                                 <section className="terminal-card bg-black/40 border-terminal-line p-6 flex flex-col min-h-[400px]">
                  <div className="flex justify-between items-center mb-6">
                     <div className="flex items-center gap-3">
-                       <div className="p-2 bg-blue-500/10 rounded-lg">
-                          <Activity className="w-4 h-4 text-blue-500" />
+                       <div className="p-2 bg-purple-500/10 rounded-lg">
+                          <Activity className="w-4 h-4 text-purple-500" />
                        </div>
                        <div>
-                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">NIFTY Spot Intelligence</h3>
+                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Volatility Analytics</h3>
                           <div className="flex gap-3 mt-1">
                              <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
-                                RSI: <span className={cn("font-black", (market?.indicators?.rsi || 50) > 70 ? "text-rose-400" : (market?.indicators?.rsi || 50) < 30 ? "text-emerald-400" : "text-blue-400")}>
-                                   {market?.indicators?.rsi?.toFixed(1) || '---'}
+                                PCR: <span className={cn("font-black", (market?.pcr || 1) > 1.2 ? "text-emerald-400" : (market?.pcr || 1) < 0.8 ? "text-rose-400" : "text-blue-400")}>
+                                   {market?.pcr?.toFixed(2) || '---'}
                                 </span>
                              </span>
                              <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
-                                MACD: <span className="font-black text-white">{market?.indicators?.macd?.macd?.toFixed(2) || '---'}</span>
+                                VIX: <span className="font-black text-white">{market?.vix?.toFixed(2) || '---'}</span>
                              </span>
                           </div>
                        </div>
                     </div>
                     <div className="flex items-center gap-4">
                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-blue-500" />
-                          <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Price</span>
-                       </div>
-                       <div className="flex items-center gap-2 text-slate-500">
-                          <div className="w-2 h-2 rounded-full border border-blue-500/30" />
-                          <span className="text-[8px] font-black uppercase tracking-widest">BBands</span>
+                          <div className="w-2 h-2 rounded-full bg-purple-500" />
+                          <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">IV Smile</span>
                        </div>
                     </div>
                  </div>
 
                  <div className="flex-1 w-full h-[300px] relative transition-all duration-700">
-                    {(history.length < 3 || (market?.spot === 0)) && (
+                    {(!market?.chain || market.chain.length === 0) && (
                       <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-md rounded-xl border border-white/5 overflow-hidden">
-                        <div className="absolute inset-0 bg-blue-500/5 animate-pulse" />
+                        <div className="absolute inset-0 bg-purple-500/5 animate-pulse" />
                         <motion.div 
                           animate={{ rotate: 360 }}
                           transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
                           className="relative z-20"
                         >
-                          <Activity className="w-12 h-12 text-blue-500/20" />
+                          <Activity className="w-12 h-12 text-purple-500/20" />
                         </motion.div>
                         <div className="mt-4 text-center relative z-20 px-6 max-w-xs">
                           <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.5em]">
-                            {market?.error ? "Stream Malfunction" : "Data Feed Calibration"}
+                            Mapping Surface
                           </p>
                           <p className="text-[7px] text-slate-600 mt-2 uppercase font-bold tracking-widest leading-loose">
-                            {market?.error ? market.error : "Initializing high-frequency capture array... Attempting handshake with NSE servers via Zerodha."}
+                            Initializing high-frequency capture of volatility surface... Handshaking with NSE servers for Greek sync.
                           </p>
                         </div>
                       </div>
                     )}
                    <ResponsiveContainer width="100%" height="100%">
-                     <LineChart data={history.slice(-30)}>
+                     <AreaChart data={market?.chain || []}>
+                       <defs>
+                         <linearGradient id="colorIv" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4}/>
+                           <stop offset="95%" stopColor="#a855f7" stopOpacity={0}/>
+                         </linearGradient>
+                       </defs>
                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                       <XAxis 
-                         dataKey="time" 
-                         stroke="#475569" 
-                         fontSize={9} 
-                         tickLine={false} 
-                         axisLine={false} 
-                         dy={10}
-                       />
-                       <YAxis 
-                         domain={['auto', 'auto']} 
-                         orientation="right" 
-                         stroke="#475569" 
-                         fontSize={9} 
-                         tickLine={false} 
-                         axisLine={false} 
-                         dx={10}
-                       />
+                       <XAxis dataKey="strike" stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
+                       <YAxis domain={['auto', 'auto']} orientation="right" stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
                        <Tooltip 
                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
                          itemStyle={{ fontSize: '10px', fontWeight: 'bold' }}
                        />
-                       <Legend wrapperStyle={{ fontSize: '9px', paddingTop: '10px' }} />
-                       
-                       {/* Bollinger Bands */}
-                       <Line 
-                         type="monotone" 
-                         dataKey="bbUpper" 
-                         stroke="rgba(59, 130, 246, 0.2)" 
-                         strokeWidth={1} 
-                         dot={false} 
-                         strokeDasharray="5 5"
-                         name="BB Upper"
-                       />
-                       <Line 
-                         type="monotone" 
-                         dataKey="bbLower" 
-                         stroke="rgba(59, 130, 246, 0.2)" 
-                         strokeWidth={1} 
-                         dot={false} 
-                         strokeDasharray="5 5"
-                         name="BB Lower"
-                       />
-                       <Line 
-                         type="monotone" 
-                         dataKey="bbMiddle" 
-                         stroke="rgba(59, 130, 246, 0.1)" 
-                         strokeWidth={1} 
-                         dot={false} 
-                         name="BB Mid"
-                       />
-                       
-                       {/* Spot Price */}
-                       <Line 
-                         type="monotone" 
-                         dataKey="spot" 
-                         stroke="#3b82f6" 
-                         strokeWidth={3} 
-                         dot={false} 
-                         name="Nifty Spot"
-                         animationDuration={500}
-                       />
-                     </LineChart>
+                       <Area type="monotone" dataKey="iv" stroke="#a855f7" strokeWidth={3} fillOpacity={1} fill="url(#colorIv)" name="IV Smile" animationDuration={500} />
+                     </AreaChart>
                    </ResponsiveContainer>
                  </div>
                  
-                 {/* Secondary Indicators Row */}
-                 <div className="grid grid-cols-2 gap-4 mt-6 h-24">
-                    <div className="bg-black/20 rounded-lg p-2 border border-white/5">
-                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-2 px-1">RSI Oscillator</span>
-                       <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={history.slice(-30)}>
-                             <YAxis hide domain={[0, 100]} />
-                             <Area 
-                                type="monotone" 
-                                dataKey="rsi" 
-                                stroke="#f59e0b" 
-                                fill="rgba(245, 158, 11, 0.1)" 
-                                strokeWidth={1} 
-                             />
-                          </AreaChart>
-                       </ResponsiveContainer>
-                    </div>
-                    <div className="bg-black/20 rounded-lg p-2 border border-white/5">
-                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-2 px-1">MACD Momentum</span>
-                       <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={history.slice(-30)}>
-                             <Bar 
-                                dataKey="macdHist" 
-                                fill="#3b82f6"
-                                radius={[2, 2, 0, 0]}
-                             />
-                          </BarChart>
-                       </ResponsiveContainer>
-                    </div>
+                 {/* Entry Suppression Feed */}
+                 <div className="mt-6 border-t border-white/5 pt-4">
+                    {execution?.lastTradeSuppression ? (
+                       <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                             <ShieldAlert className="w-4 h-4 text-amber-500" />
+                             <div>
+                                <div className="text-[8px] font-black text-amber-500/70 uppercase tracking-widest">Entry Suppressed</div>
+                                <div className="text-[10px] font-black text-white uppercase">{execution.lastTradeSuppression.reason}</div>
+                             </div>
+                          </div>
+                          <span className="text-[8px] font-mono text-slate-500">
+                             {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString()}
+                          </span>
+                       </div>
+                    ) : (
+                       <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-3 flex items-center gap-3">
+                          <ShieldCheck className="w-4 h-4 text-emerald-500/50" />
+                          <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Signal Matrix Stable - No Suppressions</span>
+                       </div>
+                    )}
                  </div>
+               </section>
+  </div>
                </section>
             </div>
 
@@ -2182,6 +2120,9 @@ export default function App() {
                              <span className="text-slate-500 font-mono">
                                 {Math.round((((execution?.risk as any)?.entriesToday || 0) / (execution?.risk?.limits.maxTrades || 1)) * 100)}% Used
                              </span>
+                           </div>
+                        </div>
+
                         <div className="terminal-card p-4 space-y-4 border-blue-500/20 bg-blue-500/[0.02]">
                            <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-blue-400">
                               <span>Required Margin (Capital)</span>
@@ -2208,8 +2149,6 @@ export default function App() {
                                     ₹{Math.abs(execution?.netPremium || 0).toLocaleString()} {execution?.netPremium >= 0 ? '(DR)' : '(CR)'}
                                  </span>
                               </div>
-                           </div>
-                        </div>
                            </div>
                         </div>
                     </div>

@@ -207,7 +207,11 @@ class ExecutionEngine {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike + 150;
         const sellPrice = getLTP(sellStrike, 'CE');
-        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
+        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
+          const reason = `CE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
+          this.lastTradeSuppression = { reason, timestamp: Date.now() };
+          return;
+        }
         newPositions.push(
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
           { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }
@@ -219,7 +223,11 @@ class ExecutionEngine {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike - 150;
         const sellPrice = getLTP(sellStrike, 'PE');
-        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
+        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
+          const reason = `PE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
+          this.lastTradeSuppression = { reason, timestamp: Date.now() };
+          return;
+        }
         newPositions.push(
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
           { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }
@@ -286,7 +294,12 @@ class ExecutionEngine {
           const buyStrike = atmStrike;
           const sellStrike = atmStrike + 200;
           const sellPrice = getLTP(sellStrike, 'CE');
-          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
+          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
+            const reason = `CE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
+            this.lastTradeSuppression = { reason, timestamp: Date.now() };
+            console.log(`[EXECUTION] Ratio Spread Suppressed: ${reason}`);
+            return;
+          }
           newPositions.push(
             { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
             { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE * 2, side: 'SELL' }
@@ -295,7 +308,12 @@ class ExecutionEngine {
           const buyStrike = atmStrike;
           const sellStrike = atmStrike - 200;
           const sellPrice = getLTP(sellStrike, 'PE');
-          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) return;
+          if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
+            const reason = `PE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
+            this.lastTradeSuppression = { reason, timestamp: Date.now() };
+            console.log(`[EXECUTION] Ratio Spread Suppressed: ${reason}`);
+            return;
+          }
           newPositions.push(
             { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
             { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE * 2, side: 'SELL' }

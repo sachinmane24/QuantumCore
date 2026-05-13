@@ -423,6 +423,8 @@ async function startServer() {
                   pe_oi_change: ((peQuote?.oi_day_high || 0) - (peQuote?.oi_day_low || 0)) || 0,
                   ce_price: cePrice,
                   pe_price: pePrice,
+                  ce_volume: ceQuote?.volume_traded || 0,
+                  pe_volume: peQuote?.volume_traded || 0,
                   ce_iv: ceIv,
                   pe_iv: peIv,
                   iv: (ceIv + peIv) / 2,
