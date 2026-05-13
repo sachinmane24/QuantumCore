@@ -1552,49 +1552,71 @@ export default function App() {
                            
                            <div className="grid grid-cols-2 gap-3">
                               <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
-                                 <span className="text-[8px] text-slate-400 uppercase font-black">OI Divergence</span>
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">RR Optimization</span>
                                  <div className="flex items-center gap-1">
-                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-                                    <span className="text-[8px] text-emerald-400 font-black">SCANNING</span>
+                                    <div className={cn("w-1 h-1 rounded-full animate-pulse", execution?.lastTradeSuppression?.reason.toLowerCase().includes('rr') ? "bg-rose-500 text-rose-500 shadowed-glow" : "bg-emerald-500")} />
+                                    <span className={cn("text-[8px] font-black", execution?.lastTradeSuppression?.reason.toLowerCase().includes('rr') ? "text-rose-400" : "text-emerald-400")}>
+                                       {execution?.lastTradeSuppression?.reason.toLowerCase().includes('rr') ? "POOR R:R" : "OPTIMAL"}
+                                    </span>
                                  </div>
                               </div>
                               <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
-                                 <span className="text-[8px] text-slate-400 uppercase font-black">Gamma Compression</span>
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Risk Engine</span>
                                  <div className="flex items-center gap-1">
-                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-                                    <span className="text-[8px] text-emerald-400 font-black">SCANNING</span>
+                                    <div className={cn("w-1 h-1 rounded-full", (execution?.lastRiskValidation?.allowed === false || execution?.lastTradeSuppression?.reason.toLowerCase().includes('risk')) ? "bg-rose-500" : "bg-emerald-500 animate-pulse")} />
+                                    <span className={cn("text-[8px] font-black", (execution?.lastRiskValidation?.allowed === false || execution?.lastTradeSuppression?.reason.toLowerCase().includes('risk')) ? "text-rose-400" : "text-emerald-400")}>
+                                       {(execution?.lastRiskValidation?.allowed === false || execution?.lastTradeSuppression?.reason.toLowerCase().includes('risk')) ? "BLOCKED" : "READY"}
+                                    </span>
                                  </div>
                               </div>
                               <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
-                                 <span className="text-[8px] text-slate-400 uppercase font-black">Volatility Edge</span>
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Strike Cluster</span>
                                  <div className="flex items-center gap-1">
-                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-                                    <span className="text-[8px] text-emerald-400 font-black">ANALYSING</span>
+                                    <div className={cn("w-1 h-1 rounded-full", execution?.lastTradeSuppression?.reason.toLowerCase().includes('premium') ? "bg-rose-500" : "bg-emerald-500 animate-pulse")} />
+                                    <span className={cn("text-[8px] font-black", execution?.lastTradeSuppression?.reason.toLowerCase().includes('premium') ? "text-rose-400" : "text-emerald-400")}>
+                                       {execution?.lastTradeSuppression?.reason.toLowerCase().includes('premium') ? "POOR LIQ" : "SYNCHRONIZED"}
+                                    </span>
                                  </div>
                               </div>
                               <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
-                                 <span className="text-[8px] text-slate-400 uppercase font-black">Institutional Bias</span>
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Cooldown</span>
                                  <div className="flex items-center gap-1">
-                                    <div className="w-1 h-1 rounded-full bg-blue-500" />
-                                    <span className="text-[8px] text-blue-400 font-black">OPTIMAL</span>
+                                    <div className={cn("w-1 h-1 rounded-full", execution?.lastTradeSuppression?.reason.toLowerCase().includes('cooldown') ? "bg-amber-500" : "bg-blue-500")} />
+                                    <span className={cn("text-[8px] font-black", execution?.lastTradeSuppression?.reason.toLowerCase().includes('cooldown') ? "text-amber-400" : "text-blue-400")}>
+                                       {execution?.lastTradeSuppression?.reason.toLowerCase().includes('cooldown') ? "ACTIVE" : "STANDBY"}
+                                    </span>
                                  </div>
                               </div>
                            </div>
 
                            <div className="mt-4 pt-3 border-t border-white/5">
-                              <div className="flex justify-between items-center mb-1">
-                                 <span className="text-[8px] text-slate-500 uppercase font-black">Live Logic Confidence</span>
-                                 <span className="text-[8px] text-blue-400 font-black">{(strategy?.score.total || 0).toFixed(1)}%</span>
-                              </div>
-                              <div className="w-full bg-white/5 h-0.5 rounded-full overflow-hidden">
-                                 <div 
-                                    className="h-full bg-blue-500 transition-all duration-1000" 
-                                    style={{ width: `${strategy?.score.total || 0}%` }} 
-                                 />
-                              </div>
-                              <p className="text-[7px] text-slate-500 uppercase mt-2 font-bold leading-tight">
-                                 Engine is verifying institutional order flow at <span className="text-white">₹{market?.underlyingPrice || '---'}</span> strike cluster. Awaiting confirmation on delta skew for entry.
-                              </p>
+                              {execution?.lastTradeSuppression ? (
+                                 <div className="bg-rose-500/5 p-2 rounded border border-rose-500/10">
+                                    <div className="flex justify-between items-center mb-1">
+                                       <span className="text-[8px] text-rose-400 uppercase font-black">Entry Blocked: {execution.lastTradeSuppression.reason}</span>
+                                       <span className="text-[7px] text-slate-500">{new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString()}</span>
+                                    </div>
+                                    <p className="text-[7px] text-slate-400 uppercase font-bold leading-tight">
+                                       Setup discarded by Quant Engine. Seeking strikes with higher credit-ratio or better delta-skew around <span className="text-white">₹{market?.underlyingPrice || '---'}</span>.
+                                    </p>
+                                 </div>
+                              ) : (
+                                 <div className="space-y-2">
+                                    <div className="flex justify-between items-center mb-1">
+                                       <span className="text-[8px] text-slate-500 uppercase font-black">Live Logic Confidence</span>
+                                       <span className="text-[8px] text-blue-400 font-black">{(strategy?.score.total || 0).toFixed(1)}%</span>
+                                    </div>
+                                    <div className="w-full bg-white/5 h-0.5 rounded-full overflow-hidden">
+                                       <div 
+                                          className="h-full bg-blue-500 transition-all duration-1000" 
+                                          style={{ width: `${strategy?.score.total || 0}%` }} 
+                                       />
+                                    </div>
+                                    <p className="text-[7px] text-slate-500 uppercase mt-2 font-bold leading-tight">
+                                       Engine is verifying institutional order flow at <span className="text-white">₹{market?.underlyingPrice || '---'}</span> cluster. System score is <span className="text-white">{strategy?.score.total}/100</span>.
+                                    </p>
+                                 </div>
+                              )}
                            </div>
                         </div>
                       )}

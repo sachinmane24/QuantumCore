@@ -167,6 +167,7 @@ export interface ExecutionState {
   activeSL?: number;
   peakPnL?: number;
   lastTradeSuppression?: { reason: string; timestamp: number } | null;
+  lastRiskValidation?: { allowed: boolean; reason: string | null } | null;
 }
 
 export interface MarketInfo {
