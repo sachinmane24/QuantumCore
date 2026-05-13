@@ -1533,10 +1533,69 @@ export default function App() {
                            )}
                         </div>
                       ) : (
-                        <div className="bg-slate-500/5 border border-slate-500/10 rounded-lg p-4 h-full flex flex-col justify-center items-center text-center">
-                           <Activity className="w-6 h-6 text-slate-500/30 mb-2" />
-                           <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Awaiting High Probability Signal</p>
-                           <p className="text-[8px] text-slate-600 mt-1 uppercase font-bold tracking-tight">VIX: {market?.vix?.toFixed(1) || '--'} | PCR: {market?.pcr?.toFixed(2) || '--'}</p>
+                        <div className="bg-slate-500/5 border border-slate-500/10 rounded-lg p-4 h-full">
+                           <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center gap-3">
+                                 <div className="relative">
+                                    <Activity className="w-5 h-5 text-blue-500/50" />
+                                    <div className="absolute inset-0 animate-ping opacity-20"><Activity className="w-5 h-5 text-blue-500" /></div>
+                                 </div>
+                                 <div>
+                                    <p className="text-[10px] text-white font-black uppercase tracking-widest">Logic Scanner Active</p>
+                                    <p className="text-[7px] text-slate-500 uppercase font-black">VIX: {market?.vix?.toFixed(1) || '--'} | PCR: {market?.pcr?.toFixed(2) || '--'} | DTE: {market?.dte || 0}</p>
+                                 </div>
+                              </div>
+                              <div className="px-2 py-1 bg-white/5 border border-white/10 rounded text-[7px] font-black text-slate-400 uppercase">
+                                 Scanning {market?.chain?.length || 0} Strikes
+                              </div>
+                           </div>
+                           
+                           <div className="grid grid-cols-2 gap-3">
+                              <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">OI Divergence</span>
+                                 <div className="flex items-center gap-1">
+                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+                                    <span className="text-[8px] text-emerald-400 font-black">SCANNING</span>
+                                 </div>
+                              </div>
+                              <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Gamma Compression</span>
+                                 <div className="flex items-center gap-1">
+                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+                                    <span className="text-[8px] text-emerald-400 font-black">SCANNING</span>
+                                 </div>
+                              </div>
+                              <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Volatility Edge</span>
+                                 <div className="flex items-center gap-1">
+                                    <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+                                    <span className="text-[8px] text-emerald-400 font-black">ANALYSING</span>
+                                 </div>
+                              </div>
+                              <div className="bg-black/20 p-2 rounded border border-white/5 flex items-center justify-between">
+                                 <span className="text-[8px] text-slate-400 uppercase font-black">Institutional Bias</span>
+                                 <div className="flex items-center gap-1">
+                                    <div className="w-1 h-1 rounded-full bg-blue-500" />
+                                    <span className="text-[8px] text-blue-400 font-black">OPTIMAL</span>
+                                 </div>
+                              </div>
+                           </div>
+
+                           <div className="mt-4 pt-3 border-t border-white/5">
+                              <div className="flex justify-between items-center mb-1">
+                                 <span className="text-[8px] text-slate-500 uppercase font-black">Live Logic Confidence</span>
+                                 <span className="text-[8px] text-blue-400 font-black">{(strategy?.score.total || 0).toFixed(1)}%</span>
+                              </div>
+                              <div className="w-full bg-white/5 h-0.5 rounded-full overflow-hidden">
+                                 <div 
+                                    className="h-full bg-blue-500 transition-all duration-1000" 
+                                    style={{ width: `${strategy?.score.total || 0}%` }} 
+                                 />
+                              </div>
+                              <p className="text-[7px] text-slate-500 uppercase mt-2 font-bold leading-tight">
+                                 Engine is verifying institutional order flow at <span className="text-white">₹{market?.underlyingPrice || '---'}</span> strike cluster. Awaiting confirmation on delta skew for entry.
+                              </p>
+                           </div>
                         </div>
                       )}
                     </div>
