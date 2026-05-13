@@ -1235,15 +1235,26 @@ export default function App() {
                       
                       <div className="space-y-3">
                         <div>
-                          <span className="text-[7px] font-black text-slate-500 uppercase tracking-widest block mb-1">AI Contextual Multi-Reasoning</span>
-                          <p className="text-[9px] text-slate-300 leading-relaxed italic">
-                            "{prediction.reasoning}"
-                          </p>
+                          <span className="text-[7px] font-black text-slate-500 uppercase tracking-widest block mb-1">Institutional Order Flow Sentiment</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-emerald-500/5 p-2 rounded border border-emerald-500/10">
+                              <span className="text-[7px] font-black text-emerald-400 uppercase tracking-widest block">Bull Momentum</span>
+                              <span className="text-[10px] text-white font-black">
+                                {((market?.chain || []).filter(c => c.pe_oi_change > c.ce_oi_change).length / (market?.chain?.length || 1) * 100).toFixed(0)}% Intensity
+                              </span>
+                            </div>
+                            <div className="bg-rose-500/5 p-2 rounded border border-rose-500/10">
+                              <span className="text-[7px] font-black text-rose-400 uppercase tracking-widest block">Bear Pressure</span>
+                              <span className="text-[10px] text-white font-black">
+                                {((market?.chain || []).filter(c => c.ce_oi_change > c.pe_oi_change).length / (market?.chain?.length || 1) * 100).toFixed(0)}% Intensity
+                              </span>
+                            </div>
+                          </div>
                         </div>
                         <div className="bg-blue-500/5 p-2 rounded border border-blue-500/10">
-                          <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest block mb-1">Tactical Recommendation</span>
+                          <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest block mb-1">Divergence Logic Status</span>
                           <p className="text-[9px] font-bold text-white uppercase tracking-tight">
-                            {prediction.suggestedAction}
+                            {market?.pcr > 1.2 ? "Extreme Put Writing - Contradictory Trend Possible" : market?.pcr < 0.7 ? "Call Overwriting - Potential Squeeze Zone" : "Sentiment Neutral - Data Synchronized"}
                           </p>
                         </div>
                       </div>
@@ -1452,6 +1463,117 @@ export default function App() {
                   </div>
                 )}
               </section>
+
+               {/* Strategy Engine Health & Insight */}
+               <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-3">
+                       <div className="p-2 bg-blue-500/10 rounded-lg">
+                          <Brain className="w-4 h-4 text-blue-500" />
+                       </div>
+                       <div>
+                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Strategy Engine Health & Insight</h3>
+                          <div className="flex gap-3 mt-1">
+                             <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
+                                Status: <span className={cn("font-black", execution?.lastTradeSuppression ? "text-amber-500" : "text-emerald-500")}>
+                                   {execution?.lastTradeSuppression ? "SUPPRESSED" : "MONITORING"}
+                                </span>
+                             </span>
+                             <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
+                                Mode: <span className="font-black text-blue-400">{strategy?.score.mode.replace('_', ' ') || 'STANDBY'}</span>
+                             </span>
+                          </div>
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                       <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full animate-pulse", execution?.lastTradeSuppression ? "bg-amber-500" : "bg-emerald-500")} />
+                          <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Real-time Logic Sync</span>
+                       </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="col-span-1 md:col-span-2">
+                      {execution?.lastTradeSuppression ? (
+                        <div className="bg-amber-500/5 border border-amber-500/10 rounded-lg p-4 h-full flex flex-col justify-center">
+                           <div className="flex items-center gap-3 mb-2">
+                              <ShieldAlert className="w-5 h-5 text-amber-500" />
+                              <span className="text-[11px] font-black text-white uppercase tracking-wider">Entry Blocked</span>
+                           </div>
+                           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                              Quant Core has suppressed trade entry. Reason: <span className="text-amber-400 font-black">{execution.lastTradeSuppression.reason}</span>. 
+                              Current Strategy Score is <span className="text-white font-black">{strategy?.score.total || 0}</span> (Min 70 required).
+                           </p>
+                           <div className="mt-3 text-[8px] font-mono text-slate-500 uppercase">
+                              Last Attempt: {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString()} IST
+                           </div>
+                        </div>
+                      ) : execution?.positions && execution.positions.length > 0 ? (
+                        <div className="bg-blue-500/5 border border-blue-500/10 rounded-lg p-4 h-full flex flex-col justify-center">
+                           <div className="flex items-center gap-3 mb-2">
+                              <Zap className="w-5 h-5 text-blue-500" />
+                              <span className="text-[11px] font-black text-white uppercase tracking-wider">Active Strategy Execution</span>
+                           </div>
+                           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                              Trade active using <span className="text-blue-400 font-black">{strategy?.score.strategyType || 'NAKED BUY'}</span> logic. 
+                              Current PnL: <span className={cn("font-black", (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>₹{execution?.pnl || 0}</span>.
+                           </p>
+                           {execution.params && (
+                             <div className="mt-2 grid grid-cols-2 gap-2 border-t border-white/5 pt-2">
+                                <div>
+                                   <span className="text-[8px] text-slate-500 uppercase block">Target</span>
+                                   <span className="text-[10px] text-emerald-400 font-black">₹{execution.params.targetRupees.toFixed(0)}</span>
+                                </div>
+                                <div>
+                                   <span className="text-[8px] text-slate-500 uppercase block">Stop Loss</span>
+                                   <span className="text-[10px] text-rose-400 font-black">₹{Math.abs(execution.params.stopLossRupees).toFixed(0)}</span>
+                                </div>
+                             </div>
+                           )}
+                        </div>
+                      ) : (
+                        <div className="bg-slate-500/5 border border-slate-500/10 rounded-lg p-4 h-full flex flex-col justify-center items-center text-center">
+                           <Activity className="w-6 h-6 text-slate-500/30 mb-2" />
+                           <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Awaiting High Probability Signal</p>
+                           <p className="text-[8px] text-slate-600 mt-1 uppercase font-bold tracking-tight">VIX: {market?.vix?.toFixed(1) || '--'} | PCR: {market?.pcr?.toFixed(2) || '--'}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-black/20 p-4 rounded-lg border border-white/5">
+                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-3">Live Logic Snapshot</span>
+                       <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                             <span className="text-[9px] text-slate-400 uppercase">Strategy Score</span>
+                             <span className={cn("text-[11px] font-black", (strategy?.score.total || 0) >= 70 ? "text-emerald-400" : "text-amber-400")}>
+                                {strategy?.score.total || 0}/100
+                             </span>
+                          </div>
+                          <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+                             <div 
+                               className={cn("h-full transition-all duration-1000", (strategy?.score.total || 0) >= 70 ? "bg-emerald-500" : "bg-amber-500")} 
+                               style={{ width: `${strategy?.score.total || 0}%` }}
+                             />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                             <div className="bg-white/[0.02] p-2 rounded border border-white/5">
+                                <span className="text-[7px] text-slate-500 uppercase block">GAMMA BLK</span>
+                                <span className={cn("text-[10px] font-black", (strategy?.score.gamma || 0) > 1 ? "text-emerald-400" : "text-rose-400")}>
+                                   {(strategy?.score.gamma || 0).toFixed(0)}X
+                                </span>
+                             </div>
+                             <div className="bg-white/[0.02] p-2 rounded border border-white/5">
+                                <span className="text-[7px] text-slate-500 uppercase block">TRAP DETECT</span>
+                                <span className={cn("text-[10px] font-black", strategy?.score.trap === 0 ? "text-emerald-400" : "text-blue-400")}>
+                                   {strategy?.score.trap === 0 ? "ACTIVE" : "NONE"}
+                                </span>
+                             </div>
+                          </div>
+                       </div>
+                    </div>
+                  </div>
+               </section>
 
                <section className="terminal-card bg-white/[0.01] border-terminal-line px-6 py-4 mb-4">
                   <div className="flex justify-between items-center mb-4">
@@ -2015,8 +2137,8 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             className="flex-1 p-6 overflow-y-auto custom-scrollbar"
           >
-            <div className="max-w-6xl mx-auto space-y-6">
-              <div className="flex justify-between items-end">
+            <div className="max-w-6xl mx-auto space-y-8">
+              <div className="flex justify-between items-end pb-2">
                 <div>
                    <h2 className="text-2xl font-black text-white tracking-widest uppercase mb-1">Risk Management Core</h2>
                    <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Real-time dynamic exposure monitoring & failsafe engine</p>
@@ -2450,11 +2572,11 @@ export default function App() {
                       <tr className="text-[9px] font-black text-slate-500 uppercase tracking-widest bg-black/40">
                         <th className="px-6 py-4 text-left border-b border-terminal-line">Strike</th>
                         <th className="px-6 py-4 text-left border-b border-terminal-line">Delta (CE)</th>
-                        <th className="px-6 py-4 text-left border-b border-terminal-line">Vol/OI (CE)</th>
+                        <th className="px-6 py-4 text-left border-b border-terminal-line">Vol / OI (CE)</th>
                         <th className="px-6 py-4 text-right border-b border-terminal-line">LTP (Calls)</th>
                         <th className="px-6 py-4 text-center border-b border-terminal-line">IV (C/P)</th>
                         <th className="px-6 py-4 text-left border-b border-terminal-line">LTP (Puts)</th>
-                        <th className="px-6 py-4 text-right border-b border-terminal-line">Vol/OI (PE)</th>
+                        <th className="px-6 py-4 text-right border-b border-terminal-line">Vol / OI (PE)</th>
                         <th className="px-6 py-4 text-right border-b border-terminal-line">Gamma (PE)</th>
                         <th className="px-6 py-4 text-right border-b border-terminal-line">Signal</th>
                       </tr>
@@ -2466,9 +2588,7 @@ export default function App() {
                         const isSupport = c.strike === market?.maxOi?.pe?.strike;
                         const biasNum = (c.pe_oi_change - c.ce_oi_change);
                         const bias = biasNum > 0 ? "BULL" : "BEAR";
-                        const ceVolOi = c.ce_volume && c.ce_oi ? (c.ce_volume / c.ce_oi).toFixed(2) : '--';
-                        const peVolOi = c.pe_volume && c.pe_oi ? (c.pe_volume / c.pe_oi).toFixed(2) : '--';
-
+                        
                         return (
                           <tr key={c.strike} className={cn(
                             "group transition-colors h-14",
@@ -2486,9 +2606,11 @@ export default function App() {
                             <td className="px-6 py-2 terminal-value text-[10px] text-blue-400 font-bold">
                               {(c.delta || 0.5).toFixed(2)}
                             </td>
-                            <td className="px-6 py-2 terminal-value text-[10px] text-slate-500 whitespace-nowrap">
-                               <span className="text-white">{ceVolOi}</span>
-                               <span className="ml-1 opacity-40">x</span>
+                            <td className="px-6 py-2 terminal-value text-[10px] whitespace-nowrap">
+                               <div className="flex flex-col">
+                                 <span className="text-white font-black">{(c.ce_volume || 0).toLocaleString()}</span>
+                                 <span className="text-slate-500 text-[8px] font-bold">OI: {(c.ce_oi || 0).toLocaleString()}</span>
+                               </div>
                             </td>
                              <td className="px-6 py-2 text-right">
                                <div className="flex items-center justify-end gap-2">
@@ -2503,18 +2625,20 @@ export default function App() {
                                 <span className="text-[8px] text-slate-600 mx-1">/</span>
                                 <span className={cn("text-[9px] font-black", (c.pe_iv || 14) > 18 ? "text-rose-400" : "text-blue-400/60")}>{(c.pe_iv || 14.5).toFixed(1)}</span>
                              </td>
-                             <td className="px-6 py-2 text-left">
-                               <div className="flex items-center justify-start gap-2">
+                             <td className="px-6 py-2 text-right">
+                               <div className="flex items-center justify-end gap-2">
                                  <span className="terminal-value text-white text-xs font-black">₹{c.pe_price.toFixed(1)}</span>
                                  <svg width="24" height="10" className="opacity-30 group-hover:opacity-60 transition-opacity">
                                    <polyline fill="none" stroke="#f43f5e" strokeWidth="1" points="0,2 5,6 10,4 15,8 20,5 24,10" />
                                  </svg>
                                </div>
                              </td>
-                             <td className="px-6 py-2 text-right terminal-value text-[10px] text-slate-500 whitespace-nowrap">
-                               <span className="text-white">{peVolOi}</span>
-                               <span className="ml-1 opacity-40">x</span>
-                            </td>
+                             <td className="px-6 py-2 text-right terminal-value text-[10px] whitespace-nowrap">
+                                <div className="flex flex-col items-end">
+                                  <span className="text-white font-black">{(c.pe_volume || 0).toLocaleString()}</span>
+                                  <span className="text-slate-500 text-[8px] font-bold">OI: {(c.pe_oi || 0).toLocaleString()}</span>
+                                </div>
+                             </td>
                             <td className="px-6 py-2 text-right terminal-value text-[10px] text-purple-400 font-bold">
                               {(c.gamma || 0.002).toFixed(4)}
                             </td>
