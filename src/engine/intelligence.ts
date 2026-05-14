@@ -89,7 +89,7 @@ class IntelligenceEngine {
         slPoints = Math.max(15, slPoints * 0.8); // Tighter SL for scalps
       }
 
-      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 35 : 25) : 45, slPoints);
+      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 45 : 35) : 55, slPoints);
       targetPoints = slPoints * riskRewardRatio;
     } else {
       // Option Selling / Spread Logic
@@ -98,7 +98,7 @@ class IntelligenceEngine {
       if (isMonthlyExpiry) expiryMultiplier = 1.6; // Monthly roll-over risk is higher
 
       const vwapDist = Math.abs(entrySpot - vwap);
-      const baseSL = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 15);
+      const baseSL = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 20);
       
       // Structural SL Protection for selling
       if (bias === 'BULLISH') {
@@ -130,8 +130,8 @@ class IntelligenceEngine {
     // Convert Points to Rupees (Approximate impact on PnL for the whole strategy)
     // Note: Options have Delta. If Nifty moves 50 pts, ATM CE moves ~25 pts.
     // For simplicity, we use an aggregate delta heuristic.
-    const deltaHedgeFactor = strategyMode === 'MOMENTUM_SNIPER' ? 0.6 : 0.3; // Delta impact
-    const stopLossRupees = slPoints * deltaHedgeFactor * config.LOT_SIZE;
+    const deltaHedgeFactor = strategyMode === 'MOMENTUM_SNIPER' ? 0.7 : 0.45; // Improved Delta impact for Nifty
+    const stopLossRupees = Math.max(config.SL_RUPEES * 0.4, slPoints * deltaHedgeFactor * config.LOT_SIZE);
     const targetRupees = targetPoints * deltaHedgeFactor * config.LOT_SIZE;
 
     return {

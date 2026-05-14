@@ -78,11 +78,11 @@ class ExecutionEngine {
   private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
-    // Entry Cooldown: 5 minute break between trades for Auto-Mode only
+    // Entry Cooldown: 2 minute break between trades for Auto-Mode only
     if (!isManual) {
       const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
-      if (timeSinceLastTrade < 300) {
-        const reason = `Cooldown active (${Math.round((300 - timeSinceLastTrade)/60)}m left)`;
+      if (timeSinceLastTrade < 120) {
+        const reason = `Cooldown active (${Math.round((120 - timeSinceLastTrade))}s left)`;
         if (!this.lastTradeSuppression || this.lastTradeSuppression.reason !== reason) {
           console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
         }
@@ -393,12 +393,12 @@ class ExecutionEngine {
           const maxRewardPoints = netCredit > 0 ? (netCredit / primaryQty) : (width - Math.abs(netCredit) / primaryQty);
           const rr = maxRewardPoints > 0 ? maxRiskPoints / maxRewardPoints : 100;
 
-          // Relaxed threshold: Risk can be up to 4x the potential Reward for these setups.
-          // This allows roughly a 4.5:1 Risk:Reward (Risking 4.5 units to make 1).
-          if (rr > 4.5) { 
+          // Relaxed threshold: Risk can be up to 7x the potential Reward for these setups.
+          // High probability credit spreads often have 4:1 to 6:1 R:R.
+          if (rr > 7.0) { 
             const reason = `Poor RR ratio (1:${(1/rr).toFixed(2)})`;
             this.lastTradeSuppression = { reason, timestamp: Date.now() };
-            console.warn(`[EXECUTION] Entry Suppressed: ${reason}. Minimum 1:4.5 R:R required.`);
+            console.warn(`[EXECUTION] Entry Suppressed: ${reason}. Minimum 1:7.0 R:R required.`);
             return;
           }
         }

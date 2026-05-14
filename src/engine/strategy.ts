@@ -77,10 +77,10 @@ class StrategyEngine {
     
     let oiBiasScore = 10;
 
-    if (pcr > 1.25 || Math.abs(oiChangeBias) > 400000) oiBiasScore = 20;
-    else if (pcr > 1.1 || Math.abs(oiChangeBias) > 150000) oiBiasScore = 15;
-    else if (pcr < 0.75 || Math.abs(oiChangeBias) < -400000) oiBiasScore = 20;
-    else if (pcr < 0.9 || Math.abs(oiChangeBias) < -150000) oiBiasScore = 15;
+    if (pcr > 1.2 || Math.abs(oiChangeBias) > 250000) oiBiasScore = 20;
+    else if (pcr > 1.05 || Math.abs(oiChangeBias) > 80000) oiBiasScore = 15;
+    else if (pcr < 0.8 || Math.abs(oiChangeBias) < -250000) oiBiasScore = 20;
+    else if (pcr < 0.95 || Math.abs(oiChangeBias) < -80000) oiBiasScore = 15;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
@@ -142,15 +142,15 @@ class StrategyEngine {
     let orbTrigger = 0; // 0: None, 1: Bullish, -1: Bearish
     let trapDetected = false;
 
-    if (totalMin >= 570 && orbHigh > 0 && orbLow > 0) { 
+    if (totalMin >= 560 && orbHigh > 0 && orbLow > 0) { 
       if (spot > orbHigh && spot > vwap && putOiChange > callOiChange) {
         orbTrigger = 1;
       } else if (spot < orbLow && spot < vwap && callOiChange > putOiChange) {
         orbTrigger = -1;
       }
 
-      if (spot > orbHigh && putOiChange < callOiChange) trapDetected = true;
-      if (spot < orbLow && putOiChange > callOiChange) trapDetected = true;
+      if (spot > orbHigh && putOiChange < callOiChange && Math.abs(diff) < 20) trapDetected = true;
+      if (spot < orbLow && putOiChange > callOiChange && Math.abs(diff) < 20) trapDetected = true;
     }
 
     let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore + techIndicatorScore;
@@ -179,7 +179,7 @@ class StrategyEngine {
       const isLowVol = vix < 12;
 
       // Determine Bias with higher sensitivity
-      if (isSideways && total < 60) {
+      if (isSideways && total < 55) {
         bias = 'NEUTRAL';
         biasReason = "Sideways market with low OI shift";
       } else {
@@ -191,19 +191,20 @@ class StrategyEngine {
           biasReason = "ORB Breakdown Low confirmed by VWAP";
         } else {
           // Trend + OI Confirmation
-          if (oiChangeBias > 150000) {
+          if (oiChangeBias > 80000) {
              bias = 'BULLISH';
-             biasReason = "Strong Put Writing (+OI Change)";
-          } else if (oiChangeBias < -150000) {
+             biasReason = "Put Writing Activity (+OI Change)";
+          } else if (oiChangeBias < -80000) {
              bias = 'BEARISH';
-             biasReason = "Strong Call Writing (-OI Change)";
-          } else if (Math.abs(diff) > 15 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.5)) {
-             // Pure Price Push / Significant Day Change if OI is lagging
-             bias = (diff > 0 || (marketEngine.getLatestTick().change || 0) > 0) ? 'BULLISH' : 'BEARISH';
-             biasReason = `Strong Price Velocity (${diff > 0 ? 'Bullish' : 'Bearish'}) - OI Lagging`;
+             biasReason = "Call Writing Activity (-OI Change)";
+          } else if (Math.abs(diff) > 12 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.25)) {
+             // Pure Price Push / Significant Day Change if OI is lagging or neutral
+             const priceChange = (marketEngine.getLatestTick().change || 0);
+             bias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
+             biasReason = `Price Velocity Dominant (${diff > 0 ? 'Bullish' : 'Bearish'})`;
           } else {
              bias = 'NEUTRAL';
-             biasReason = `Indecisive state (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
+             biasReason = `Rangebound (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
           }
         }
       }
@@ -259,10 +260,12 @@ class StrategyEngine {
       }
     }
 
+    const oiBiasDirection = oiChangeBias > 75000 ? 1 : (oiChangeBias < -75000 ? -1 : 0);
+
     return {
       total: Math.round(total),
       trend: Math.round(trendScore * trendDirection), 
-      oiBias: Math.round(oiBiasScore * oiDirection), 
+      oiBias: Math.round(oiBiasScore * oiBiasDirection), 
       gamma: Math.round(gammaScore),
       trap: trapDetected ? 0 : Math.round(trapScore),
       timeFilter: Math.round(timeFilterScore),

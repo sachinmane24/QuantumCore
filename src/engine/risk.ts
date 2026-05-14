@@ -187,9 +187,10 @@ class RiskEngine {
       return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };
     }
 
-    // 15-Minute Market Open Cool-off (Safety first)
-    if (timeStr >= "09:15" && timeStr < "09:30") {
-      return { allowed: false, reason: `Market Warming Up. Cool-off active until 09:30 IST for stability.`, score: this.stats.riskScore };
+    // Market Open Cool-off: Reduced to 5 minutes for higher responsiveness 
+    // while still avoiding the extreme first-candle volatility.
+    if (timeStr >= "09:15" && timeStr < "09:20") {
+      return { allowed: false, reason: `Market Warming Up. Cool-off active until 09:20 IST.`, score: this.stats.riskScore };
     }
 
     // Risk per trade check
