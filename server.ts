@@ -124,19 +124,32 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
   app.use(cookieParser());
 
+  const apiRouter = express.Router();
+
   // Request Diagnostics
   app.use((req, res, next) => {
     if (req.url.startsWith('/api')) {
       console.log(`[DIAG] ${new Date().toISOString()} - ${req.method} ${req.url}`);
+    } else {
+      // Log non-API requests only if they aren't static assets
+      if (!req.url.includes('.') && !req.url.includes('node_modules')) {
+        console.log(`[DIAG-VIEW] ${new Date().toISOString()} - ${req.method} ${req.url}`);
+      }
     }
     next();
   });
 
-  // Basic Health Routes
-  app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.3", uptime: process.uptime() }));
-  app.get("/ping", (req, res) => res.send("pong"));
+  // Mount API router early
+  app.use("/api", apiRouter);
 
-  const apiRouter = express.Router();
+  // Catch-all for API routes to prevent falling through to SPA fallback
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
+  });
+
+  // Basic Health Routes
+  app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.4", uptime: process.uptime() }));
+  app.get("/ping", (req, res) => res.send("pong"));
 
   apiRouter.post("/kite/config", async (req, res) => {
     const { key, secret } = req.body;
@@ -484,6 +497,10 @@ async function startServer() {
           }
 
           const decision = strategyEngine.calculateScore();
+          
+          if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick().change || 0) > 0.3) {
+            console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick().change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
+          }
 
           // Simple Auto-Exit if profit target or SL reached
           if (state.pnl >= config.TARGET_RUPEES) {
@@ -494,10 +511,9 @@ async function startServer() {
              await executionEngine.exitAll("SL Hit");
           }
 
-          // Entry Logic (Only if no active position)
-          if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
-             const tradeBias = decision.bias === 'BULLISH' ? 'BULLISH' : 'BEARISH';
-             await executionEngine.executeTrade(tradeBias);
+          // Entry Logic (Only if no active position and clear bias)
+          if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS && decision.bias !== 'NEUTRAL') {
+             await executionEngine.executeTrade(decision.bias);
           }
         } catch (err) {
           console.error("Autonomous execution engine error:", err);
@@ -1144,13 +1160,6 @@ async function startServer() {
       totalInvestment: 7500
     });
     res.json({ success: true, message: "Test trade logged. Check Audit Logs." });
-  });
-
-  app.use("/api", apiRouter);
-
-  // Catch-all for API routes to prevent falling through to SPA fallback
-  app.all("/api/*", (req, res) => {
-    res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
   });
 
   // Vite/SPA Middleware

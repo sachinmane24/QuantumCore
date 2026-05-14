@@ -94,11 +94,11 @@ class ExecutionEngine {
     const spot = marketEngine.getSpotPrice();
     const score = strategyEngine.calculateScore();
     
-    // Score Validation: Minimum 70 required for Auto-Mode only
-    if (!isManual && score.total < 70) {
+    // Score Validation: Minimum 60 required for Auto-Mode only
+    if (!isManual && score.total < 60) {
       const reason = `Low Signal Score (${score.total})`;
       if (!this.lastTradeSuppression || !this.lastTradeSuppression.reason.startsWith('Low Signal Score')) {
-        console.log(`[EXECUTION] Entry Suppressed: ${reason}. At least 70 required.`);
+        console.log(`[EXECUTION] Entry Suppressed: ${reason}. At least 60 required.`);
       }
       this.lastTradeSuppression = { reason, timestamp: Date.now() };
       return;

@@ -29,6 +29,7 @@ export interface StrategyScore {
   trap: number;
   timeFilter: number;
   bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  biasReason: string;
   mode: StrategyMode;
   strategyType: StrategyType;
   recommendation: string;
@@ -40,16 +41,23 @@ class StrategyEngine {
     const chain = marketEngine.getOptionChain();
     const vix = marketEngine.getVix();
 
-    // 1. Trend (Spot vs ATM Strike) - 25 points
+    // 1. Trend Sensitivity for Nifty - 25 points
     const atmStrike = Math.round(spot / 50) * 50;
     const diff = spot - atmStrike;
     let trendScore = 12.5;
-    let trendDirection = 1; // 1 for Bullish, -1 for Bearish
+    let trendDirection = 1; 
     
-    if (diff > 5) trendScore = 25; 
-    else if (diff > 0) trendScore = 15;
-    else if (diff < -5) { trendScore = 25; trendDirection = -1; }
-    else if (diff < 0) { trendScore = 8; trendDirection = -1; }
+    // Nifty moves are significant even at 10-20 points
+    if (Math.abs(diff) > 20) {
+      trendScore = 25; 
+      trendDirection = diff > 0 ? 1 : -1;
+    } else if (Math.abs(diff) > 10) {
+      trendScore = 20;
+      trendDirection = diff > 0 ? 1 : -1;
+    } else if (Math.abs(diff) > 0) {
+      trendScore = 15;
+      trendDirection = diff > 0 ? 1 : -1;
+    }
 
     // 2. OI Bias - 20 points
     let callOi = 0;
@@ -68,12 +76,11 @@ class StrategyEngine {
     const oiChangeBias = putOiChange - callOiChange;
     
     let oiBiasScore = 10;
-    let oiDirection = oiChangeBias >= 0 ? 1 : -1;
 
-    if (pcr > 1.3 || Math.abs(oiChangeBias) > 500000) oiBiasScore = 20;
-    else if (pcr > 1.1 || Math.abs(oiChangeBias) > 200000) oiBiasScore = 15;
-    else if (pcr < 0.7 || Math.abs(oiChangeBias) < -500000) oiBiasScore = 20;
-    else if (pcr < 0.9 || Math.abs(oiChangeBias) < -200000) oiBiasScore = 15;
+    if (pcr > 1.25 || Math.abs(oiChangeBias) > 400000) oiBiasScore = 20;
+    else if (pcr > 1.1 || Math.abs(oiChangeBias) > 150000) oiBiasScore = 15;
+    else if (pcr < 0.75 || Math.abs(oiChangeBias) < -400000) oiBiasScore = 20;
+    else if (pcr < 0.9 || Math.abs(oiChangeBias) < -150000) oiBiasScore = 15;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
@@ -156,27 +163,49 @@ class StrategyEngine {
       if (isMorningRange) total += 5; 
       if (isAfternoonShift && isMonthlyExpiry) total -= 10; 
     }
-    if (isObservationPeriod) total = Math.min(total, 40);
+    if (isObservationPeriod && total < 60) total = Math.min(total, 40);
 
     let bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
+    let biasReason = "Waiting for trend/OI confirmation";
     let mode: StrategyMode = 'INST_SPREAD';
     let strategyType: StrategyType = 'IRON_CONDOR';
-    let recommendation = isObservationPeriod ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
+    let recommendation = (isObservationPeriod && total < 60) ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
-    if (!isObservationPeriod) {
+    if (!isObservationPeriod || total >= 60) {
       const isStrongScore = total > 80;
       const isOrbConfirmed = orbTrigger !== 0 && total > 70;
-      const isSideways = Math.abs(oiChangeBias) < 150000 && Math.abs(diff) < 15;
+      const isSideways = Math.abs(oiChangeBias) < 100000 && Math.abs(diff) < 10;
       const isHighVol = vix > 18;
       const isLowVol = vix < 12;
 
-      // Determine Bias
+      // Determine Bias with higher sensitivity
       if (isSideways && total < 60) {
         bias = 'NEUTRAL';
+        biasReason = "Sideways market with low OI shift";
       } else {
-        if (orbTrigger === 1) bias = 'BULLISH';
-        else if (orbTrigger === -1) bias = 'BEARISH';
-        else bias = oiChangeBias > 200000 ? 'BULLISH' : oiChangeBias < -200000 ? 'BEARISH' : 'NEUTRAL';
+        if (orbTrigger === 1) {
+          bias = 'BULLISH';
+          biasReason = "ORB Breakout High confirmed by VWAP";
+        } else if (orbTrigger === -1) {
+          bias = 'BEARISH';
+          biasReason = "ORB Breakdown Low confirmed by VWAP";
+        } else {
+          // Trend + OI Confirmation
+          if (oiChangeBias > 150000) {
+             bias = 'BULLISH';
+             biasReason = "Strong Put Writing (+OI Change)";
+          } else if (oiChangeBias < -150000) {
+             bias = 'BEARISH';
+             biasReason = "Strong Call Writing (-OI Change)";
+          } else if (Math.abs(diff) > 15 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.5)) {
+             // Pure Price Push / Significant Day Change if OI is lagging
+             bias = (diff > 0 || (marketEngine.getLatestTick().change || 0) > 0) ? 'BULLISH' : 'BEARISH';
+             biasReason = `Strong Price Velocity (${diff > 0 ? 'Bullish' : 'Bearish'}) - OI Lagging`;
+          } else {
+             bias = 'NEUTRAL';
+             biasReason = `Indecisive state (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
+          }
+        }
       }
 
       // Selection Matrix
@@ -238,6 +267,7 @@ class StrategyEngine {
       trap: trapDetected ? 0 : Math.round(trapScore),
       timeFilter: Math.round(timeFilterScore),
       bias,
+      biasReason,
       mode,
       strategyType,
       recommendation

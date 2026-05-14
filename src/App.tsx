@@ -169,8 +169,21 @@ export default function App() {
   useEffect(() => {
     const fetchKiteStatus = async (retryCount = 0) => {
       try {
-        const res = await fetch('/api/kite/status');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await fetch('/api/kite/status?t=' + Date.now());
+        
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`Kite status error (${res.status}):`, text.substring(0, 50));
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+           const text = await res.text();
+           console.error("Non-JSON response for Kite status:", text.substring(0, 100));
+           throw new Error("Received HTML instead of JSON from server. Please wait while the backend initializes.");
+        }
+
         const data = await res.json();
         setNetworkError(null);
         
@@ -198,7 +211,7 @@ export default function App() {
         if (retryCount < 3) {
            setTimeout(() => fetchKiteStatus(retryCount + 1), 2000);
         } else {
-           setNetworkError("Server unreachable. Please check if backend is running.");
+           setNetworkError("Server unreachable or misconfigured. Please check if backend is running.");
         }
       }
     };
@@ -1596,8 +1609,8 @@ export default function App() {
                                        <span className="text-[8px] text-rose-400 uppercase font-black">Entry Blocked: {execution.lastTradeSuppression.reason}</span>
                                        <span className="text-[7px] text-slate-500">{new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString()}</span>
                                     </div>
-                                    <p className="text-[7px] text-slate-400 uppercase font-bold leading-tight">
-                                       Setup discarded by Quant Engine. Seeking strikes with higher credit-ratio or better delta-skew around <span className="text-white">₹{market?.underlyingPrice || '---'}</span>.
+                                    <p className="text-[7px] text-slate-500 uppercase font-bold leading-tight">
+                                       The Logic Scanner is active. Seeking high-conviction breakout levels around <span className="text-white">₹{market?.underlyingPrice || '---'}</span>.
                                     </p>
                                  </div>
                               ) : (
@@ -1613,7 +1626,7 @@ export default function App() {
                                        />
                                     </div>
                                     <p className="text-[7px] text-slate-500 uppercase mt-2 font-bold leading-tight">
-                                       Engine is verifying institutional order flow at <span className="text-white">₹{market?.underlyingPrice || '---'}</span> cluster. System score is <span className="text-white">{strategy?.score.total}/100</span>.
+                                       Analysis: <span className="text-white">{strategy?.score.biasReason || 'Calibrating order flow...'}</span>. Target: <span className="text-white">{strategy?.score.strategyType || 'SEARCHING'}</span>.
                                     </p>
                                  </div>
                               )}
