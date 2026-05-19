@@ -105,7 +105,7 @@ class RiskEngine {
     const minutes = istDate.getMinutes();
     const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
     
-    if (timeStr >= config.END_TIME) {
+    if (timeStr >= config.END_TIME && !config.BTST_MODE) {
       this.activateKillSwitch(`Auto-Square-off Time Reached (${config.END_TIME} IST)`);
       return;
     }

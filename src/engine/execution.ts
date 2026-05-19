@@ -112,7 +112,8 @@ class ExecutionEngine {
       score.mode === 'MOMENTUM_SNIPER' ? 'BUY' : 'SELL',
       score.mode,
       spot,
-      bias
+      bias,
+      score.total
     );
 
     // Validate with Risk Engine

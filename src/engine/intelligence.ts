@@ -33,7 +33,8 @@ class IntelligenceEngine {
     side: 'BUY' | 'SELL',
     strategyMode: 'MOMENTUM_SNIPER' | 'INST_SPREAD',
     entrySpot: number,
-    bias: 'BULLISH' | 'BEARISH'
+    bias: 'BULLISH' | 'BEARISH',
+    totalScore: number = 70
   ): TradeParams {
     const vix = marketEngine.getVix();
     const atr = this.calculateATR() || (entrySpot * 0.0025); // Baseline 0.25% if no ATR
@@ -56,7 +57,7 @@ class IntelligenceEngine {
     // We check the recent swing high/low and put our SL at least X points beyond it 
     // to avoid getting hunted in a liquidity sweep.
     const swings = marketEngine.getSwingLevels(30); 
-    const huntingBuffer = Math.max(5, atr * 0.15); // Dynamic buffer based on volatility
+    const huntingBuffer = Math.max(8, atr * 0.2); // Slightly increased buffer for Nifty
     
     let slPoints = 0;
     let targetPoints = 0;
@@ -69,10 +70,9 @@ class IntelligenceEngine {
       if (isMonthlyExpiry) expiryMultiplier = 0.75; // Monthly is slightly more stable
 
       // Base SL
-      slPoints = atr * 1.2 * vixFactor * expiryMultiplier;
+      slPoints = atr * 1.5 * vixFactor * expiryMultiplier;
       
-      // SL Hunting Mitigation: Adjust base SL points to ensure the final price level 
-      // is outside the recent swing range + buffer
+      // SL Hunting Mitigation
       if (bias === 'BULLISH') {
         const structuralSL = entrySpot - (swings.low - huntingBuffer);
         slPoints = Math.max(slPoints, structuralSL);
@@ -81,45 +81,44 @@ class IntelligenceEngine {
         slPoints = Math.max(slPoints, structuralSL);
       }
 
-      riskRewardRatio = isExpiryDay ? 3.5 : 2.0; // Extremely high RR needed on expiry
+      riskRewardRatio = isExpiryDay ? 3.5 : 2.5; // Improved RR for sniper
       
       // Afternoon Gamma Blast (Post 1:45 PM IST = 825 mins)
       if (isExpiryDay && totalMin >= 825) {
-        riskRewardRatio = 5.0; // Targeting explosive moves
-        slPoints = Math.max(15, slPoints * 0.8); // Tighter SL for scalps
+        riskRewardRatio = 5.5; 
+        slPoints = Math.max(18, slPoints * 0.85); // Adjusted for better stability
       }
 
-      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 45 : 35) : 55, slPoints);
+      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 55 : 45) : 65, slPoints); // Slightly wider caps
       targetPoints = slPoints * riskRewardRatio;
       
-      // Ensure target is at least 0.5% of Spot for Momentum to avoid micro-profits
-      targetPoints = Math.max(targetPoints, entrySpot * 0.005);
+      // Ensure target is at least 0.7% of Spot for Momentum to catch real moves
+      targetPoints = Math.max(targetPoints, entrySpot * 0.007);
     } else {
       // Option Selling / Spread Logic
-      // On expiry day, increase buffer to avoid gamma spikes
       let expiryMultiplier = isExpiryDay ? 1.4 : 1.0;
-      if (isMonthlyExpiry) expiryMultiplier = 1.6; // Monthly roll-over risk is higher
+      if (isMonthlyExpiry) expiryMultiplier = 1.6;
 
       const vwapDist = Math.abs(entrySpot - vwap);
-      const baseSL = Math.max(atr * 1.5 * vixFactor * expiryMultiplier, vwapDist + 20);
+      const baseSL = Math.max(atr * 1.8 * vixFactor * expiryMultiplier, vwapDist + 25);
       
       // Structural SL Protection for selling
       if (bias === 'BULLISH') {
-        const structuralSL = entrySpot - (swings.low - huntingBuffer * 1.5); // Wider buffer for selling
+        const structuralSL = entrySpot - (swings.low - huntingBuffer * 2); 
         slPoints = Math.max(baseSL, structuralSL);
       } else {
-        const structuralSL = (swings.high + huntingBuffer * 1.5) - entrySpot;
+        const structuralSL = (swings.high + huntingBuffer * 2) - entrySpot;
         slPoints = Math.max(baseSL, structuralSL);
       }
 
-      riskRewardRatio = 1.2; 
+      riskRewardRatio = isExpiryDay ? 1.5 : 1.3; 
       
-      // Max Pain Convergence Logic (Post 1:30 PM IST = 810 mins)
+      // Max Pain Convergence Logic
       if (isExpiryDay && totalMin >= 810) {
         const maxPain = marketEngine.getMaxPain();
         const distToMaxPain = Math.abs(entrySpot - maxPain);
-        if (distToMaxPain < 30) {
-           slPoints *= 0.8; // High confidence if already near Max Pain
+        if (distToMaxPain < 40) {
+           slPoints *= 0.85; 
         }
       }
 
@@ -130,12 +129,16 @@ class IntelligenceEngine {
     const stopLossPrice = bias === 'BULLISH' ? entrySpot - slPoints : entrySpot + slPoints;
     const targetPrice = bias === 'BULLISH' ? entrySpot + targetPoints : entrySpot - targetPoints;
 
-    // Convert Points to Rupees (Approximate impact on PnL for the whole strategy)
-    // Note: Options have Delta. If Nifty moves 50 pts, ATM CE moves ~25 pts.
-    // For simplicity, we use an aggregate delta heuristic.
-    const deltaHedgeFactor = strategyMode === 'MOMENTUM_SNIPER' ? 0.7 : 0.45; // Improved Delta impact for Nifty
-    const stopLossRupees = Math.max(config.SL_RUPEES * 0.4, slPoints * deltaHedgeFactor * config.LOT_SIZE);
+    // Convert Points to Rupees
+    const deltaHedgeFactor = strategyMode === 'MOMENTUM_SNIPER' ? 0.7 : 0.45; 
+    const stopLossRupees = Math.max(config.SL_RUPEES * 0.5, slPoints * deltaHedgeFactor * config.LOT_SIZE);
     const targetRupees = targetPoints * deltaHedgeFactor * config.LOT_SIZE;
+
+    // Calculate Dynamic POP
+    let pop = strategyMode === 'MOMENTUM_SNIPER' ? 38 : 65;
+    const volatilityImpact = (15 - vix) * 1.5; // Lower VIX = Higher certainty
+    const scoreBonus = (totalScore - 60) * 0.8;
+    pop = Math.min(92, Math.max(5, pop + volatilityImpact + scoreBonus));
 
     return {
       stopLossPrice: Number(stopLossPrice.toFixed(2)),
@@ -143,12 +146,12 @@ class IntelligenceEngine {
       stopLossRupees: Math.round(stopLossRupees),
       targetRupees: Math.round(targetRupees),
       riskRewardRatio,
-      trailingSlTrigger: Math.round(targetRupees * 0.4), // Start trailing after 40% target achieved
+      trailingSlTrigger: Math.round(targetRupees * 0.4), 
       atrValue: Number(atr.toFixed(2)),
       vixFactor: Number(vixFactor.toFixed(2)),
-      pop: strategyMode === 'MOMENTUM_SNIPER' ? 38 : 65, // Standard probabilities for these styles
-      maxProfit: strategyMode === 'MOMENTUM_SNIPER' ? undefined : 2000, // Heuristic for spreads
-      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * 65 : 4500
+      pop: Math.round(pop),
+      maxProfit: strategyMode === 'MOMENTUM_SNIPER' ? undefined : 2500, 
+      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * 75 : 5500
     };
   }
 
@@ -177,16 +180,21 @@ class IntelligenceEngine {
     peakPnL: number,
     params: TradeParams
   ): number {
-    // Protective: Move to Cost plus small buffer once 35% target hit
-    if (currentPnL >= params.targetRupees * 0.35) {
-      const breakEven = Math.max(0, currentPnL * 0.2); // Lock at least 20% of current gain
-      const baseSL = -params.stopLossRupees;
-      return Math.max(baseSL, breakEven);
+    // Stage 1: Move to Break-even once 30% target reached
+    if (currentPnL >= params.targetRupees * 0.30) {
+      // Lock at least 15% of target once 30% hit
+      const floor = params.targetRupees * 0.15;
+      return Math.max(-params.stopLossRupees, floor);
     }
 
-    // Aggressive: If 70% target reached, lock half of target
-    if (currentPnL >= params.targetRupees * 0.70) {
+    // Stage 2: Move to 40% lock once 60% target reached
+    if (currentPnL >= params.targetRupees * 0.60) {
       return params.targetRupees * 0.40;
+    }
+
+    // Stage 3: Move to 70% lock once 90% target reached
+    if (currentPnL >= params.targetRupees * 0.90) {
+        return params.targetRupees * 0.70;
     }
 
     return -params.stopLossRupees;

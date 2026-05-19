@@ -171,15 +171,15 @@ class StrategyEngine {
     let strategyType: StrategyType = 'IRON_CONDOR';
     let recommendation = (isObservationPeriod && total < 60) ? "OBSERVATION PERIOD (9:00-9:30)" : "--";
 
-    if (!isObservationPeriod || total >= 60) {
-      const isStrongScore = total > 80;
-      const isOrbConfirmed = orbTrigger !== 0 && total > 70;
-      const isSideways = Math.abs(oiChangeBias) < 100000 && Math.abs(diff) < 10;
+    if (!isObservationPeriod || total >= 55) {
+      const isStrongScore = total > 75; // Lowered from 80 for better reactivity
+      const isOrbConfirmed = orbTrigger !== 0 && total > 65; // Lowered from 70
+      const isSideways = Math.abs(oiChangeBias) < 80000 && Math.abs(diff) < 8;
       const isHighVol = vix > 18;
       const isLowVol = vix < 12;
 
       // Determine Bias with higher sensitivity
-      if (isSideways && total < 55) {
+      if (isSideways && total < 52) {
         bias = 'NEUTRAL';
         biasReason = "Sideways market with low OI shift";
       } else {
@@ -191,19 +191,27 @@ class StrategyEngine {
           biasReason = "ORB Breakdown Low confirmed by VWAP";
         } else {
           // Trend + OI Confirmation
-          if (oiChangeBias > 80000) {
+          if (oiChangeBias > 75000) {
              bias = 'BULLISH';
-             biasReason = "Put Writing Activity (+OI Change)";
-          } else if (oiChangeBias < -80000) {
+             biasReason = "Strong Put Writing (+OI Change)";
+          } else if (oiChangeBias < -75000) {
              bias = 'BEARISH';
-             biasReason = "Call Writing Activity (-OI Change)";
-          } else if (Math.abs(diff) > 10 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.22)) {
+             biasReason = "Strong Call Writing (-OI Change)";
+          } else if (Math.abs(diff) > 8 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.18)) {
              // Pure Price Push / Significant Day Change if OI is lagging or neutral
              const priceChange = (marketEngine.getLatestTick().change || 0);
-             const momentumFactor = Math.abs(diff) / 5; // Extra weight if far from ATM
+             const momentumFactor = Math.abs(diff) / 4; 
+             const macdConfirm = (indicators.macd.histogram || 0) > 0 ? 'BULLISH' : 'BEARISH';
+             const vixCooling = (marketEngine.getVixDelta() || 0) < 0;
              
-             bias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
-             biasReason = `Price Velocity Dominant (${diff > 0 ? 'Bullish' : 'Bearish'}) - Momentum Check: ${momentumFactor.toFixed(1)}`;
+             // If price is up but VIX is spiking and MACD is bearish, stay NEUTRAL or cautious
+             if (priceChange > 0 && indicators.macd.histogram && indicators.macd.histogram < -2 && !vixCooling) {
+                bias = 'NEUTRAL';
+                biasReason = "Price Up but Bearish Divergence (MACD/VIX Spike)";
+             } else {
+                bias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
+                biasReason = `Price Velocity Dominant (${bias}) - Momentum: ${momentumFactor.toFixed(1)} [${macdConfirm}]`;
+             }
           } else {
              bias = 'NEUTRAL';
              biasReason = `Rangebound (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
