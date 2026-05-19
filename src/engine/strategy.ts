@@ -197,11 +197,13 @@ class StrategyEngine {
           } else if (oiChangeBias < -80000) {
              bias = 'BEARISH';
              biasReason = "Call Writing Activity (-OI Change)";
-          } else if (Math.abs(diff) > 12 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.25)) {
+          } else if (Math.abs(diff) > 10 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.22)) {
              // Pure Price Push / Significant Day Change if OI is lagging or neutral
              const priceChange = (marketEngine.getLatestTick().change || 0);
+             const momentumFactor = Math.abs(diff) / 5; // Extra weight if far from ATM
+             
              bias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
-             biasReason = `Price Velocity Dominant (${diff > 0 ? 'Bullish' : 'Bearish'})`;
+             biasReason = `Price Velocity Dominant (${diff > 0 ? 'Bullish' : 'Bearish'}) - Momentum Check: ${momentumFactor.toFixed(1)}`;
           } else {
              bias = 'NEUTRAL';
              biasReason = `Rangebound (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;

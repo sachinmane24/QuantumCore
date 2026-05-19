@@ -110,10 +110,11 @@ class RiskEngine {
       return;
     }
 
-    if (this.stats.dailyPnL <= -config.DAILY_LOSS_LIMIT) {
+    // Trade limit check - only prevents NEW entries
+    if (this.entriesToday >= config.MAX_TRADES_PER_DAY) {
+      // Don't activate kill switch here, just let validateEntry handle it
+    } else if (this.stats.dailyPnL <= -config.DAILY_LOSS_LIMIT) {
       this.activateKillSwitch('Daily Loss Limit Exceeded');
-    } else if (this.entriesToday >= config.MAX_TRADES_PER_DAY) {
-      this.activateKillSwitch('Max Trades Per Day Reached');
     } else if (this.stats.consecutiveLosses >= config.CONSECUTIVE_LOSS_LIMIT) {
       this.activateKillSwitch('Consecutive Loss Limit Reached');
     }
@@ -168,6 +169,10 @@ class RiskEngine {
     
     if (this.stats.isKillSwitchActive) {
       return { allowed: false, reason: `Kill Switch Active: ${this.stats.killReason}`, score: this.stats.riskScore };
+    }
+
+    if (this.entriesToday >= config.MAX_TRADES_PER_DAY) {
+      return { allowed: false, reason: `Max Trades Per Day (${config.MAX_TRADES_PER_DAY}) Reached`, score: this.stats.riskScore };
     }
 
     // Time Check (Convert to IST: UTC+5:30)

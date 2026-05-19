@@ -35,6 +35,8 @@ export const ConfigSchema = z.object({
   MAX_DELTA_LIMIT: z.number().default(2.0),
   MIN_CREDIT_PREMIUM: z.number().default(5.0), // Don't sell anything below 5 rupees
   EXPIRY_NO_TRADE_TIME: z.string().default("14:30"), // Stop entering on expiry after 2:30 PM
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -74,6 +76,8 @@ export const config: Config = {
   MAX_DELTA_LIMIT: 2.0,
   MIN_CREDIT_PREMIUM: 5.0,
   EXPIRY_NO_TRADE_TIME: "14:30",
+  TELEGRAM_BOT_TOKEN: safeProcessEnv.TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID: safeProcessEnv.TELEGRAM_CHAT_ID,
 };
 
 export const setDataMode = (mode: 'MOCK' | 'LIVE') => {

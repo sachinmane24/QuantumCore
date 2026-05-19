@@ -91,6 +91,9 @@ class IntelligenceEngine {
 
       slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 45 : 35) : 55, slPoints);
       targetPoints = slPoints * riskRewardRatio;
+      
+      // Ensure target is at least 0.5% of Spot for Momentum to avoid micro-profits
+      targetPoints = Math.max(targetPoints, entrySpot * 0.005);
     } else {
       // Option Selling / Spread Logic
       // On expiry day, increase buffer to avoid gamma spikes

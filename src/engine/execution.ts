@@ -8,6 +8,7 @@ import { marketEngine } from './market.ts';
 import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
 import { riskEngine } from './risk.ts';
+import { NotificationService } from './notifications.ts';
 
 import { intelligenceEngine } from './intelligence.ts';
 import type { TradeParams } from './intelligence.ts';
@@ -420,6 +421,14 @@ class ExecutionEngine {
     this.activePositions = newPositions;
     console.log(`[EXECUTION] AI AUTO-DECIDE: Structure [${score.strategyType}] selected based on VIX ${this.currentVixAtEntry.toFixed(2)} and Score ${score.total}.`);
     
+    NotificationService.notifyTradeEntry({
+      symbol: config.TRADING_SYMBOL,
+      strategyMode: score.mode,
+      bias: bias,
+      entrySpot: spot,
+      status: 'OPEN'
+    });
+
     await tradeLogger.logAudit({
       timestamp: new Date().toISOString(),
       type: 'TRADE_TRIGGER',
@@ -530,9 +539,9 @@ class ExecutionEngine {
       if (this.currentTradeParams) {
         // Time-Based Decay Intelligence (Option Buying specific)
         const durationMins = (Date.now() - this.currentEntryTime) / 60000;
-        if (this.lastTradeScore?.mode === 'MOMENTUM_SNIPER' && durationMins > 45) {
-           if (this.pnl < this.currentTradeParams.targetRupees * 0.25) {
-              await this.exitAllInternal(`Time-Decay Exit: 45m Stagnation Threshold Reached`);
+        if (this.lastTradeScore?.mode === 'MOMENTUM_SNIPER' && durationMins > 60) {
+           if (this.pnl < this.currentTradeParams.targetRupees * 0.15) {
+              await this.exitAllInternal(`Time-Decay Exit: 60m Stagnation Threshold Reached`);
               return;
            }
         }
@@ -665,8 +674,17 @@ class ExecutionEngine {
     if (!sellPos) return;
 
     let shouldRoll = false;
-    if (sellPos.type === 'PE' && spot > sellPos.strike + 50) shouldRoll = true;
-    if (sellPos.type === 'CE' && spot < sellPos.strike - 50) shouldRoll = true;
+    // Only roll if position is deep OTM (80% profit) to lock in gains and redeploy
+    const currentPrice = sellPos.type === 'CE' 
+      ? marketEngine.getOptionChain().find(o => o.strike === sellPos.strike)?.ce_price || 0
+      : marketEngine.getOptionChain().find(o => o.strike === sellPos.strike)?.pe_price || 0;
+    
+    const profitPct = (sellPos.entryPrice - currentPrice) / sellPos.entryPrice;
+
+    if (profitPct > 0.8) {
+      shouldRoll = true;
+      console.log(`[EXECUTION] Rolling winner: Strike ${sellPos.strike} ${sellPos.type} at 80% decay.`);
+    }
 
     if (shouldRoll) {
       console.log('Rolling Position...');
@@ -841,6 +859,13 @@ class ExecutionEngine {
       }
     }
     console.log(`Exiting all positions. Reason: ${reason}. Final PnL: ${this.pnl}`);
+    
+    NotificationService.notifyTradeExit({
+      symbol: config.TRADING_SYMBOL,
+      pnl: this.pnl,
+      entryTimestamp: this.currentEntryTime
+    }, reason);
+
     this.activePositions = [];
     this.lastTradeEndTime = Date.now();
     this.pnl = 0; 

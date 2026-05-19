@@ -356,13 +356,6 @@ async function startServer() {
       const currentTimeInMinutes = (hours * 60) + minutes;
       const marketCloseTime = (16 * 60); // 4:00 PM IST
 
-      if (currentTimeInMinutes >= marketCloseTime) {
-        if (config.AUTO_MODE) {
-          console.log("[SYSTEM] Market hours ended (4 PM IST). Disabling Auto Mode.");
-          setAutoMode(false);
-        }
-      }
-
       // 1. Data Sync
       loopCount++;
 
@@ -709,7 +702,7 @@ async function startServer() {
     res.json({ success: true, config });
   });
 
-  apiRouter.post("/toggle-data-mode", (req, res) => {
+  apiRouter.post("/toggle-data-mode", async (req, res) => {
     const { mode } = req.body;
     // Force to LIVE if we have an active session
     if (accessToken) {
@@ -718,18 +711,21 @@ async function startServer() {
       setDataMode(mode);
     }
     marketEngine.syncMode();
+    await saveRiskConfig(config);
     res.json({ status: "success", dataSource: config.DATA_SOURCE });
   });
 
-  apiRouter.post("/toggle-execution-mode", (req, res) => {
+  apiRouter.post("/toggle-execution-mode", async (req, res) => {
     const { mode } = req.body;
     setExecutionMode(mode);
+    await saveRiskConfig(config);
     res.json({ status: "success", executionMode: config.EXECUTION_MODE });
   });
 
-  apiRouter.post("/toggle-auto-mode", (req, res) => {
+  apiRouter.post("/toggle-auto-mode", async (req, res) => {
     const { mode } = req.body;
     setAutoMode(mode);
+    await saveRiskConfig(config);
     res.json({ status: "success", autoMode: config.AUTO_MODE });
   });
 
