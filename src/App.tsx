@@ -466,6 +466,26 @@ export default function App() {
     }
   };
 
+  const handleResetEngine = async () => {
+    if (!window.confirm("Are you sure you want to completely reset the trading engine and risk stats? This will clear any ghost or zombie positions and reset current drawdown metrics.")) {
+       return;
+    }
+    try {
+      const res = await fetch('/api/debug/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (data.success) {
+        console.log("Engine reset successfully");
+        // Refetch state instantly
+        await fetchData(true);
+      }
+    } catch (e) {
+      console.error("Failed to reset engine", e);
+    }
+  };
+
   const handleRunBacktest = async () => {
     if (!kiteStatus.connected) {
       setBacktestStatus(prev => ({ ...prev, error: "Zerodha account not connected" }));
@@ -1029,6 +1049,13 @@ export default function App() {
               )}
             >
               {execution?.autoMode ? 'AUTO' : 'MANUAL'}
+            </button>
+            <div className="w-px h-4 bg-white/5" />
+            <button 
+              onClick={handleResetEngine}
+              className="px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all bg-zinc-850 hover:bg-zinc-800 text-slate-200 border border-white/5"
+            >
+              RESET ENGINE
             </button>
           </div>
           <div className="flex items-center space-x-3 px-4 border-l border-white/5">

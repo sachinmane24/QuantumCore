@@ -461,6 +461,40 @@ class ExecutionEngine {
     }
     
     const chain = marketEngine.getOptionChain();
+    if (chain.length > 0) {
+      const validPositions: Position[] = [];
+      let hadGhostPurge = false;
+      this.activePositions.forEach(pos => {
+        const option = chain.find(o => o.strike === pos.strike);
+        if (option) {
+          validPositions.push(pos);
+        } else {
+          console.warn(`[EXECUTION] Ghost option position NIFTY ${pos.strike} ${pos.type} not in active chain. Purging.`);
+          hadGhostPurge = true;
+        }
+      });
+      if (hadGhostPurge) {
+        this.activePositions = validPositions;
+        await this.saveState();
+        if (this.activePositions.length === 0) {
+          this.pnl = 0;
+          this.peakPnL = 0;
+          this.currentTradeParams = null;
+          this.currentActiveSL = 0;
+          this.rollsToday = 0;
+          this.currentTradeBias = null;
+          this.currentEntryTime = 0;
+          this.currentSpotAtEntry = 0;
+          this.currentStrikeAtEntry = 0;
+          this.currentVixAtEntry = 0;
+          this.calculatePortfolioGreeks();
+          this.calculateCapitalDeployed();
+          riskEngine.updatePnL(0, []);
+          return;
+        }
+      }
+    }
+    
     let currentPnL = 0;
 
     this.activePositions.forEach(pos => {
@@ -930,6 +964,33 @@ class ExecutionEngine {
       this.calculatePortfolioGreeks();
       this.calculateCapitalDeployed();
     }
+  }
+
+  public async resetState() {
+    this.activePositions = [];
+    this.pnl = 0;
+    this.peakPnL = 0;
+    this.currentTradeParams = null;
+    this.currentActiveSL = 0;
+    this.rollsToday = 0;
+    this.lastTradeEndTime = 0;
+    this.lastTradeScore = null;
+    this.currentTradeBias = null;
+    this.currentEntryTime = 0;
+    this.currentSpotAtEntry = 0;
+    this.currentStrikeAtEntry = 0;
+    this.currentVixAtEntry = 0;
+    this.currentIsExpiryDay = false;
+    this.currentIsMonthlyExpiry = false;
+    this.currentEntryNetDelta = 0;
+    this.currentEntryNetGamma = 0;
+    this.currentIndicatorsAtEntry = null;
+    this.hedgeLogs = [];
+    this.lastTradeSuppression = null;
+    this.lastRiskValidation = null;
+    this.calculatePortfolioGreeks();
+    this.calculateCapitalDeployed();
+    await this.saveState();
   }
 
   getState() {

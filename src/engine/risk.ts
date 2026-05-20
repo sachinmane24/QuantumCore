@@ -172,8 +172,8 @@ class RiskEngine {
 
   private checkForDailyReset() {
     const today = getISTDate().dateStr;
-    if (this.lastResetDate && this.lastResetDate !== today) {
-      console.log(`[RISK] New day detected (${today}). Resetting daily stats.`);
+    if (!this.lastResetDate || this.lastResetDate !== today) {
+      console.log(`[RISK] New day detected (${today}) or first boot. Resetting daily stats.`);
       this.reset();
     }
     this.lastResetDate = today;

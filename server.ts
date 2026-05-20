@@ -692,6 +692,52 @@ async function startServer() {
     });
   });
 
+  apiRouter.get("/debug/diagnose-loop", (req, res) => {
+    try {
+      const state = executionEngine.getState();
+      const decision = strategyEngine.calculateScore();
+      const spot = marketEngine.getSpotPrice();
+      const nowIST = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+      const hours = nowIST.getUTCHours();
+      const minutes = nowIST.getUTCMinutes();
+      const currentISTTotalMinutes = hours * 60 + minutes;
+      const [endH, endM] = config.END_TIME.split(':').map(Number);
+      const endTotalMinutes = endH * 60 + endM;
+
+      const expectedSL = 1000;
+      const validation = riskEngine.validateEntry(config.LOT_SIZE, expectedSL);
+
+      res.json({
+        autoMode: config.AUTO_MODE,
+        positionsCount: state.positions.length,
+        rollsToday: state.rollsToday,
+        maxRolls: config.MAX_ROLLS,
+        bias: decision.bias,
+        spot,
+        vix: marketEngine.getVix(),
+        optionChainLength: marketEngine.getOptionChain().length,
+        timeStr: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`,
+        tradingHoursAllowed: (currentISTTotalMinutes >= (9*60+15) && currentISTTotalMinutes <= endTotalMinutes),
+        riskValidation: validation,
+        lastSuppression: state.lastTradeSuppression,
+        pnl: state.pnl,
+        state
+      });
+    } catch (e: any) {
+      res.json({ error: e.message });
+    }
+  });
+
+  apiRouter.post("/debug/reset", async (req, res) => {
+    try {
+      await executionEngine.resetState();
+      riskEngine.reset();
+      res.json({ success: true, message: "Engine and risk states successfully reset!" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   apiRouter.get("/config", (req, res) => {
     res.json(config);
   });
