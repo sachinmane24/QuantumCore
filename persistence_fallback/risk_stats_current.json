@@ -1,1 +1,1 @@
-{"stats":{"tradesToday":0,"dailyPnL":0,"consecutiveLosses":0,"maxDrawdownToday":0,"peakPnLToday":0,"portfolioHeat":0,"riskScore":100,"isKillSwitchActive":true,"killReason":"Auto-Square-off Time Reached (15:15 IST)"},"entriesToday":0,"lastResetDate":"5/19/26","updatedAt":"2026-05-19T16:13:05.008Z"}
+{"stats":{"tradesToday":0,"dailyPnL":12,"consecutiveLosses":0,"maxDrawdownToday":56,"peakPnLToday":56,"portfolioHeat":0.2,"riskScore":100,"isKillSwitchActive":false,"killReason":null},"entriesToday":1,"lastResetDate":"2026-05-20","updatedAt":"2026-05-20T05:56:32.531Z"}

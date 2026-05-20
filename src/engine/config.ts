@@ -14,7 +14,7 @@ export const ConfigSchema = z.object({
   EXECUTION_MODE: z.enum(['PAPER', 'LIVE']).default('PAPER'),
   AUTO_MODE: z.boolean().default(false),
   TRADING_SYMBOL: z.string().default('NIFTY'),
-  LOT_SIZE: z.number().default(25), // Updated for Nifty current standard lot size
+  LOT_SIZE: z.number().default(65), // Updated for Nifty current standard lot size
   SL_RUPEES: z.number().default(2000),
   TARGET_RUPEES: z.number().default(4000),
   MAX_ROLLS: z.number().default(5),
@@ -54,9 +54,9 @@ export const config: Config = {
   GEMINI_API_KEY: isValidKey ? GEMINI_KEY : undefined,
   DATA_SOURCE: 'MOCK',
   EXECUTION_MODE: 'PAPER',
-  AUTO_MODE: false,
+  AUTO_MODE: true,
   TRADING_SYMBOL: 'NIFTY',
-  LOT_SIZE: 25,
+  LOT_SIZE: 65,
   SL_RUPEES: 2000,
   TARGET_RUPEES: 4000,
   MAX_ROLLS: 5,

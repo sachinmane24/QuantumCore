@@ -491,8 +491,8 @@ async function startServer() {
 
           const decision = strategyEngine.calculateScore();
           
-          if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick().change || 0) > 0.3) {
-            console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick().change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
+          if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.3) {
+            console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick()?.change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
           }
 
           // Simple Auto-Exit if profit target or SL reached

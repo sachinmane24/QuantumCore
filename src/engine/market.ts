@@ -413,11 +413,17 @@ class MarketEngine {
     }
     
     // Capture ORB between 9:15 and 9:30 IST
-    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istDate = new Date(istTime);
-    const hours = istDate.getHours();
-    const minutes = istDate.getMinutes();
-    const timeInMins = hours * 60 + minutes;
+    const getISTDate = () => {
+      const now = new Date();
+      const istDate = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+      return {
+        hours: istDate.getUTCHours(),
+        minutes: istDate.getUTCMinutes()
+      };
+    };
+
+    const ist = getISTDate();
+    const timeInMins = ist.hours * 60 + ist.minutes;
 
     if (timeInMins >= 555 && timeInMins < 570) { // 9:15 to 9:30 AM IST
       if (niftyOhlc) {

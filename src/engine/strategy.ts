@@ -88,11 +88,20 @@ class StrategyEngine {
     // 4. Trap Presence (OI Change Concentration) - 20 points
     const trapScore = (Math.abs(oiChangeBias) > 2000000) ? 5 : 20;
 
+    // Robust IST Date Calculation Helper
+    const getISTDate = () => {
+      const now = new Date();
+      const istDate = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+      return {
+        hours: istDate.getUTCHours(),
+        minutes: istDate.getUTCMinutes()
+      };
+    };
+
     // 5. Time Filter - 20 points (Execution Timing)
-    const istTime = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istDate = new Date(istTime);
-    const istHour = istDate.getHours();
-    const istMin = istDate.getMinutes();
+    const istTime = getISTDate();
+    const istHour = istTime.hours;
+    const istMin = istTime.minutes;
     const totalMin = istHour * 60 + istMin;
     
     // Observation Period: 9:00 to 9:30 AM IST (540 to 570 mins)
@@ -197,9 +206,9 @@ class StrategyEngine {
           } else if (oiChangeBias < -75000) {
              bias = 'BEARISH';
              biasReason = "Strong Call Writing (-OI Change)";
-          } else if (Math.abs(diff) > 8 || (Math.abs(marketEngine.getLatestTick().change || 0) > 0.18)) {
+          } else if (Math.abs(diff) > 8 || (Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.18)) {
              // Pure Price Push / Significant Day Change if OI is lagging or neutral
-             const priceChange = (marketEngine.getLatestTick().change || 0);
+             const priceChange = (marketEngine.getLatestTick()?.change || 0);
              const momentumFactor = Math.abs(diff) / 4; 
              const macdConfirm = (indicators.macd.histogram || 0) > 0 ? 'BULLISH' : 'BEARISH';
              const vixCooling = (marketEngine.getVixDelta() || 0) < 0;

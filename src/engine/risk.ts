@@ -19,6 +19,24 @@ interface RiskStats {
   killReason: string | null;
 }
 
+// Standalone Robust IST Date Utility
+const getISTDate = () => {
+  const now = new Date();
+  const istDate = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+  const year = istDate.getUTCFullYear();
+  const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0');
+  const date = istDate.getUTCDate().toString().padStart(2, '0');
+  const hours = istDate.getUTCHours();
+  const minutes = istDate.getUTCMinutes();
+  return {
+    dateStr: `${year}-${month}-${date}`,
+    hours,
+    minutes,
+    timeStr: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`,
+    day: istDate.getUTCDay()
+  };
+};
+
 class RiskEngine {
   private stats: RiskStats = {
     tradesToday: 0,
@@ -99,11 +117,8 @@ class RiskEngine {
     if (this.stats.isKillSwitchActive) return;
 
     // Time-based Kill Switch (15:15 IST Square-off)
-    const istTimeStr = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istDate = new Date(istTimeStr);
-    const hours = istDate.getHours();
-    const minutes = istDate.getMinutes();
-    const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    const ist = getISTDate();
+    const timeStr = ist.timeStr;
     
     if (timeStr >= config.END_TIME && !config.BTST_MODE) {
       this.activateKillSwitch(`Auto-Square-off Time Reached (${config.END_TIME} IST)`);
@@ -156,7 +171,7 @@ class RiskEngine {
   }
 
   private checkForDailyReset() {
-    const today = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata", dateStyle: "short"});
+    const today = getISTDate().dateStr;
     if (this.lastResetDate && this.lastResetDate !== today) {
       console.log(`[RISK] New day detected (${today}). Resetting daily stats.`);
       this.reset();
@@ -176,12 +191,9 @@ class RiskEngine {
     }
 
     // Time Check (Convert to IST: UTC+5:30)
-    const istTimeStr = new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"});
-    const istDate = new Date(istTimeStr);
-    const day = istDate.getDay(); // 0=Sun, 6=Sat
-    const hours = istDate.getHours();
-    const minutes = istDate.getMinutes();
-    const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    const ist = getISTDate();
+    const day = ist.day; // 0=Sun, 6=Sat
+    const timeStr = ist.timeStr;
     
     // Weekend check
     if (day === 0 || day === 6) {

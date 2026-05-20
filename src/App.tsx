@@ -1088,6 +1088,65 @@ export default function App() {
                     </div>
                   </div>
                   
+                  {/* Strategy Directive & Score Interpretation */}
+                  <div className="mb-4 p-3 bg-blue-500/5 hover:bg-blue-500/[0.07] transition-all rounded-xl border border-blue-500/10 space-y-2.5">
+                    <div>
+                      <div className="text-[7.5px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                        Active Order Directive
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-black text-white uppercase tracking-tight">
+                          {strategy?.score?.recommendation || "Analyzing Matrix Indicators..."}
+                        </span>
+                        <span className={cn(
+                          "text-[8px] font-black px-1.5 py-0.5 rounded border tracking-wider",
+                          strategy?.score?.bias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                          strategy?.score?.bias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border-rose-500/20" :
+                          "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                        )}>
+                          {strategy?.score?.bias || "NEUTRAL"}
+                        </span>
+                      </div>
+                      {strategy?.score?.biasReason && (
+                        <p className="text-[8px] text-slate-400 font-bold mt-1 uppercase tracking-tight">
+                          Context: {strategy.score.biasReason}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="h-px bg-white/5" />
+
+                    <div>
+                      <div className="text-[7.5px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                        Score Interpretation
+                      </div>
+                      <p className="text-[8px] text-slate-300 leading-normal font-medium">
+                        {(() => {
+                          const scoreValue = strategy?.score?.total || 0;
+                          if (scoreValue >= 80) {
+                            return "Extreme Market Conviction (80-100): Optimal alignment of price momentum and massive institutional writing. Deploy high-probability sniper strategies or leveraged ratios.";
+                          } else if (scoreValue >= 60) {
+                            return "Moderate Market Conviction (60-79): Healthy trend confirmation. Favorable for standard limited-risk spreads (Bull/Bear Credit or Debit Spreads) to capture directional waves.";
+                          } else if (scoreValue >= 40) {
+                            return "Mean Reverting Range (40-59): Symmetrical market order flow. Perfect window for capturing rapid theta decay via Butterflies, Calendar Spreads, or neutral straddles.";
+                          } else {
+                            return "Low Conviction Boundary (0-39): Heavy structural dissonance or elevated stop-loss hunting risk. Best to stay flat or implement defensive Iron Condors with wide wings.";
+                          }
+                        })()}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[7px] font-mono bg-black/30 rounded px-2 py-0.5 text-slate-500">
+                      <div>
+                        ENGINE: <span className="text-blue-400 font-bold">{strategy?.score?.mode?.replace('_', ' ') || "N/A"}</span>
+                      </div>
+                      <div className="h-2 w-px bg-white/10" />
+                      <div>
+                        TYPE: <span className="text-purple-400 font-bold">{strategy?.score?.strategyType?.replace('_', ' ') || "N/A"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
                   <div className="space-y-2">
                       {[
                         { 
@@ -1847,7 +1906,7 @@ export default function App() {
                       <span className="terminal-value text-white">
                          ₹{execution?.capitalDeployed > 0 ? execution.capitalDeployed.toLocaleString() : 
                            (strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON'))
-                             ? (415 * (appConfig?.LOT_SIZE || 25)).toLocaleString()
+                             ? (415 * (appConfig?.LOT_SIZE || 65)).toLocaleString()
                              : '1.15L+'}
                       </span>
                    </div>
