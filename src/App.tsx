@@ -1392,7 +1392,22 @@ export default function App() {
                 <div className="h-[200px] w-full relative">
                   {market?.priceHistory && market.priceHistory.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={market.priceHistory}>
+                      <AreaChart data={market.priceHistory.map((val: any, idx: number) => {
+                        if (typeof val === 'object' && val !== null) {
+                          return {
+                            time: val.time || idx.toString(),
+                            price: val.price || 0
+                          };
+                        }
+                        const totalPoints = market.priceHistory?.length || 1;
+                        const secondsAgo = (totalPoints - 1 - idx) * 2; // assume ~2s average interval
+                        const d = new Date(Date.now() - secondsAgo * 1000);
+                        const timeStr = d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        return {
+                          time: timeStr,
+                          price: Number(val)
+                        };
+                      })}>
                         <defs>
                           <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/>
