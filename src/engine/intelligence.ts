@@ -33,7 +33,7 @@ class IntelligenceEngine {
     side: 'BUY' | 'SELL',
     strategyMode: 'MOMENTUM_SNIPER' | 'INST_SPREAD',
     entrySpot: number,
-    bias: 'BULLISH' | 'BEARISH',
+    bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL',
     totalScore: number = 70
   ): TradeParams {
     const vix = marketEngine.getVix();
@@ -76,8 +76,11 @@ class IntelligenceEngine {
       if (bias === 'BULLISH') {
         const structuralSL = entrySpot - (swings.low - huntingBuffer);
         slPoints = Math.max(slPoints, structuralSL);
-      } else {
+      } else if (bias === 'BEARISH') {
         const structuralSL = (swings.high + huntingBuffer) - entrySpot;
+        slPoints = Math.max(slPoints, structuralSL);
+      } else {
+        const structuralSL = Math.max(entrySpot - (swings.low - huntingBuffer), (swings.high + huntingBuffer) - entrySpot);
         slPoints = Math.max(slPoints, structuralSL);
       }
 
@@ -106,8 +109,11 @@ class IntelligenceEngine {
       if (bias === 'BULLISH') {
         const structuralSL = entrySpot - (swings.low - huntingBuffer * 2); 
         slPoints = Math.max(baseSL, structuralSL);
-      } else {
+      } else if (bias === 'BEARISH') {
         const structuralSL = (swings.high + huntingBuffer * 2) - entrySpot;
+        slPoints = Math.max(baseSL, structuralSL);
+      } else {
+        const structuralSL = Math.max(entrySpot - (swings.low - huntingBuffer * 2), (swings.high + huntingBuffer * 2) - entrySpot);
         slPoints = Math.max(baseSL, structuralSL);
       }
 
@@ -126,8 +132,8 @@ class IntelligenceEngine {
     }
 
     // Convert Points to Price Levels
-    const stopLossPrice = bias === 'BULLISH' ? entrySpot - slPoints : entrySpot + slPoints;
-    const targetPrice = bias === 'BULLISH' ? entrySpot + targetPoints : entrySpot - targetPoints;
+    const stopLossPrice = bias === 'BULLISH' ? entrySpot - slPoints : (bias === 'BEARISH' ? entrySpot + slPoints : entrySpot - slPoints);
+    const targetPrice = bias === 'BULLISH' ? entrySpot + targetPoints : (bias === 'BEARISH' ? entrySpot - targetPoints : entrySpot + targetPoints);
 
     // Convert Points to Rupees
     const deltaHedgeFactor = strategyMode === 'MOMENTUM_SNIPER' ? 0.7 : 0.45; 

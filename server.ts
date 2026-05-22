@@ -484,7 +484,7 @@ async function startServer() {
           const [endH, endM] = config.END_TIME.split(':').map(Number);
           const endTotalMinutes = endH * 60 + endM;
 
-          if (currentISTTotalMinutes >= endTotalMinutes && state.positions.length > 0) {
+          if (currentISTTotalMinutes >= endTotalMinutes && state.positions.length > 0 && config.DATA_SOURCE !== 'MOCK') {
             console.log(`[AUTO] Auto square-off time reached (${config.END_TIME} IST). Exiting all positions.`);
             await executionEngine.exitAll(`Auto Square-off (${config.END_TIME})`);
           }
@@ -504,8 +504,8 @@ async function startServer() {
              await executionEngine.exitAll("SL Hit");
           }
 
-          // Entry Logic (Only if no active position and clear bias)
-          if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS && decision.bias !== 'NEUTRAL') {
+          // Entry Logic (Fires on all valid setups - including Neutral Theta-decay spreads)
+          if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
              await executionEngine.executeTrade(decision.bias);
           }
         } catch (err) {
@@ -657,6 +657,7 @@ async function startServer() {
       maxOi: marketEngine.getMaxOi(),
       tick: marketEngine.getLatestTick(),
       chain: marketEngine.getOptionChain(),
+      priceHistory: marketEngine.getPriceHistory(),
       gapPercent: marketEngine.getGapPercent(),
       orb: marketEngine.getORB(),
       vwap: marketEngine.getVWAP(),

@@ -197,17 +197,23 @@ class RiskEngine {
     
     // Weekend check
     if (day === 0 || day === 6) {
-      return { allowed: false, reason: `Market Closed (Weekend)`, score: this.stats.riskScore };
+      if (config.DATA_SOURCE !== 'MOCK') {
+        return { allowed: false, reason: `Market Closed (Weekend)`, score: this.stats.riskScore };
+      }
     }
 
     if (timeStr < config.START_TIME || timeStr > config.END_TIME) {
-      return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };
+      if (config.DATA_SOURCE !== 'MOCK') {
+        return { allowed: false, reason: `Outside Trading Hours (${config.START_TIME}-${config.END_TIME} IST). Current: ${timeStr}`, score: this.stats.riskScore };
+      }
     }
 
     // Market Open Cool-off: Reduced to 5 minutes for higher responsiveness 
     // while still avoiding the extreme first-candle volatility.
     if (timeStr >= "09:15" && timeStr < "09:20") {
-      return { allowed: false, reason: `Market Warming Up. Cool-off active until 09:20 IST.`, score: this.stats.riskScore };
+      if (config.DATA_SOURCE !== 'MOCK') {
+        return { allowed: false, reason: `Market Warming Up. Cool-off active until 09:20 IST.`, score: this.stats.riskScore };
+      }
     }
 
     // Risk per trade check

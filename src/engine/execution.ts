@@ -33,7 +33,7 @@ class ExecutionEngine {
   private rollsToday: number = 0;
   private lastRollTime: number = 0;
   private lastTradeScore: any = null;
-  private currentTradeBias: 'BULLISH' | 'BEARISH' | null = null;
+  private currentTradeBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | null = null;
   private currentEntryTime: number = 0;
   private currentSpotAtEntry: number = 0;
   private currentStrikeAtEntry: number = 0;
@@ -70,13 +70,13 @@ class ExecutionEngine {
     }
   }
 
-  async executeTrade(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
+  async executeTrade(bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL', isManual: boolean = false) {
     return await this.withLock(async () => {
       await this.executeTradeInternal(bias, isManual);
     });
   }
 
-  private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH', isManual: boolean = false) {
+  private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
     // Entry Cooldown: 2 minute break between trades for Auto-Mode only
@@ -209,11 +209,6 @@ class ExecutionEngine {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike + 150;
         const sellPrice = getLTP(sellStrike, 'CE');
-        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
-          const reason = `CE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
-          this.lastTradeSuppression = { reason, timestamp: Date.now() };
-          return;
-        }
         newPositions.push(
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
           { strike: sellStrike, type: 'CE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }
@@ -225,11 +220,6 @@ class ExecutionEngine {
         const buyStrike = atmStrike;
         const sellStrike = atmStrike - 150;
         const sellPrice = getLTP(sellStrike, 'PE');
-        if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
-          const reason = `PE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
-          this.lastTradeSuppression = { reason, timestamp: Date.now() };
-          return;
-        }
         newPositions.push(
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
           { strike: sellStrike, type: 'PE', entryPrice: sellPrice, qty: config.LOT_SIZE, side: 'SELL' }

@@ -12,7 +12,7 @@ export interface TradeLogEntry {
   trap: boolean;
   pnl: number;
   win: boolean;
-  bias?: 'BULLISH' | 'BEARISH';
+  bias?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   mode?: string;
   vix?: number;
   spot?: number;

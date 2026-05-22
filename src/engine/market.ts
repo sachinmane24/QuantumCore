@@ -213,6 +213,10 @@ class MarketEngine {
     };
   }
 
+  public getPriceHistory() {
+    return this.priceHistory;
+  }
+
   public syncMode() {
     console.log(`[MARKET] Syncing mode: ${config.DATA_SOURCE}`);
     if (config.DATA_SOURCE === 'MOCK') {
@@ -270,6 +274,16 @@ class MarketEngine {
     this.spotPrice = this.todayOpen;
     this.vwap = this.spotPrice;
 
+    // Pre-populate price history with organic random walk to warm up indicators immediately
+    this.priceHistory = [];
+    let simPrice = this.yesterdayClose;
+    for (let i = 0; i < 80; i++) {
+      simPrice += (Math.random() - 0.49) * 4; // micro-oscillations
+      this.priceHistory.push(simPrice);
+    }
+    // Set current price history endpoint
+    this.priceHistory.push(this.spotPrice);
+
     this.mockInterval = setInterval(() => {
       // Safety check: if mode was changed but interval not cleared or still running
       if (config.DATA_SOURCE !== 'MOCK') {
@@ -280,12 +294,14 @@ class MarketEngine {
         return;
       }
 
-      // Mock spot price movement
-      const change = (Math.random() - 0.5) * 5;
+      // Mock spot price movement with slight momentum/drift
+      const change = (Math.random() - 0.495) * 6;
       this.spotPrice += change;
       
       // Update VWAP (simple moving weighted average mock)
       this.vwap = (this.vwap * 0.95) + (this.spotPrice * 0.05);
+
+      const changePct = ((this.spotPrice - this.yesterdayClose) / this.yesterdayClose) * 100;
 
       // Update ticks
       const mockTick: Tick = {
@@ -299,7 +315,7 @@ class MarketEngine {
         buy_quantity: 500000,
         sell_quantity: 480000,
         ohlc: { open: this.spotPrice - 30, high: this.spotPrice + 20, low: this.spotPrice - 40, close: this.spotPrice },
-        change: 0.15,
+        change: changePct,
         oi: 12000000,
         oi_day_high: 13000000,
         oi_day_low: 11000000,
@@ -307,7 +323,8 @@ class MarketEngine {
       };
       this.ticks.set(mockTick.instrument_token, mockTick);
 
-      this.optionChain = this.generateChain(this.spotPrice);
+      const generatedChain = this.generateChain(this.spotPrice);
+      this.updateData(this.spotPrice, generatedChain, 12.42, mockTick.ohlc, changePct, this.vwap);
     }, 1000);
   }
 
