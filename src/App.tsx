@@ -749,6 +749,128 @@ export default function App() {
   const displayTheta = greeks.theta;
   const displayVega = greeks.vega;
 
+  const formatOi = (val: number) => {
+    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
+    if (val >= 1000) return `${(val / 1000).toFixed(0)}K`;
+    return val.toString();
+  };
+
+  const computeOptionChainInsights = () => {
+    const chain = market?.chain || [];
+    const spot = market?.spot || 22000;
+    
+    if (chain.length === 0) return null;
+    
+    let maxCeOiStrike = chain[0].strike;
+    let maxCeOiVal = chain[0].ce_oi;
+    chain.forEach(c => {
+      if (c.ce_oi > maxCeOiVal) {
+        maxCeOiVal = c.ce_oi;
+        maxCeOiStrike = c.strike;
+      }
+    });
+
+    let secondCeOiStrike = maxCeOiStrike;
+    let secondCeOiVal = 0;
+    chain.forEach(c => {
+      if (c.strike !== maxCeOiStrike && c.ce_oi > secondCeOiVal) {
+        secondCeOiVal = c.ce_oi;
+        secondCeOiStrike = c.strike;
+      }
+    });
+    
+    let maxPeOiStrike = chain[0].strike;
+    let maxPeOiVal = chain[0].pe_oi;
+    chain.forEach(c => {
+      if (c.pe_oi > maxPeOiVal) {
+        maxPeOiVal = c.pe_oi;
+        maxPeOiStrike = c.strike;
+      }
+    });
+
+    let secondPeOiStrike = maxPeOiStrike;
+    let secondPeOiVal = 0;
+    chain.forEach(c => {
+      if (c.strike !== maxPeOiStrike && c.pe_oi > secondPeOiVal) {
+        secondPeOiVal = c.pe_oi;
+        secondPeOiStrike = c.strike;
+      }
+    });
+    
+    let totalCeOi = 0;
+    let totalPeOi = 0;
+    let totalCeOiChange = 0;
+    let totalPeOiChange = 0;
+    chain.forEach(c => {
+      totalCeOi += c.ce_oi || 0;
+      totalPeOi += c.pe_oi || 0;
+      totalCeOiChange += c.ce_oi_change || 0;
+      totalPeOiChange += c.pe_oi_change || 0;
+    });
+    
+    const currentPcr = totalCeOi > 0 ? totalPeOi / totalCeOi : 1.0;
+    const oiChangeRatio = totalCeOiChange > 0 ? totalPeOiChange / totalCeOiChange : 1.0;
+
+    let pcrBias = "NEUTRAL";
+    let pcrColor = "text-slate-400 font-black";
+    let pcrText = "Balanced range aggregation. Neutral sentiment.";
+    if (currentPcr > 1.2) {
+      pcrBias = "BULLISH DOMINANCE";
+      pcrColor = "text-emerald-400 font-extrabold";
+      pcrText = "Strong Put Writing suggests robust, ascending support.";
+    } else if (currentPcr < 0.8) {
+      pcrBias = "BEARISH HEADWINDS";
+      pcrColor = "text-rose-400 font-extrabold";
+      pcrText = "Overhead Call Writing points to resistance capping upside.";
+    }
+
+    let netCeDelta = 0;
+    let netPeDelta = 0;
+    chain.forEach(c => {
+      const ceD = 1 / (1 + Math.exp(-(spot - c.strike) / 35));
+      const peD = ceD - 1.0;
+      netCeDelta += ceD * (c.ce_oi || 0);
+      netPeDelta += peD * (c.pe_oi || 0);
+    });
+    const greekDeltaBias = netCeDelta + netPeDelta;
+
+    let maxGamma = 0;
+    let maxGammaStrike = spot;
+    chain.forEach(c => {
+      const g = (1 / (35 * Math.sqrt(2 * Math.PI))) * Math.exp(-Math.pow(spot - c.strike, 2) / (2 * 35 * 35));
+      if (g > maxGamma) {
+        maxGamma = g;
+        maxGammaStrike = c.strike;
+      }
+    });
+
+    let directionBias = "STABLE BOUNDS";
+    if (totalPeOiChange > totalCeOiChange * 1.15) {
+      directionBias = "UPWARD TENSION";
+    } else if (totalCeOiChange > totalPeOiChange * 1.15) {
+      directionBias = "DOWNWARD DAMPENING";
+    }
+
+    return {
+      support: maxPeOiStrike,
+      supportOi: maxPeOiVal,
+      secondSupport: secondPeOiStrike,
+      resistance: maxCeOiStrike,
+      resistanceOi: maxCeOiVal,
+      secondResistance: secondCeOiStrike,
+      pcr: currentPcr,
+      pcrBias,
+      pcrColor,
+      pcrText,
+      gammaTrigger: maxGammaStrike,
+      greekDeltaBias,
+      directionBias,
+      oiChangeRatio,
+    };
+  };
+
+  const insights = computeOptionChainInsights();
+
   const pnlColor = (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400";
   const biasColor = strategy?.score.bias === 'BULLISH' ? "text-emerald-400" : strategy?.score.bias === 'BEARISH' ? "text-rose-400" : "text-slate-400";
 
@@ -1256,6 +1378,22 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Terminal Execution Gateway */}
+                  <div className="pt-3 border-t border-white/5 flex flex-col gap-2 mt-1">
+                    <button
+                      onClick={() => handleExecute(strategy?.score?.bias || 'NEUTRAL')}
+                      className={cn(
+                        "w-full py-2 px-4 rounded text-[9px] font-black uppercase tracking-widest border transition-all text-center flex items-center justify-center gap-2",
+                        strategy?.score?.bias === 'BULLISH' ? "bg-emerald-600/10 border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20" :
+                        strategy?.score?.bias === 'BEARISH' ? "bg-rose-600/10 border-rose-500/25 text-rose-400 hover:bg-rose-500/20" :
+                        "bg-white/5 border-white/10 text-slate-300 hover:bg-white/10"
+                      )}
+                    >
+                      <Zap className="w-3 h-3" />
+                      Execute: {strategy?.score?.bias || 'NEUTRAL'} {strategy?.score?.strategyType?.replace(/_/g, ' ') || 'FLOW'}
+                    </button>
+                  </div>
                 </div>
               </section>
 
@@ -1315,379 +1453,273 @@ export default function App() {
                    </div>
                  )}
               </section>
+
+               {/* Active Positions */}
+               {execution?.positions && execution.positions.length > 0 && (
+                 <section className="terminal-card bg-emerald-600/[0.05] border-emerald-500/20 p-5 mt-4">
+                    <div className="flex justify-between items-center mb-4">
+                       <div className="flex items-center gap-2.5">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Current Positions</h3>
+                       </div>
+                       <div className="flex items-center gap-2.5">
+                         <div className={cn(
+                           "px-2.5 py-0.5 rounded text-[10px] font-black font-mono",
+                           (execution?.pnl || 0) >= 0 ? "text-emerald-400 bg-emerald-400/10" : "text-rose-400 bg-rose-400/10"
+                         )}>
+                           PNL: ₹{execution?.pnl}
+                         </div>
+                         <div className="px-2.5 py-0.5 rounded text-[10px] font-black text-blue-400 bg-blue-400/10 uppercase tracking-tighter font-mono font-mono">
+                           CAP: ₹{execution?.capitalDeployed?.toLocaleString() || 0}
+                         </div>
+                       </div>
+                    </div>
+                    <div className="space-y-2">
+                       {execution.positions.map((pos: any, idx: number) => (
+                         <div key={idx} className="bg-black/40 border border-white/5 rounded-lg p-3 flex justify-between items-center">
+                            <div className="flex items-center gap-4">
+                               <span className={cn(
+                                 "px-2 py-0.5 rounded text-[8px] font-black",
+                                 pos.side === 'SELL' ? "bg-rose-500/20 text-rose-500" : "bg-emerald-500/20 text-emerald-500"
+                               )}>
+                                 {pos.side}
+                               </span>
+                               <div>
+                                  <div className="text-[10px] font-black text-white">NIFTY {pos.strike} {pos.type}</div>
+                                  <div className="flex items-center gap-2">
+                                     <div className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{pos.qty} QTY @ ₹{pos.entryPrice}</div>
+                                     <div className="w-1 h-1 rounded-full bg-white/10" />
+                                     <div className="text-[8px] font-black text-blue-400 uppercase tracking-widest">
+                                        LTP: ₹{
+                                          market?.chain.find(c => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price']?.toFixed(1) || pos.entryPrice
+                                        }
+                                     </div>
+                                  </div>
+                               </div>
+                            </div>
+                            <div className="text-right">
+                               <div className="text-[10px] font-black text-emerald-400">LIVE</div>
+                               <div className="text-[8px] text-slate-500 font-bold">DECAY: OPTIMAL</div>
+                            </div>
+                         </div>
+                       ))}
+                       <button 
+                          onClick={handleExit}
+                          className="w-full mt-2 py-2 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/30 text-rose-500 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all"
+                       >
+                          Emergency Square Off
+                       </button>
+                    </div>
+                 </section>
+               )}
             </div>
 
-            {/* Column 2: Live Trade Analytics & Real-Time NIFTY Dynamics */}
-            <div className="col-span-12 lg:col-span-4 flex flex-col gap-4 h-fit">
-              {/* Active Positions */}
-              {execution?.positions && execution.positions.length > 0 && (
-                <section className="terminal-card bg-emerald-600/[0.05] border-emerald-500/20 p-5">
-                   <div className="flex justify-between items-center mb-4">
-                      <div className="flex items-center gap-2.5">
-                         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                         <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Current Positions</h3>
+            {/* Column 2: Options Intelligence Suite & Deep Chain Matrix */}
+            <div className="col-span-12 lg:col-span-8 flex flex-col gap-4">
+              {/* Options Cognitive Insights Console */}
+              {insights && (
+                <section className="terminal-card bg-slate-900/35 p-5 flex flex-col gap-4 border border-white/5">
+                   <div className="flex justify-between items-center border-b border-white/5 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-violet-400 animate-pulse" />
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">NIFTY NEXT MOVEMENT COGNITIVE INSIGHTS</h3>
                       </div>
-                      <div className="flex items-center gap-2.5">
-                        <div className={cn(
-                          "px-2.5 py-0.5 rounded text-[10px] font-black",
-                          (execution?.pnl || 0) >= 0 ? "text-emerald-400 bg-emerald-400/10" : "text-rose-400 bg-rose-400/10"
-                        )}>
-                          PNL: ₹{execution?.pnl}
-                        </div>
-                        <div className="px-2.5 py-0.5 rounded text-[10px] font-black text-blue-400 bg-blue-400/10 uppercase tracking-tighter">
-                          MARGIN: ₹{execution?.capitalDeployed?.toLocaleString() || 0}
-                        </div>
-                      </div>
+                      <span className="text-[8px] font-bold text-slate-500 uppercase">GREEK-DERIVED COGNITIVE INTEL</span>
                    </div>
-                   <div className="space-y-2">
-                      {execution.positions.map((pos: any, idx: number) => (
-                        <div key={idx} className="bg-black/40 border border-white/5 rounded-lg p-3 flex justify-between items-center">
-                           <div className="flex items-center gap-4">
-                              <span className={cn(
-                                "px-2 py-0.5 rounded text-[8px] font-black",
-                                pos.side === 'SELL' ? "bg-rose-500/20 text-rose-500" : "bg-emerald-500/20 text-emerald-500"
-                              )}>
-                                {pos.side}
-                              </span>
-                              <div>
-                                 <div className="text-[10px] font-black text-white">NIFTY {pos.strike} {pos.type}</div>
-                                 <div className="flex items-center gap-2">
-                                    <div className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{pos.qty} QTY @ ₹{pos.entryPrice}</div>
-                                    <div className="w-1 h-1 rounded-full bg-white/10" />
-                                    <div className="text-[8px] font-black text-blue-400 uppercase tracking-widest">
-                                       LTP: ₹{
-                                         market?.chain.find(c => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price']?.toFixed(1) || pos.entryPrice
-                                       }
-                                    </div>
-                                 </div>
-                              </div>
-                           </div>
-                           <div className="text-right">
-                              <div className="text-[10px] font-black text-emerald-400">LIVE</div>
-                              <div className="text-[8px] text-slate-500 font-bold">DECAY: OPTIMAL</div>
-                           </div>
-                        </div>
-                      ))}
-                      <button 
-                         onClick={handleExit}
-                         className="w-full mt-2 py-2 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/30 text-rose-500 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all"
-                      >
-                         Emergency Square Off
-                      </button>
+
+                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {/* Card 1: Support & Resistance Shifts */}
+                      <div className="bg-slate-950/40 p-3 rounded-lg border border-white/5 flex flex-col justify-between">
+                         <div>
+                            <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">OI Key Structural Anchors</span>
+                            <div className="flex justify-between items-end mt-2">
+                               <div>
+                                  <div className="text-[8px] text-rose-400 font-extrabold uppercase mb-0.5">Ceiling (Resist)</div>
+                                  <div className="text-sm font-black text-white font-mono">₹{insights.resistance}</div>
+                                  <div className="text-[7.5px] text-slate-500 font-bold uppercase">OI: {formatOi(insights.resistanceOi)}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[8px] text-emerald-400 font-extrabold uppercase mb-0.5">Floor (Support)</div>
+                                  <div className="text-sm font-black text-white font-mono">₹{insights.support}</div>
+                                  <div className="text-[7.5px] text-slate-500 font-bold uppercase">OI: {formatOi(insights.supportOi)}</div>
+                               </div>
+                            </div>
+                         </div>
+                         <div className="mt-2 pt-2 border-t border-white/[0.03] text-[7.5px] text-slate-400 font-bold uppercase">
+                            Breakout Bounds: ₹{insights.secondSupport} - ₹{insights.secondResistance}
+                         </div>
+                      </div>
+
+                      {/* Card 2: PCR Sentiment */}
+                      <div className="bg-slate-950/40 p-3 rounded-lg border border-white/5 flex flex-col justify-between">
+                         <div>
+                            <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Put / Call Sentiment (PCR)</span>
+                            <div className="flex justify-between items-baseline mt-2">
+                               <div className="text-lg font-black text-white font-mono">{insights.pcr.toFixed(2)}</div>
+                               <div className={cn("text-[8px] font-black uppercase px-2 py-0.5 rounded", insights.pcr > 1.2 ? "bg-emerald-500/10 text-emerald-400" : insights.pcr < 0.8 ? "bg-rose-500/10 text-rose-400" : "bg-slate-500/10 text-slate-400")}>
+                                  {insights.pcrBias}
+                               </div>
+                            </div>
+                         </div>
+                         <p className="text-[8.5px] text-slate-400 mt-1.5 leading-normal italic">
+                            "{insights.pcrText}"
+                         </p>
+                      </div>
+
+                      {/* Card 3: Delta Net Pressure */}
+                      <div className="bg-slate-950/40 p-3 rounded-lg border border-white/5 flex flex-col justify-between">
+                         <div>
+                            <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Delta Writing Flow</span>
+                            <div className="text-sm font-black text-white mt-1.5 font-mono">
+                               {insights.greekDeltaBias > 0 ? '+' : ''}{(insights.greekDeltaBias / 1000000).toFixed(2)}M Delta
+                            </div>
+                            <div className={cn("text-[8px] mt-1 font-black uppercase", insights.greekDeltaBias > 0 ? "text-emerald-400" : "text-rose-400")}>
+                               {insights.greekDeltaBias > 0 ? "Institutional Bids Accelerating" : "Overhead Capping Active"}
+                            </div>
+                         </div>
+                         <div className="mt-2 pt-2 border-t border-white/[0.03] text-[7.5px] text-slate-400 font-medium uppercase">
+                            Directional Bias: <span className="font-extrabold text-blue-400">{insights.directionBias}</span>
+                         </div>
+                      </div>
+
+                      {/* Card 4: Gamma Trigger */}
+                      <div className="bg-slate-950/40 p-3 rounded-lg border border-white/5 flex flex-col justify-between">
+                         <div>
+                            <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Gamma Squeeze Line</span>
+                            <div className="text-sm font-black text-violet-400 mt-1.5 font-mono">₹{insights.gammaTrigger}</div>
+                            <p className="text-[8px] text-slate-500 mt-1 leading-normal font-medium italic">
+                               Short covering cascades trigger in this threshold.
+                            </p>
+                         </div>
+                         <div className="mt-2 pt-1.5 border-t border-white/[0.03] flex justify-between text-[7px] text-slate-500 font-black uppercase">
+                            <span>VIX REGULATOR: {market?.vix?.toFixed(1) || '15'}</span>
+                            <span className="text-emerald-400">Neutral Gamma</span>
+                         </div>
+                      </div>
                    </div>
                 </section>
               )}
 
-              {/* NIFTY 50 Today Movement Trend Chart */}
-              <section className="terminal-card bg-slate-900/40 p-5 flex flex-col gap-4">
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">NIFTY 50 Intraday Trend</h3>
-                  </div>
-                  <div className="flex items-center gap-2 text-[9px] font-bold text-slate-500 uppercase">
-                    <span>Spot: <span className="text-emerald-400">₹{market?.spot?.toFixed(1) || '----'}</span></span>
-                  </div>
-                </div>
-
-                <div className="h-[200px] w-full relative">
-                  {market?.priceHistory && market.priceHistory.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={market.priceHistory.map((val: any, idx: number) => {
-                        if (typeof val === 'object' && val !== null) {
-                          return {
-                            time: val.time || idx.toString(),
-                            price: val.price || 0
-                          };
-                        }
-                        const totalPoints = market.priceHistory?.length || 1;
-                        const secondsAgo = (totalPoints - 1 - idx) * 2; // assume ~2s average interval
-                        const d = new Date(Date.now() - secondsAgo * 1000);
-                        const timeStr = d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        return {
-                          time: timeStr,
-                          price: Number(val)
-                        };
-                      })}>
-                        <defs>
-                          <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/>
-                            <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-                        <XAxis dataKey="time" stroke="#475569" fontSize={8} tickLine={false} axisLine={false} />
-                        <YAxis domain={['auto', 'auto']} stroke="#475569" fontSize={8} tickLine={false} axisLine={false} orientation="right" />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '9px' }}
-                          itemStyle={{ fontSize: '9px', fontWeight: 'bold' }}
-                        />
-                        <Area type="monotone" dataKey="price" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" name="Spot Price" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 rounded-lg border border-dashed border-white/5">
-                      <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest animate-pulse">
-                        Synchronizing High Frequency Spot Stream...
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </section>
-
-
-
-
-
-               {/* NIFTY 50 Unified Options Chain */}
-               <section className="terminal-card bg-slate-900/40 p-5 flex flex-col gap-4">
-                 <div className="flex justify-between items-center border-b border-white/5 pb-2.5">
+              {/* Enhanced Full-Width Options Matrix */}
+              <section className="terminal-card bg-slate-900/40 p-5 flex flex-col gap-4 border border-white/5">
+                <div className="flex justify-between items-center border-b border-white/5 pb-2.5">
                    <div className="flex items-center gap-2">
-                     <Activity className="w-4 h-4 text-violet-400" />
-                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Focused Option Chain</h3>
+                     <Layers className="w-4 h-4 text-violet-400 animate-pulse" />
+                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">Focused Option Chain Matrix (Greeks & Real-time open interest)</h3>
                    </div>
-                   <span className="text-[8px] font-bold text-slate-500 uppercase">Weekly Expiry Standard</span>
-                 </div>
-                    <div className="flex gap-4">
-                      <div className="flex items-center gap-1.5">
-                         <div className={cn("w-1.5 h-1.5 rounded-full", market?.gapPercent && market.gapPercent > 0.3 ? "bg-emerald-500" : market?.gapPercent && market.gapPercent < -0.3 ? "bg-rose-500" : "bg-slate-500")} />
-                         <span className="text-[8px] font-bold text-slate-500 uppercase">Gap: {(market?.gapPercent || 0).toFixed(2)}%</span>
-                      </div>
-                    </div>
-
-                  <div className="overflow-x-auto mt-2">
-                    <table className="w-full text-left border-collapse text-[10px]">
-                       <thead>
-                         <tr className="border-b border-white/10 text-[7.5px] font-black text-slate-500 uppercase tracking-wider text-center">
-                           <th className="py-2 text-rose-400">CE Price</th>
-                           <th className="py-2 text-rose-400/80">CE Vol</th>
-                           <th className="py-2 text-white bg-white/5 rounded-t font-black">Strike</th>
-                           <th className="py-2 text-emerald-400/80">PE Vol</th>
-                           <th className="py-2 text-emerald-400">PE Price</th>
-                         </tr>
-                       </thead>
-                       <tbody className="divide-y divide-white/[0.02]">
-                         {(() => {
-                           const spotStrike = Math.round((market?.spot || 22000) / 50) * 50;
-                           const displayedStrikes = (market?.chain || [])
-                             .filter((c: any) => Math.abs(c.strike - spotStrike) <= 100)
-                             .sort((a: any, b: any) => b.strike - a.strike);
-
-                           if (displayedStrikes.length === 0) {
-                             return (
-                               <tr>
-                                 <td colSpan={5} className="py-8 text-center text-slate-500 font-bold uppercase text-[8px] tracking-widest">
-                                   Handshaking Option Chain Matrix...
-                                 </td>
-                               </tr>
-                             );
-                           }
-
-                           return displayedStrikes.map((c: any) => {
-                             const isAtm = c.strike === spotStrike;
-                             return (
-                               <tr key={c.strike} className={cn(
-                                 "text-center transition-colors hover:bg-white/[0.01]",
-                                 isAtm && "bg-blue-600/[0.04]"
-                               )}>
-                                 <td className="py-3 font-mono font-bold text-rose-400">₹{c.ce_price?.toFixed(1) || '0.0'}</td>
-                                 <td className="py-3 font-mono text-slate-500 text-[8.5px]">{(c.ce_volume || 0).toLocaleString()}</td>
-                                 <td className={cn(
-                                   "py-3 font-mono font-black text-[11px] bg-white/[0.01]",
-                                   isAtm ? "text-blue-400 ring-1 ring-blue-500/20" : "text-slate-300"
-                                 )}>
-                                   {c.strike} {isAtm ? "●" : ""}
-                                 </td>
-                                 <td className="py-3 font-mono text-slate-500 text-[8.5px]">{(c.pe_volume || 0).toLocaleString()}</td>
-                                 <td className="py-3 font-mono font-bold text-emerald-400">₹{c.pe_price?.toFixed(1) || '0.0'}</td>
-                               </tr>
-                             );
-                           });
-                         })()}
-                      </tbody>
-                     </table>
-                  </div>
-                </section>
-              </div>
-            <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full pb-8 overflow-y-auto custom-scrollbar pl-2">
-              {/* Positons & Execution Column */}
-              <section className="terminal-card bg-gradient-to-br from-blue-600/10 to-transparent border-blue-500/30 p-8 flex flex-col justify-between shrink-0">
-                <div className="text-center">
-                  <div className={cn(
-                    "bg-blue-600/10 border border-blue-500/20 inline-block px-4 py-1.5 rounded-full mb-6",
-                    strategy?.score.mode === 'MOMENTUM_SNIPER' && "bg-rose-600/20 border-rose-500/40"
-                  )}>
-                    <span className={cn(
-                      "text-[9px] font-black tracking-[0.3em] uppercase",
-                      strategy?.score.mode === 'MOMENTUM_SNIPER' ? "text-rose-400" : "text-blue-400"
-                    )}>
-                      {strategy?.score.mode === 'MOMENTUM_SNIPER' ? 'Momentum Sniper' : 'Institutional Logic'}
-                    </span>
-                  </div>
-                  <div className={cn(
-                    "text-4xl font-black tracking-tighter mb-2",
-                    strategy?.score.bias === 'BULLISH' ? "text-emerald-400" : strategy?.score.bias === 'BEARISH' ? "text-rose-400" : "text-slate-500"
-                  )}>
-                    {strategy?.score.mode === 'MOMENTUM_SNIPER' 
-                      ? (strategy?.score.bias === 'BULLISH' ? 'EXPLOSIVE UP' : 'EXPLOSIVE DOWN')
-                      : (strategy?.score.bias === 'BULLISH' ? 'SHORT PUT' : strategy?.score.bias === 'BEARISH' ? 'SHORT CALL' : 'STANDBY')}
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">
-                    REC: {strategy?.score.recommendation}
-                  </div>
-                  {execution?.executionMode === 'LIVE' && (
-                    <div className="mt-4 p-2 bg-rose-500/10 border border-rose-500/20 rounded flex items-center gap-2">
-                       <ShieldAlert className="w-4 h-4 text-rose-500" />
-                       <span className="text-[10px] font-black text-rose-500 uppercase tracking-tighter">Real Money Warning</span>
-                    </div>
-                  )}
+                   <div className="flex items-center gap-2 text-[8px] font-bold text-slate-500 uppercase">
+                     <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse" />
+                     <span>Weekly Expiry standard</span>
+                   </div>
                 </div>
 
-                  <div className="bg-slate-900/60 backdrop-blur border border-white/5 p-5 rounded-xl space-y-4 my-8">
-                   <div className="flex justify-between items-center text-[10px]">
-                      <span className="terminal-label !mb-0">Win Prob. (Edge)</span>
-                      <span className="terminal-value text-emerald-400">
-                         {Math.min(95, Math.max(30, (strategy?.score.total || 50) * 0.8 + 15)).toFixed(1)}%
-                      </span>
-                   </div>
-                   <div className="flex justify-between items-center text-[10px]">
-                      <span className="terminal-label !mb-0">Exp. Value (EV)</span>
-                      <span className="terminal-value text-blue-400">
-                         +₹{Math.round((appConfig?.TARGET_RUPEES || 4000) * 0.6 - (appConfig?.SL_RUPEES || 2000) * 0.4)} / Trade
-                      </span>
-                   </div>
-                   <div className="flex justify-between items-center text-[10px]">
-                      <span className="terminal-label !mb-0">Required Margin</span>
-                      <span className="terminal-value text-white">
-                         ₹{execution?.capitalDeployed > 0 ? execution.capitalDeployed.toLocaleString() : 
-                           (strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON'))
-                             ? (415 * (appConfig?.LOT_SIZE || 65)).toLocaleString()
-                             : '1.15L+'}
-                      </span>
-                   </div>
-                   {(strategy?.score?.strategyType.includes('SPREAD') || strategy?.score?.strategyType.includes('IRON')) && (
-                     <div className="flex justify-between items-center text-[10px] pt-1 border-t border-white/5 mt-1">
-                       <span className="terminal-label !mb-0 text-amber-400">Management Bias</span>
-                       <span className="terminal-value text-amber-400">
-                         {strategy?.score.bias === 'NEUTRAL' ? 'Gamma Scalp' : 'Theta Harvest'}
-                       </span>
-                     </div>
-                   )}
-                 </div>
+                <div className="overflow-x-auto">
+                   <table className="w-full text-left border-collapse text-[10px]">
+                      <thead>
+                        <tr className="border-b border-slate-800/80 text-[8px] font-black text-slate-500 uppercase tracking-widest text-center bg-black/20">
+                          <th className="py-2.5 text-rose-400 border-r border-white/5" colSpan={4}>CALL OPTIONS (CE)</th>
+                          <th className="py-2.5 text-white bg-white/5 font-black border-r border-white/5 border-l border-white/5 shrink-0 px-4">STRIKE</th>
+                          <th className="py-2.5 text-emerald-400" colSpan={4}>PUT OPTIONS (PE)</th>
+                        </tr>
+                        <tr className="border-b border-white/5 text-[7px] font-extrabold text-slate-500 uppercase tracking-widest text-center bg-slate-900/25">
+                          <th className="py-2 text-rose-400/70">Delta</th>
+                          <th className="py-2 text-rose-400/60">IV</th>
+                          <th className="py-2 text-rose-400/80">OI (Chg)</th>
+                          <th className="py-2 text-rose-400 font-black border-r border-white/5">CE Price</th>
+                          <th className="py-2 text-blue-400 font-extrabold bg-blue-500/5 border-r border-white/5 border-l border-white/5">Strike</th>
+                          <th className="py-2 text-emerald-400 font-black border-r border-white/5">PE Price</th>
+                          <th className="py-2 text-emerald-400/80">OI (Chg)</th>
+                          <th className="py-2 text-emerald-400/60">IV</th>
+                          <th className="py-2 text-emerald-400/70">Delta</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/[0.02]">
+                        {(() => {
+                          const spot = market?.spot || 22000;
+                          const spotStrike = Math.round(spot / 50) * 50;
+                          const displayedStrikes = [...(market?.chain || [])]
+                            .sort((a: any, b: any) => b.strike - a.strike);
 
-                <button 
-                  onClick={() => handleExecute(strategy?.score.bias || 'NEUTRAL')}
-                  className={cn(
-                    "w-full py-5 font-black rounded-xl shadow-2xl border transition-all uppercase tracking-[0.2em] text-xs",
-                    strategy?.score.bias === 'BULLISH' ? "bg-emerald-600 border-emerald-400/50 hover:bg-emerald-500" : 
-                    strategy?.score.bias === 'BEARISH' ? "bg-rose-600 border-rose-400/50 hover:bg-rose-500" : 
-                    strategy?.score.bias === 'NEUTRAL' ? "bg-slate-700 border-slate-600 hover:bg-slate-500" :
-                    "bg-slate-800 border-slate-700 opacity-50 cursor-not-allowed"
-                  )}
-                >
-                  {execution?.executionMode === 'PAPER' ? 'Execute Paper Trade' : 'Confirm LIVE Order'}
-                </button>
-                 {execution?.autoMode && (
-                  <div className="mt-4 p-4 border border-purple-500/20 bg-purple-500/5 rounded-xl space-y-3">
-                     <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-4">
-                           <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center animate-pulse">
-                              <Activity className="w-3 h-3 text-white" />
-                           </div>
-                           <div>
-                              <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest block mb-1">Autonomous Guard Active</span>
-                              <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-                                Continuous market scanning enabled.
-                              </p>
-                           </div>
-                        </div>
-                        <div className={`p-1.5 rounded-lg border ${execution.lastTradeSuppression ? 'border-amber-500/40 bg-amber-500/10' : 'border-emerald-500/40 bg-emerald-500/10'} flex items-center gap-2`}>
-                           <div className={`w-2 h-2 rounded-full ${execution.lastTradeSuppression ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]'}`} />
-                           <span className={`text-[9px] font-black uppercase ${execution.lastTradeSuppression ? 'text-amber-400' : 'text-emerald-400'}`}>
-                              {execution.lastTradeSuppression ? 'Paused' : 'Ready'}
-                           </span>
-                        </div>
-                     </div>
-                     {execution?.lastTradeSuppression && (
-                       <div className="pt-2 border-t border-purple-500/10 space-y-2">
-                          <div className="flex items-center justify-between">
-                             <span className="text-[9px] font-black text-amber-500 uppercase flex items-center gap-1.5">
-                                <ShieldAlert className="w-3 h-3" />
-                                {execution.lastTradeSuppression.reason}
-                             </span>
-                             <span className="text-[8px] font-mono text-slate-500">
-                                {new Date(execution.lastTradeSuppression.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                             </span>
-                          </div>
-                          <div className="flex gap-1">
-                             <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden">
-                                <div className="h-full bg-amber-500/50 w-[70%]" />
-                             </div>
-                             <span className="text-[8px] text-slate-500 font-black">SCANNING...</span>
-                          </div>
-                       </div>
-                     )}
-                  </div>
-                )}
-              </section>
+                          if (displayedStrikes.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={9} className="py-8 text-center text-slate-400 font-bold uppercase text-[8px] tracking-widest">
+                                  Synchronizing Supercharged Option Chain Matrix...
+                                </td>
+                              </tr>
+                            );
+                          }
 
-              <section className="terminal-card bg-emerald-600/[0.03] border-emerald-500/20 p-6 flex flex-col gap-4 shrink-0">
-                 <div className="flex items-center gap-3">
-                    <div className="p-2 bg-emerald-600/10 rounded-lg">
-                       <Brain className="w-4 h-4 text-emerald-500" />
-                    </div>
-                    <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Tactical Strategy Advisory</h3>
-                 </div>
-                 <div className="space-y-4">
-                    <div className="space-y-1">
-                       <div className="text-[9px] font-black text-white uppercase tracking-widest opacity-60">Primary Recommendation</div>
-                       <p className="text-[10px] text-slate-300 font-bold leading-relaxed">
-                          {strategy?.score.bias === 'BULLISH' 
-                            ? strategy?.score.mode === 'MOMENTUM_SNIPER' 
-                              ? "Momentum Sniper active. High velocity bullish expansion detected. Buying ATM CE for rapid delta capture."
-                              : "Aggressive Bullish Bias. Institutional flow supports PE Credit Spreads for optimal Theta yield." 
-                            : strategy?.score.bias === 'BEARISH' 
-                              ? strategy?.score.mode === 'MOMENTUM_SNIPER'
-                                ? "Momentum Sniper active. Bearish breakdown with volume surge. Buying ATM PE for maximum exposure."
-                                : "Confirmed Bearish Breakdown. Institutional sellers entering. Initiate CE Credit Spreads at next resistance."
-                              : "Neutral Range Detected. Low directional conviction. Avoid directionals, prioritize Iron Fly or delta-neutral strategies."}
-                       </p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                       <div className="bg-white/5 p-2 rounded border border-white/5">
-                          <span className="text-[8px] text-slate-500 font-black uppercase">Edge Window</span>
-                          <div className="text-[10px] text-blue-400 font-bold">{appConfig?.START_TIME || '09:15'} - {appConfig?.END_TIME || '15:20'} IST</div>
-                       </div>
-                       <div className="bg-white/5 p-2 rounded border border-white/5">
-                          <span className="text-[8px] text-slate-500 font-black uppercase">Volatility Edge</span>
-                          <div className="text-[10px] text-emerald-400 font-bold">
-                             {market?.vix && market.vix > 18 ? "IV Expansion Alert" : market?.vix && market.vix < 14 ? "Low IV Environment" : "Normal IV Regime"}
-                          </div>
-                       </div>
-                    </div>
-                 </div>
-              </section>
+                          return displayedStrikes.map((c: any) => {
+                            const isAtm = c.strike === spotStrike;
+                            
+                            // Accurate options greeks dynamic derivation
+                            const ceDelta = Math.max(0.01, Math.min(0.99, 1 / (1 + Math.exp(-(spot - c.strike) / 35))));
+                            const peDelta = ceDelta - 1.0;
+                            const ceIv = c.ce_iv || 12.5;
+                            const peIv = c.pe_iv || 13.0;
 
-              <section className="terminal-card bg-white/[0.01] overflow-hidden flex flex-col min-h-[220px] shrink-0">
-                 <div className="p-4 border-b border-terminal-line bg-white/[0.02] flex justify-between items-center">
-                    <h3 className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Live Stream</h3>
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            const ceOiStr = formatOi(c.ce_oi || 0);
+                            const peOiStr = formatOi(c.pe_oi || 0);
+
+                            return (
+                              <tr key={c.strike} className={cn(
+                                "text-center transition-colors hover:bg-white/[0.01]",
+                                isAtm && "bg-blue-600/[0.05]"
+                              )}>
+                                {/* CE Delta */}
+                                <td className="py-3 font-mono text-[8.5px] text-rose-400/75">{ceDelta.toFixed(2)}</td>
+                                {/* CE IV */}
+                                <td className="py-3 font-mono text-[8px] text-slate-500">{ceIv.toFixed(1)}%</td>
+                                {/* CE OI */}
+                                <td className="py-3 font-mono text-[8.5px] text-rose-300">
+                                   <span className="font-extrabold">{ceOiStr}</span>
+                                   {c.ce_oi_change !== undefined && (
+                                     <span className={cn(
+                                       "text-[7px] ml-1 font-bold font-mono",
+                                       c.ce_oi_change >= 0 ? "text-emerald-500" : "text-rose-500"
+                                     )}>
+                                        {c.ce_oi_change >= 0 ? '+' : ''}{formatOi(c.ce_oi_change)}
+                                     </span>
+                                   )}
+                                </td>
+                                {/* CE Price */}
+                                <td className="py-3 font-mono font-black text-rose-400 border-r border-white/5">₹{c.ce_price?.toFixed(1) || '0.0'}</td>
+                                
+                                {/* STRIKE */}
+                                <td className={cn(
+                                  "py-3 font-mono font-black text-[12px] bg-slate-950/20 border-r border-white/5 border-l border-white/5 shrink-0 min-w-[80px]",
+                                  isAtm ? "text-blue-400 ring-1 ring-blue-500/20 font-black" : "text-slate-300"
+                                )}>
+                                  {c.strike} {isAtm ? "●" : ""}
+                                </td>
+
+                                {/* PE Price */}
+                                <td className="py-3 font-mono font-black text-emerald-400 border-r border-white/5">₹{c.pe_price?.toFixed(1) || '0.0'}</td>
+                                {/* PE OI */}
+                                <td className="py-3 font-mono text-[8.5px] text-emerald-300">
+                                   <span className="font-extrabold">{peOiStr}</span>
+                                   {c.pe_oi_change !== undefined && (
+                                     <span className={cn(
+                                       "text-[7px] ml-1 font-bold font-mono",
+                                       c.pe_oi_change >= 0 ? "text-emerald-500" : "text-rose-500"
+                                     )}>
+                                        {c.pe_oi_change >= 0 ? '+' : ''}{formatOi(c.pe_oi_change)}
+                                     </span>
+                                   )}
+                                </td>
+                                {/* PE IV */}
+                                <td className="py-3 font-mono text-[8px] text-slate-500">{peIv.toFixed(1)}%</td>
+                                {/* PE Delta */}
+                                <td className="py-3 font-mono text-[8.5px] text-emerald-400/75">{peDelta.toFixed(2)}</td>
+                              </tr>
+                            );
+                          });
+                        })()}
+                     </tbody>
+                    </table>
                  </div>
-                 <div className="flex-1 overflow-y-auto">
-                    {tradeLogs.slice(0, 5).map((log, i) => (
-                      <div key={i} className="p-4 border-b border-white/5 flex flex-col gap-1">
-                         <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                            <span>{new Date(log.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>
-                            <span className={log.win ? 'text-emerald-500' : 'text-rose-500'}>{log.win ? '+WIN' : '-LOSS'}</span>
-                         </div>
-                         <div className="flex justify-between items-center">
-                            <span className="text-[10px] font-bold text-slate-300">NIFTY {log.score > 50 ? 'BULL' : 'BEAR'}</span>
-                            <span className="terminal-value text-xs">₹{log.pnl}</span>
-                         </div>
-                      </div>
-                    ))}
-                 </div>
-              </section>
+               </section>
             </div>
           </motion.main>
         ) : activeTab === 'stock-alpha' ? (
@@ -2869,24 +2901,91 @@ export default function App() {
                 maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
                 maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
 
-                // Strategy Performance Matrix
-                const strategyMap: { [key: string]: { name: string; count: number; wins: number; pnl: number; totalScore: number } } = {};
-                tradeLogs.forEach(l => {
-                  const sName = l.mode || 'INST_SPREAD';
-                  if (!strategyMap[sName]) {
-                    strategyMap[sName] = { name: sName, count: 0, wins: 0, pnl: 0, totalScore: 0 };
+                // --- Group tradeLogs by standard strategy mappings ---
+                const mapToStandardStrategy = (strategyType?: string, bias?: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
+                  const type = strategyType || '';
+                  const b = bias || 'NEUTRAL';
+
+                  if (type === 'BULL_CALL_SPREAD') {
+                    return { name: 'Bull Call Spread', category: 'Safer Spread Strategies', biasText: 'Bullish' };
                   }
-                  strategyMap[sName].count++;
-                  if (l.win) strategyMap[sName].wins++;
-                  strategyMap[sName].pnl += (l.pnl || 0);
-                  strategyMap[sName].totalScore += (l.score || 0);
+                  if (type === 'BEAR_PUT_SPREAD') {
+                    return { name: 'Bear Put Spread', category: 'Safer Spread Strategies', biasText: 'Bearish' };
+                  }
+                  if (type === 'IRON_CONDOR' || type === 'IRON_FLY' || type === 'BUTTERFLY' || type === 'CALENDAR') {
+                    return { name: 'Iron Condor', category: 'Safer Spread Strategies', biasText: 'Neutral' };
+                  }
+                  
+                  if (type === 'NAKED_BUY' || type === 'STRADDLE' || type === 'STRANGLE') {
+                    if (b === 'BULLISH') {
+                      return { name: 'Buy CE', category: 'Option Buying', biasText: 'Bullish' };
+                    } else {
+                      return { name: 'Buy PE', category: 'Option Buying', biasText: 'Bearish' };
+                    }
+                  }
+
+                  if (type === 'BEAR_CALL_SPREAD' || (type === 'RATIO_SPREAD' && b === 'BEARISH')) {
+                    return { name: 'Sell CE', category: 'Option Selling', biasText: 'Bearish/Neutral' };
+                  }
+                  
+                  if (type === 'BULL_PUT_SPREAD' || (type === 'RATIO_SPREAD' && b === 'BULLISH')) {
+                    return { name: 'Sell PE', category: 'Option Selling', biasText: 'Bullish/Neutral' };
+                  }
+
+                  // Fallback defaults
+                  if (b === 'BULLISH') {
+                    return { name: 'Buy CE', category: 'Option Buying', biasText: 'Bullish' };
+                  } else if (b === 'BEARISH') {
+                    return { name: 'Buy PE', category: 'Option Buying', biasText: 'Bearish' };
+                  } else {
+                    return { name: 'Iron Condor', category: 'Safer Spread Strategies', biasText: 'Neutral' };
+                  }
+                };
+
+                const standardStrategiesMap = {
+                  'Buy CE': { name: 'Buy CE', category: 'Option Buying', biasText: 'Bullish', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Buy PE': { name: 'Buy PE', category: 'Option Buying', biasText: 'Bearish', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Sell CE': { name: 'Sell CE', category: 'Option Selling', biasText: 'Bearish/Neutral', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Sell PE': { name: 'Sell PE', category: 'Option Selling', biasText: 'Bullish/Neutral', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Bull Call Spread': { name: 'Bull Call Spread', category: 'Safer Spread Strategies', biasText: 'Bullish', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Bear Put Spread': { name: 'Bear Put Spread', category: 'Safer Spread Strategies', biasText: 'Bearish', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                  'Iron Condor': { name: 'Iron Condor', category: 'Safer Spread Strategies', biasText: 'Neutral', count: 0, wins: 0, pnl: 0, totalScore: 0 },
+                };
+
+                tradeLogs.forEach(l => {
+                  const mapped = mapToStandardStrategy(l.strategyType, l.bias);
+                  const node = (standardStrategiesMap as any)[mapped.name];
+                  if (node) {
+                    node.count++;
+                    if (l.win) node.wins++;
+                    node.pnl += (l.pnl || 0);
+                    node.totalScore += (l.score || 0);
+                  }
                 });
 
-                const strategies = Object.values(strategyMap).map(s => ({
+                const strategies = Object.values(standardStrategiesMap).map(s => ({
                   ...s,
                   winRate: s.count > 0 ? (s.wins / s.count) * 100 : 0,
                   avgScore: s.count > 0 ? Math.round(s.totalScore / s.count) : 0,
                 }));
+
+                // Group by standard Category templates
+                const categoryMetrics: {
+                  [key: string]: { name: string; count: number; wins: number; pnl: number; items: string[] }
+                } = {
+                  'Option Buying': { name: 'Option Buying', count: 0, wins: 0, pnl: 0, items: ['Buy CE', 'Buy PE'] },
+                  'Option Selling': { name: 'Option Selling', count: 0, wins: 0, pnl: 0, items: ['Sell CE', 'Sell PE'] },
+                  'Safer Spread Strategies': { name: 'Safer Spread Strategies', count: 0, wins: 0, pnl: 0, items: ['Bull Call Spread', 'Bear Put Spread', 'Iron Condor'] }
+                };
+
+                strategies.forEach(s => {
+                  const cat = categoryMetrics[s.category];
+                  if (cat) {
+                    cat.count += s.count;
+                    cat.wins += s.wins;
+                    cat.pnl += s.pnl;
+                  }
+                });
 
                 // Directional Bias Affinity Matrix
                 const biasMap: { [key: string]: { name: string; count: number; wins: number; pnl: number } } = {
@@ -3121,18 +3220,57 @@ export default function App() {
                         </div>
                      </div>
 
+                     {/* --- Standard Portfolio Category Matrix Summary --- */}
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {Object.values(categoryMetrics).map((cat, idx) => {
+                           const catWinRate = cat.count > 0 ? (cat.wins / cat.count) * 100 : 0;
+                           return (
+                              <div key={idx} className="terminal-card p-5 relative overflow-hidden group hover:border-white/10 transition-all">
+                                 <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${
+                                    cat.name === 'Option Buying' ? 'from-blue-500 to-indigo-500' : 
+                                    cat.name === 'Option Selling' ? 'from-rose-500 to-pink-500' : 'from-emerald-500 to-teal-500'
+                                 }`} />
+                                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block">{cat.name} Segment</span>
+                                 <div className="flex justify-between items-end mt-3">
+                                    <div>
+                                       <div className={`text-xl font-mono font-black ${cat.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                          ₹{cat.pnl >= 0 ? '+' : ''}{cat.pnl.toLocaleString('en-IN')}
+                                       </div>
+                                       <div className="text-[9px] text-slate-500 uppercase font-black tracking-wider mt-1">
+                                          Total from {cat.count} trade{cat.count === 1 ? '' : 's'}
+                                       </div>
+                                    </div>
+                                    <div className="text-right">
+                                       <div className="text-xs font-mono text-white font-bold">{catWinRate.toFixed(0)}%</div>
+                                       <div className="text-[8px] text-slate-500 uppercase font-black tracking-widest">WIN RATIO</div>
+                                    </div>
+                                 </div>
+                                 <div className="mt-4 pt-3 border-t border-white/[0.03] flex items-center justify-between text-[9px] text-slate-500 uppercase font-bold">
+                                    <span>Core Strategy Set</span>
+                                    <div className="flex gap-1.5 overflow-x-auto">
+                                       {cat.items.map((it, i) => (
+                                          <span key={i} className="bg-black/40 text-slate-300 px-1.5 py-0.5 rounded border border-white/5 text-[8px] tracking-normal font-mono">{it}</span>
+                                       ))}
+                                    </div>
+                                 </div>
+                              </div>
+                           );
+                        })}
+                     </div>
+
                      {/* --- Strategy Performance Leaderboard Table --- */}
                      <div className="terminal-card p-6">
                         <div className="mb-4">
-                           <h3 className="text-xs font-black text-white uppercase tracking-widest">Detailed Strategy Performance Leaderboard</h3>
-                           <p className="text-[9px] text-slate-500 font-bold uppercase">Breakdown of trade metrics segmented by execution module mode</p>
+                           <h3 className="text-xs font-black text-white uppercase tracking-widest">Detailed Strategy Performance Directory</h3>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase">Breakdown of trade metrics segmented by user defined execution strategies</p>
                         </div>
 
                         <div className="overflow-x-auto">
                            <table className="w-full border-collapse">
                               <thead>
                                  <tr className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] border-b border-terminal-line text-left">
-                                    <th className="py-3 px-4">Strategy Mode</th>
+                                    <th className="py-3 px-4">Strategy Class / Setup</th>
+                                    <th className="py-3 px-4 text-center">Portfolio Category</th>
                                     <th className="py-3 px-4 text-center">Trade Count</th>
                                     <th className="py-3 px-4 text-center">Wins / Losses</th>
                                     <th className="py-3 px-4 text-center">Win Ratio</th>
@@ -3144,8 +3282,26 @@ export default function App() {
                                  {strategies.length > 0 ? (
                                     strategies.map((strat, idx) => (
                                        <tr key={idx} className="hover:bg-white/[0.01] transition-colors">
-                                          <td className="py-4 px-4 font-black text-xs text-white uppercase tracking-wider">
-                                             {strat.name.replace(/_/g, ' ')}
+                                          <td className="py-4 px-4 font-black text-xs text-white tracking-wider flex items-center gap-2 mt-0.5">
+                                             <span className={
+                                                strat.category === 'Option Buying' ? 'text-blue-500' : 
+                                                strat.category === 'Option Selling' ? 'text-rose-500' : 'text-emerald-500'
+                                             }>
+                                                ●
+                                             </span>
+                                             {strat.name}
+                                             <span className="text-[8px] font-semibold text-slate-500 uppercase ml-2 bg-slate-900 border border-white/5 rounded px-1.5 py-0.5">
+                                                {strat.biasText}
+                                             </span>
+                                          </td>
+                                          <td className="py-4 px-4 text-center">
+                                             <span className={`text-[8.5px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
+                                                strat.category === 'Option Buying' ? 'bg-blue-950/20 text-blue-400 border-blue-500/20' :
+                                                strat.category === 'Option Selling' ? 'bg-rose-950/20 text-rose-400 border-rose-500/20' :
+                                                'bg-emerald-950/20 text-emerald-400 border-emerald-500/20'
+                                             }`}>
+                                                {strat.category}
+                                             </span>
                                           </td>
                                           <td className="py-4 px-4 font-mono text-center text-xs text-slate-300">
                                              {strat.count}
@@ -3169,7 +3325,7 @@ export default function App() {
                                     ))
                                  ) : (
                                     <tr>
-                                       <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-black uppercase tracking-widest">
+                                       <td colSpan={7} className="py-8 text-center text-slate-500 text-xs font-black uppercase tracking-widest">
                                           No active execution cycles recorded in session fallback.
                                        </td>
                                     </tr>

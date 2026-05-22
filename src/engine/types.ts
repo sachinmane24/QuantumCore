@@ -14,6 +14,7 @@ export interface TradeLogEntry {
   win: boolean;
   bias?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   mode?: string;
+  strategyType?: string;
   vix?: number;
   spot?: number;
   phase?: string;

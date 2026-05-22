@@ -21,6 +21,50 @@ export type StrategyType =
   | 'STRANGLE' 
   | 'CALENDAR';
 
+export interface StandardStrategyInfo {
+  name: 'Buy CE' | 'Buy PE' | 'Sell CE' | 'Sell PE' | 'Bull Call Spread' | 'Bear Put Spread' | 'Iron Condor';
+  category: 'Option Buying' | 'Option Selling' | 'Safer Spread Strategies';
+  biasText: 'Bullish' | 'Bearish' | 'Bearish/Neutral' | 'Bullish/Neutral';
+}
+
+export function getStandardStrategy(strategyType: StrategyType, bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'): StandardStrategyInfo {
+  if (strategyType === 'BULL_CALL_SPREAD') {
+    return { name: 'Bull Call Spread', category: 'Safer Spread Strategies', biasText: 'Bullish' };
+  }
+  if (strategyType === 'BEAR_PUT_SPREAD') {
+    return { name: 'Bear Put Spread', category: 'Safer Spread Strategies', biasText: 'Bearish' };
+  }
+  if (strategyType === 'IRON_CONDOR' || strategyType === 'IRON_FLY' || strategyType === 'BUTTERFLY' || strategyType === 'CALENDAR') {
+    return { name: 'Iron Condor', category: 'Safer Spread Strategies', biasText: 'Bearish/Neutral' };
+  }
+  
+  if (strategyType === 'NAKED_BUY' || strategyType === 'STRADDLE' || strategyType === 'STRANGLE') {
+    if (bias === 'BULLISH') {
+      return { name: 'Buy CE', category: 'Option Buying', biasText: 'Bullish' };
+    } else {
+      return { name: 'Buy PE', category: 'Option Buying', biasText: 'Bearish' };
+    }
+  }
+
+  // Selling options
+  if (strategyType === 'BEAR_CALL_SPREAD' || (strategyType === 'RATIO_SPREAD' && bias === 'BEARISH')) {
+    return { name: 'Sell CE', category: 'Option Selling', biasText: 'Bearish/Neutral' };
+  }
+  
+  if (strategyType === 'BULL_PUT_SPREAD' || (strategyType === 'RATIO_SPREAD' && bias === 'BULLISH')) {
+    return { name: 'Sell PE', category: 'Option Selling', biasText: 'Bullish/Neutral' };
+  }
+
+  // Fallback default
+  if (bias === 'BULLISH') {
+    return { name: 'Buy CE', category: 'Option Buying', biasText: 'Bullish' };
+  } else if (bias === 'BEARISH') {
+    return { name: 'Buy PE', category: 'Option Buying', biasText: 'Bearish' };
+  } else {
+    return { name: 'Iron Condor', category: 'Safer Spread Strategies', biasText: 'Bearish/Neutral' };
+  }
+}
+
 export interface StrategyScore {
   total: number;
   trend: number;
@@ -32,6 +76,7 @@ export interface StrategyScore {
   biasReason: string;
   mode: StrategyMode;
   strategyType: StrategyType;
+  standardStrategy: StandardStrategyInfo;
   recommendation: string;
   trendScore: number;
   oiBiasScore: number;
@@ -392,6 +437,7 @@ class StrategyEngine {
       biasReason,
       mode,
       strategyType,
+      standardStrategy: getStandardStrategy(strategyType, bias),
       recommendation,
       trendScore: Math.round(trendScore),
       oiBiasScore: Math.round(oiBiasScore),

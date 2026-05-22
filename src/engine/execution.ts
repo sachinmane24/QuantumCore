@@ -839,6 +839,7 @@ class ExecutionEngine {
           timestamp: new Date().toISOString(),
           score: this.lastTradeScore?.total || 0,
           mode: this.lastTradeScore?.mode || 'INST_SPREAD',
+          strategyType: this.lastTradeScore?.strategyType || 'IRON_CONDOR',
           gamma: this.lastTradeScore?.gamma || 0,
           oi_bias: this.lastTradeScore?.oiBias || 0,
           trap: this.lastTradeScore?.trap === 0,
