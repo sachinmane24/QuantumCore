@@ -400,8 +400,8 @@ class ExecutionEngine {
         const reward = this.currentTradeParams?.targetRupees || config.TARGET_RUPEES;
         const rr = reward > 0 ? risk / reward : 100;
         
-        // For naked buys, we want at least 1:1.5
-        if (rr > 0.7) { // Risk is more than 70% of reward
+        // Relaxed threshold for Option Buying to allow dynamic premiums and floor levels
+        if (rr > 1.2) { 
           const reason = `Naked Buy RR too low (1:${(1/rr).toFixed(1)})`;
           this.lastTradeSuppression = { reason, timestamp: Date.now() };
           return;

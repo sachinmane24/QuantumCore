@@ -771,6 +771,7 @@ export default function App() {
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
             { id: 'risk', icon: ShieldAlert, label: 'Risk' },
+            { id: 'analytics', icon: TrendingUp, label: 'Analytics' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
             { id: 'history', icon: History, label: 'Audit' },
             { id: 'settings', icon: Shield, label: 'Settings', alert: !kiteStatus.hasConfig },
@@ -2820,6 +2821,366 @@ export default function App() {
                   </table>
                </div>
             </div>
+          </motion.main>
+        ) : activeTab === 'analytics' ? (
+          <motion.main 
+            key="analytics"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="flex-1 p-8 overflow-y-auto flex flex-col gap-6"
+          >
+             {(() => {
+                // Defensive Stats Engine
+                const totalTrades = tradeLogs.length;
+                const wins = tradeLogs.filter(l => l.win).length;
+                const losses = totalTrades - wins;
+                const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+                
+                const totalPnL = tradeLogs.reduce((acc, l) => acc + (l.pnl || 0), 0);
+                const avgPnL = totalTrades > 0 ? totalPnL / totalTrades : 0;
+                
+                const winningTrades = tradeLogs.filter(l => l.win);
+                const losingTrades = tradeLogs.filter(l => !l.win);
+                const avgWin = winningTrades.length > 0 ? winningTrades.reduce((acc, l) => acc + (l.pnl || 0), 0) / winningTrades.length : 0;
+                const avgLoss = losingTrades.length > 0 ? losingTrades.reduce((acc, l) => acc + (l.pnl || 0), 0) / losingTrades.length : 0;
+                
+                const profitFactor = Math.abs(avgLoss) > 0 ? (avgWin * wins) / (Math.abs(avgLoss) * (losses || 1)) : (totalPnL >= 0 ? 1.5 : 0.5);
+                const rrRatio = Math.abs(avgLoss) > 0 ? avgWin / Math.abs(avgLoss) : 1;
+                
+                // Historical Consecutive streak estimation
+                let maxWinStreak = 0;
+                let maxLossStreak = 0;
+                let currentWinStreak = 0;
+                let currentLossStreak = 0;
+                
+                const chronologicalTrades = [...tradeLogs].reverse();
+                chronologicalTrades.forEach(t => {
+                  if (t.win) {
+                    currentWinStreak++;
+                    maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
+                    currentLossStreak = 0;
+                  } else {
+                    currentLossStreak++;
+                    maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+                    currentWinStreak = 0;
+                  }
+                });
+                maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+                maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
+
+                // Strategy Performance Matrix
+                const strategyMap: { [key: string]: { name: string; count: number; wins: number; pnl: number; totalScore: number } } = {};
+                tradeLogs.forEach(l => {
+                  const sName = l.mode || 'INST_SPREAD';
+                  if (!strategyMap[sName]) {
+                    strategyMap[sName] = { name: sName, count: 0, wins: 0, pnl: 0, totalScore: 0 };
+                  }
+                  strategyMap[sName].count++;
+                  if (l.win) strategyMap[sName].wins++;
+                  strategyMap[sName].pnl += (l.pnl || 0);
+                  strategyMap[sName].totalScore += (l.score || 0);
+                });
+
+                const strategies = Object.values(strategyMap).map(s => ({
+                  ...s,
+                  winRate: s.count > 0 ? (s.wins / s.count) * 100 : 0,
+                  avgScore: s.count > 0 ? Math.round(s.totalScore / s.count) : 0,
+                }));
+
+                // Directional Bias Affinity Matrix
+                const biasMap: { [key: string]: { name: string; count: number; wins: number; pnl: number } } = {
+                  BULLISH: { name: 'Bullish Shift', count: 0, wins: 0, pnl: 0 },
+                  BEARISH: { name: 'Bearish Shift', count: 0, wins: 0, pnl: 0 },
+                  NEUTRAL: { name: 'Neutral Decay', count: 0, wins: 0, pnl: 0 }
+                };
+                tradeLogs.forEach(l => {
+                  const rawBias = l.bias || 'NEUTRAL';
+                  if (biasMap[rawBias]) {
+                    biasMap[rawBias].count++;
+                    if (l.win) biasMap[rawBias].wins++;
+                    biasMap[rawBias].pnl += (l.pnl || 0);
+                  }
+                });
+                const biases = Object.values(biasMap);
+
+                // Cumulative P&L curve calculation for chart
+                let currentCumPnL = 0;
+                const chartData = chronologicalTrades.map((t, idx) => {
+                  currentCumPnL += (t.pnl || 0);
+                  return {
+                    name: `Trade ${idx + 1}`,
+                    pnl: currentCumPnL,
+                    tradePnL: t.pnl || 0,
+                    score: t.score || 0,
+                    vix: t.vix || 12.4
+                  };
+                });
+
+                // Robust Downloads
+                const exportCSV = () => {
+                  const csvHeaders = ["ID", "Timestamp", "PnL", "Outcome", "Signal Score", "Strategy Mode", "System Bias", "VIX", "Market Spot"];
+                  const csvRows = tradeLogs.map(l => [
+                    l.id || "FALLBACK_NFO",
+                    new Date(l.timestamp).toISOString(),
+                    l.pnl || 0,
+                    l.win ? "WIN" : "LOSS",
+                    l.score || 0,
+                    l.mode || "INST_SPREAD",
+                    l.bias || "NEUTRAL",
+                    l.vix || 12.4,
+                    l.spot || 0
+                  ]);
+                  const contentString = [csvHeaders.join(","), ...csvRows.map(r => r.map(cell => `"${cell}"`).join(","))].join("\n");
+                  const blob = new Blob([contentString], { type: "text/csv;charset=utf-8;" });
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement("a");
+                  anchor.setAttribute("href", url);
+                  anchor.setAttribute("download", `quantum_trade_history_${new Date().toISOString().split('T')[0]}.csv`);
+                  document.body.appendChild(anchor);
+                  anchor.click();
+                  document.body.removeChild(anchor);
+                };
+
+                const exportJSON = () => {
+                  const jsonString = JSON.stringify(tradeLogs, null, 2);
+                  const blob = new Blob([jsonString], { type: "application/json;charset=utf-8;" });
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement("a");
+                  anchor.setAttribute("href", url);
+                  anchor.setAttribute("download", `quantum_trade_history_${new Date().toISOString().split('T')[0]}.json`);
+                  document.body.appendChild(anchor);
+                  anchor.click();
+                  document.body.removeChild(anchor);
+                };
+
+                return (
+                   <>
+                     {/* --- Header Section --- */}
+                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                           <h2 className="text-2xl font-black text-white tracking-tight uppercase">Performance Intelligence</h2>
+                           <p className="text-xs text-slate-500 font-bold tracking-widest mt-1">Institutional Model Analysis & Strategic Statistics</p>
+                        </div>
+                        
+                        {/* Download Controller Vault */}
+                        <div className="flex flex-wrap gap-2">
+                           <button 
+                             onClick={exportCSV}
+                             className="px-4 py-2 bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95"
+                           >
+                             <Cpu size={12} className="animate-pulse" />
+                             Export CSV Audit
+                           </button>
+                           <button 
+                             onClick={exportJSON}
+                             className="px-4 py-2 bg-slate-900 border border-white/5 hover:border-white/10 text-slate-300 hover:text-white text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95"
+                           >
+                             <Layers size={12} />
+                             Export JSON Payload
+                           </button>
+                        </div>
+                     </div>
+
+                     {/* --- Key Metrics KPI Cards --- */}
+                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="terminal-card p-5 relative overflow-hidden group">
+                           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-indigo-500" />
+                           <span className="terminal-label">Consolidated Net Returns</span>
+                           <div className={`text-2xl font-mono font-black ${totalPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                              ₹{totalPnL.toLocaleString('en-IN')}
+                           </div>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase mt-2">
+                              Avg / Trade: <span className="text-white font-mono">₹{Math.round(avgPnL)}</span>
+                           </p>
+                        </div>
+
+                        <div className="terminal-card p-5 relative overflow-hidden group">
+                           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-500" />
+                           <span className="terminal-label">Model Success Rate</span>
+                           <div className="text-2xl font-mono text-emerald-400 font-black">
+                              {winRate.toFixed(1)}%
+                           </div>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase mt-2">
+                              Wins: <span className="text-emerald-400 font-mono">{wins}</span> | Losses: <span className="text-rose-400 font-mono">{losses}</span>
+                           </p>
+                        </div>
+
+                        <div className="terminal-card p-5 relative overflow-hidden group">
+                           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500" />
+                           <span className="terminal-label">Profit Factor & RR Matrix</span>
+                           <div className="text-2xl font-mono text-amber-400 font-black">
+                              {profitFactor.toFixed(2)}x
+                           </div>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase mt-2">
+                              Risk Reward Quotient: <span className="text-white font-mono">{rrRatio.toFixed(1)}:1</span>
+                           </p>
+                        </div>
+
+                        <div className="terminal-card p-5 relative overflow-hidden group">
+                           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-rose-500 to-pink-500" />
+                           <span className="terminal-label">Consecutive Win Streak</span>
+                           <div className="text-2xl font-mono text-rose-400 font-black">
+                              {maxWinStreak} <span className="text-xs text-slate-500 font-sans uppercase">Trades</span>
+                           </div>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase mt-2">
+                              Max Loss Streak: <span className="text-slate-400 font-mono">{maxLossStreak}</span>
+                           </p>
+                        </div>
+                     </div>
+
+                     {/* --- Recharts Equity Curve Visualization --- */}
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-2 terminal-card p-6 flex flex-col gap-4">
+                           <div>
+                              <h3 className="text-xs font-black text-white uppercase tracking-widest">Cumulative Equity Growth (Chronological)</h3>
+                              <p className="text-[9px] text-slate-500 font-bold uppercase">Tracks system financial performance curvature trajectory</p>
+                           </div>
+
+                           <div className="h-64 pricing-chart">
+                              {chartData.length > 0 ? (
+                                 <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={chartData}>
+                                       <defs>
+                                          <linearGradient id="pnlGlow" x1="0" y1="0" x2="0" y2="1">
+                                             <stop offset="5%" stopColor={totalPnL >= 0 ? "#10b981" : "#3b82f6"} stopOpacity={0.2}/>
+                                             <stop offset="95%" stopColor={totalPnL >= 0 ? "#10b981" : "#3b82f6"} stopOpacity={0}/>
+                                          </linearGradient>
+                                       </defs>
+                                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
+                                       <XAxis 
+                                         dataKey="name" 
+                                         stroke="#475569" 
+                                         fontSize={8} 
+                                         tickLine={false} 
+                                       />
+                                       <YAxis 
+                                         stroke="#475569" 
+                                         fontSize={8} 
+                                         tickLine={false} 
+                                         tickFormatter={(v) => `₹${v}`} 
+                                       />
+                                       <Tooltip 
+                                         contentStyle={{ background: '#0a0f1d', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px' }}
+                                         labelStyle={{ color: '#94a3b8', fontSize: '10px', fontWeight: 'bold' }}
+                                         itemStyle={{ fontSize: '11px' }}
+                                       />
+                                       <Area 
+                                         type="monotone" 
+                                         dataKey="pnl" 
+                                         stroke={totalPnL >= 0 ? "#10b981" : "#3b82f6"} 
+                                         strokeWidth={2}
+                                         fillOpacity={1} 
+                                         fill="url(#pnlGlow)" 
+                                       />
+                                    </AreaChart>
+                                 </ResponsiveContainer>
+                              ) : (
+                                 <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2 border border-dashed border-white/5 rounded-xl bg-black/20">
+                                    <Activity size={24} className="animate-spin text-slate-500" />
+                                    <p className="text-[10px] font-bold uppercase tracking-widest">Waiting for Live Orders...</p>
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+
+                        {/* Right: Model Directional Affinity Matrix */}
+                        <div className="terminal-card p-6 flex flex-col gap-4">
+                           <div>
+                              <h3 className="text-xs font-black text-white uppercase tracking-widest">Setup Bias Performance</h3>
+                              <p className="text-[9px] text-slate-500 font-bold uppercase">Success correlation by trend-following signal direction</p>
+                           </div>
+
+                           <div className="flex flex-col gap-4 flex-1 justify-center">
+                              {biases.map((b, i) => {
+                                 const itemWinRate = b.count > 0 ? (b.wins / b.count) * 100 : 0;
+                                 return (
+                                    <div key={i} className="bg-black/20 border border-white/[0.02] rounded-lg p-3 flex flex-col gap-2">
+                                       <div className="flex justify-between items-center">
+                                          <span className="text-[11px] font-black text-white uppercase tracking-wider">{b.name}</span>
+                                          <span className={`text-[10px] font-mono font-bold ${b.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                             ₹{b.pnl >= 0 ? '+' : ''}{b.pnl}
+                                          </span>
+                                       </div>
+                                       
+                                       <div className="w-full bg-slate-800/50 h-1.5 rounded-full overflow-hidden">
+                                          <div 
+                                            className={`h-full rounded-full ${b.name.includes('Bullish') ? 'bg-emerald-500' : b.name.includes('Bearish') ? 'bg-rose-500' : 'bg-blue-500'}`} 
+                                            style={{ width: `${itemWinRate}%` }} 
+                                          />
+                                       </div>
+
+                                       <div className="flex justify-between text-[9px] text-slate-500 uppercase font-bold">
+                                          <span>Volume: {b.count} trades</span>
+                                          <span>Win Rate: {itemWinRate.toFixed(0)}%</span>
+                                       </div>
+                                    </div>
+                                 );
+                              })}
+                           </div>
+                        </div>
+                     </div>
+
+                     {/* --- Strategy Performance Leaderboard Table --- */}
+                     <div className="terminal-card p-6">
+                        <div className="mb-4">
+                           <h3 className="text-xs font-black text-white uppercase tracking-widest">Detailed Strategy Performance Leaderboard</h3>
+                           <p className="text-[9px] text-slate-500 font-bold uppercase">Breakdown of trade metrics segmented by execution module mode</p>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                           <table className="w-full border-collapse">
+                              <thead>
+                                 <tr className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] border-b border-terminal-line text-left">
+                                    <th className="py-3 px-4">Strategy Mode</th>
+                                    <th className="py-3 px-4 text-center">Trade Count</th>
+                                    <th className="py-3 px-4 text-center">Wins / Losses</th>
+                                    <th className="py-3 px-4 text-center">Win Ratio</th>
+                                    <th className="py-3 px-4 text-center">Avg Entry Signal</th>
+                                    <th className="py-3 px-4 text-right">Aggregated Return</th>
+                                 </tr>
+                              </thead>
+                              <tbody className="divide-y divide-white/[0.03]">
+                                 {strategies.length > 0 ? (
+                                    strategies.map((strat, idx) => (
+                                       <tr key={idx} className="hover:bg-white/[0.01] transition-colors">
+                                          <td className="py-4 px-4 font-black text-xs text-white uppercase tracking-wider">
+                                             {strat.name.replace(/_/g, ' ')}
+                                          </td>
+                                          <td className="py-4 px-4 font-mono text-center text-xs text-slate-300">
+                                             {strat.count}
+                                          </td>
+                                          <td className="py-4 px-4 font-mono text-center text-xs text-slate-400">
+                                             <span className="text-emerald-400 font-bold">{strat.wins}</span> / <span className="text-rose-400 font-bold">{strat.count - strat.wins}</span>
+                                          </td>
+                                          <td className="py-4 px-4 text-center">
+                                             <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-slate-800/40 border border-white/5">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                                <span className="font-mono text-[10px] text-blue-400 font-bold">{strat.winRate.toFixed(1)}%</span>
+                                             </div>
+                                          </td>
+                                          <td className="py-4 px-4 font-mono text-center text-xs text-amber-400 font-bold">
+                                             {strat.avgScore} pts
+                                          </td>
+                                          <td className={`py-4 px-4 font-mono text-right text-xs font-bold ${strat.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                             ₹{strat.pnl >= 0 ? '+' : ''}{strat.pnl.toLocaleString('en-IN')}
+                                          </td>
+                                       </tr>
+                                    ))
+                                 ) : (
+                                    <tr>
+                                       <td colSpan={6} className="py-8 text-center text-slate-500 text-xs font-black uppercase tracking-widest">
+                                          No active execution cycles recorded in session fallback.
+                                       </td>
+                                    </tr>
+                                 )}
+                              </tbody>
+                           </table>
+                        </div>
+                     </div>
+                   </>
+                );
+             })()}
           </motion.main>
         ) : activeTab === 'settings' ? (
           <motion.main 

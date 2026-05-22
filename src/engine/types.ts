@@ -126,6 +126,11 @@ export interface StrategyData {
     mode: string;
     strategyType: string;
     recommendation: string;
+    trendScore?: number;
+    oiBiasScore?: number;
+    gammaScore?: number;
+    timeFilterScore?: number;
+    oiChangeBias?: number;
   };
   aiProb: number;
 }

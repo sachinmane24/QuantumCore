@@ -33,6 +33,11 @@ export interface StrategyScore {
   mode: StrategyMode;
   strategyType: StrategyType;
   recommendation: string;
+  trendScore: number;
+  oiBiasScore: number;
+  gammaScore: number;
+  timeFilterScore: number;
+  oiChangeBias: number;
 }
 
 class StrategyEngine {
@@ -187,25 +192,28 @@ class StrategyEngine {
       const isHighVol = vix > 18;
       const isLowVol = vix < 12;
 
-      // Determine Bias with higher sensitivity
+      // 1. Determine Trend Candidate Bias with high sensitivity
+      let candidateBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
+      let candidateReason = "";
+
       if (isSideways && total < 52) {
-        bias = 'NEUTRAL';
-        biasReason = "Sideways market with low OI shift";
+        candidateBias = 'NEUTRAL';
+        candidateReason = "Sideways market with low OI shift";
       } else {
         if (orbTrigger === 1) {
-          bias = 'BULLISH';
-          biasReason = "ORB Breakout High confirmed by VWAP";
+          candidateBias = 'BULLISH';
+          candidateReason = "ORB Breakout High confirmed by VWAP";
         } else if (orbTrigger === -1) {
-          bias = 'BEARISH';
-          biasReason = "ORB Breakdown Low confirmed by VWAP";
+          candidateBias = 'BEARISH';
+          candidateReason = "ORB Breakdown Low confirmed by VWAP";
         } else {
           // Trend + OI Confirmation
           if (oiChangeBias > 75000) {
-             bias = 'BULLISH';
-             biasReason = "Strong Put Writing (+OI Change)";
+             candidateBias = 'BULLISH';
+             candidateReason = "Strong Put Writing (+OI Change)";
           } else if (oiChangeBias < -75000) {
-             bias = 'BEARISH';
-             biasReason = "Strong Call Writing (-OI Change)";
+             candidateBias = 'BEARISH';
+             candidateReason = "Strong Call Writing (-OI Change)";
           } else if (Math.abs(diff) > 8 || (Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.18)) {
              // Pure Price Push / Significant Day Change if OI is lagging or neutral
              const priceChange = (marketEngine.getLatestTick()?.change || 0);
@@ -215,17 +223,109 @@ class StrategyEngine {
              
              // If price is up but VIX is spiking and MACD is bearish, stay NEUTRAL or cautious
              if (priceChange > 0 && indicators.macd.histogram && indicators.macd.histogram < -2 && !vixCooling) {
-                bias = 'NEUTRAL';
-                biasReason = "Price Up but Bearish Divergence (MACD/VIX Spike)";
+                candidateBias = 'NEUTRAL';
+                candidateReason = "Price Up but Bearish Divergence (MACD/VIX Spike)";
              } else {
-                bias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
-                biasReason = `Price Velocity Dominant (${bias}) - Momentum: ${momentumFactor.toFixed(1)} [${macdConfirm}]`;
+                candidateBias = (diff > 0 || priceChange > 0) ? 'BULLISH' : 'BEARISH';
+                candidateReason = `Price Velocity Dominant (${candidateBias}) - Momentum: ${momentumFactor.toFixed(1)} [${macdConfirm}]`;
              }
           } else {
-             bias = 'NEUTRAL';
-             biasReason = `Rangebound (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
+             candidateBias = 'NEUTRAL';
+             candidateReason = `Rangebound (OI Bias: ${oiChangeBias}, Spot Dist: ${diff.toFixed(1)})`;
           }
         }
+      }
+
+      // 2. Trend Pullback & Bollinger Reversal Confluence Engine (Anti-Chasing Rules)
+      const prices = marketEngine.getPriceHistory();
+      const computeEMA = (data: number[], period: number) => {
+        if (data.length === 0) return spot;
+        if (data.length < period) return data[data.length - 1];
+        const k = 2 / (period + 1);
+        let ema = data[data.length - period];
+        for (let i = data.length - period + 1; i < data.length; i++) {
+          ema = (data[i] * k) + (ema * (1 - k));
+        }
+        return ema;
+      };
+
+      const ema20 = computeEMA(prices, 20);
+      const vwap = marketEngine.getVWAP();
+
+      const prevSpot = prices.length >= 2 ? prices[prices.length - 2] : spot;
+      const prevSpot2 = prices.length >= 3 ? prices[prices.length - 3] : prevSpot;
+
+      const isSlightBullishSlope = spot > prevSpot || spot > prevSpot2;
+      const isSlightBearishSlope = spot < prevSpot || spot < prevSpot2;
+
+      if (candidateBias === 'BULLISH') {
+        const chaseThreshold = 18; // Trigger point where we consider price has flown too far from baseline EMA/VWAP
+        const isFarAbove = spot > vwap + chaseThreshold && spot > ema20 + chaseThreshold;
+        const isBollingerExhausted = spot > indicators.bollinger.upper;
+
+        if (isFarAbove || isBollingerExhausted) {
+          // Exceeds safe boundaries, suppress entry to avoid buying the peak
+          bias = 'NEUTRAL';
+          biasReason = `Suppress Chasing: Spot (₹${spot.toFixed(1)}) is far from EMA20/VWAP (₹${ema20.toFixed(1)}/₹${vwap.toFixed(1)}). Awaiting Pullback.`;
+        } else {
+          // Check if spot has compressed down into the active confluence zone
+          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 || Math.abs(spot - vwap) <= 15 || (spot >= Math.min(ema20, vwap) - 10 && spot <= Math.max(ema20, vwap) + 12);
+          const isNearLowerBollinger = spot <= indicators.bollinger.lower + 12;
+
+          if (isNearEmaOrVwap || isNearLowerBollinger) {
+            if (isSlightBullishSlope) {
+              bias = 'BULLISH';
+              const source = isNearEmaOrVwap ? "EMA20/VWAP Confluence" : "Bollinger Extreme Reversal";
+              biasReason = `Early Pullback Trigger: Met ${source} zone with rise continuation & volume confirmation.`;
+            } else {
+              bias = 'NEUTRAL';
+              biasReason = `Zone Confluence: Price is in Pullback Zone (EMA20/VWAP). Waiting for upward resumption.`;
+            }
+          } else {
+            // normal breathing territory
+            if (isSlightBullishSlope) {
+              bias = 'BULLISH';
+              biasReason = `${candidateReason} (Anti-Chase Entry active)`;
+            } else {
+              bias = 'NEUTRAL';
+              biasReason = "Waiting for trend resumption";
+            }
+          }
+        }
+      } else if (candidateBias === 'BEARISH') {
+        const chaseThreshold = 18;
+        const isFarBelow = spot < vwap - chaseThreshold && spot < ema20 - chaseThreshold;
+        const isBollingerExhausted = spot < indicators.bollinger.lower;
+
+        if (isFarBelow || isBollingerExhausted) {
+          bias = 'NEUTRAL';
+          biasReason = `Suppress Chasing: Spot (₹${spot.toFixed(1)}) is far from EMA20/VWAP (₹${ema20.toFixed(1)}/₹${vwap.toFixed(1)}). Awaiting Pullback.`;
+        } else {
+          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 || Math.abs(spot - vwap) <= 15 || (spot >= Math.min(ema20, vwap) - 12 && spot <= Math.max(ema20, vwap) + 10);
+          const isNearUpperBollinger = spot >= indicators.bollinger.upper - 12;
+
+          if (isNearEmaOrVwap || isNearUpperBollinger) {
+            if (isSlightBearishSlope) {
+              bias = 'BEARISH';
+              const source = isNearEmaOrVwap ? "EMA20/VWAP Confluence" : "Bollinger Extreme Reversal";
+              biasReason = `Early Pullback Trigger: Met ${source} zone with fall continuation & volume confirmation.`;
+            } else {
+              bias = 'NEUTRAL';
+              biasReason = `Zone Confluence: Price is in Pullback Zone (EMA20/VWAP). Waiting for downward resumption.`;
+            }
+          } else {
+            if (isSlightBearishSlope) {
+              bias = 'BEARISH';
+              biasReason = `${candidateReason} (Anti-Chase Entry active)`;
+            } else {
+              bias = 'NEUTRAL';
+              biasReason = "Waiting for trend resumption";
+            }
+          }
+        }
+      } else {
+        bias = 'NEUTRAL';
+        biasReason = candidateReason;
       }
 
       // Selection Matrix
@@ -292,7 +392,12 @@ class StrategyEngine {
       biasReason,
       mode,
       strategyType,
-      recommendation
+      recommendation,
+      trendScore: Math.round(trendScore),
+      oiBiasScore: Math.round(oiBiasScore),
+      gammaScore: Math.round(gammaScore),
+      timeFilterScore: Math.round(timeFilterScore),
+      oiChangeBias: Math.round(oiChangeBias)
     };
   }
 }
