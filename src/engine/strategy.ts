@@ -212,10 +212,37 @@ class StrategyEngine {
       if (spot < orbLow && putOiChange > callOiChange && Math.abs(diff) < 20) trapDetected = true;
     }
 
+    // Dynamic Support and Resistance Strike levels from the option chain
+    let maxCeOiVal = -1;
+    let maxCeOiStrike = atmStrike;
+    let maxPeOiVal = -1;
+    let maxPeOiStrike = atmStrike;
+
+    chain.forEach(c => {
+      if ((c.ce_oi || 0) > maxCeOiVal) {
+        maxCeOiVal = c.ce_oi || 0;
+        maxCeOiStrike = c.strike;
+      }
+      if ((c.pe_oi || 0) > maxPeOiVal) {
+        maxPeOiVal = c.pe_oi || 0;
+        maxPeOiStrike = c.strike;
+      }
+    });
+
+    const support = maxPeOiStrike;
+    const resistance = maxCeOiStrike;
+
+    const distToSupport = spot - support;
+    const distToResistance = resistance - spot;
+
+    const isNearSupport = distToSupport <= 30 && distToSupport >= -10;
+    const isNearResistance = distToResistance <= 30 && distToResistance >= -10;
+
     let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore + techIndicatorScore;
     
     if (orbTrigger !== 0) total += 15;
     if (trapDetected) total -= 30;
+    if (isNearSupport || isNearResistance) total += 15; // Score premium for trading near core ranges
     
     if (isExpiryDay) {
       if (isGammaBlastWindow && orbTrigger !== 0) total += 20; 
@@ -241,7 +268,13 @@ class StrategyEngine {
       let candidateBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
       let candidateReason = "";
 
-      if (isSideways && total < 52) {
+      if (isNearSupport) {
+         candidateBias = 'BULLISH';
+         candidateReason = `Dynamic OI Support Floor Reached (Floor: ₹${support}, Dist: ${distToSupport.toFixed(1)})`;
+      } else if (isNearResistance) {
+         candidateBias = 'BEARISH';
+         candidateReason = `Dynamic OI Resistance Ceiling Reached (Ceiling: ₹${resistance}, Dist: ${distToResistance.toFixed(1)})`;
+      } else if (isSideways && total < 52) {
         candidateBias = 'NEUTRAL';
         candidateReason = "Sideways market with low OI shift";
       } else {

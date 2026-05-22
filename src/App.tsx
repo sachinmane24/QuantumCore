@@ -946,8 +946,9 @@ export default function App() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* --- TOP SUMMARY BAR --- */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-auto overflow-y-hidden custom-scrollbar">
+         <div className="flex-grow flex flex-col min-w-[1240px]">
+           {/* --- TOP SUMMARY BAR --- */}
         <div className="bg-black/60 border-b border-white/5 py-1.5 px-8 flex justify-between items-center text-[9px] font-black uppercase tracking-[0.15em] text-slate-400 shrink-0">
           <div className="flex gap-10">
             <div className="flex items-center gap-2">
@@ -1613,6 +1614,32 @@ export default function App() {
                    </div>
                 </div>
 
+                {/* Hot S/R HUD display strip directly above matrix */}
+                {insights && (
+                   <div className="grid grid-cols-2 gap-4 bg-slate-950/45 p-2.5 rounded-lg border border-white/5">
+                     <div className="flex items-center justify-between px-3 py-2 bg-emerald-500/[0.03] rounded border border-emerald-500/15">
+                       <div className="flex items-center gap-2">
+                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                         <span className="text-[8px] text-slate-400 font-extrabold uppercase tracking-wider">ACTIVE SUPPORT FLOOR</span>
+                       </div>
+                       <div className="flex items-center gap-3">
+                         <span className="text-xs font-mono font-black text-emerald-400">₹{insights.support}</span>
+                         <span className="text-[8px] text-slate-500 font-bold uppercase">OI: {formatOi(insights.supportOi)}</span>
+                       </div>
+                     </div>
+                     <div className="flex items-center justify-between px-3 py-2 bg-rose-500/[0.03] rounded border border-rose-500/15">
+                       <div className="flex items-center gap-2">
+                         <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                         <span className="text-[8px] text-slate-400 font-extrabold uppercase tracking-wider">ACTIVE RESISTANCE CEILING</span>
+                       </div>
+                       <div className="flex items-center gap-3">
+                         <span className="text-xs font-mono font-black text-rose-400">₹{insights.resistance}</span>
+                         <span className="text-[8px] text-slate-500 font-bold uppercase">OI: {formatOi(insights.resistanceOi)}</span>
+                       </div>
+                     </div>
+                   </div>
+                )}
+
                 <div className="overflow-x-auto">
                    <table className="w-full text-left border-collapse text-[10px]">
                       <thead>
@@ -1652,6 +1679,8 @@ export default function App() {
 
                           return displayedStrikes.map((c: any) => {
                             const isAtm = c.strike === spotStrike;
+                            const isSupport = insights && c.strike === insights.support;
+                            const isResistance = insights && c.strike === insights.resistance;
                             
                             // Accurate options greeks dynamic derivation
                             const ceDelta = Math.max(0.01, Math.min(0.99, 1 / (1 + Math.exp(-(spot - c.strike) / 35))));
@@ -1664,15 +1693,20 @@ export default function App() {
 
                             return (
                               <tr key={c.strike} className={cn(
-                                "text-center transition-colors hover:bg-white/[0.01]",
-                                isAtm && "bg-blue-600/[0.05]"
+                                "text-center transition-all duration-300 hover:bg-white/[0.01]",
+                                isAtm && "bg-blue-600/[0.04]",
+                                isSupport && "bg-emerald-500/[0.03] border-l-2 border-l-emerald-500",
+                                isResistance && "bg-rose-500/[0.03] border-l-2 border-l-rose-500"
                               )}>
                                 {/* CE Delta */}
                                 <td className="py-3 font-mono text-[8.5px] text-rose-400/75">{ceDelta.toFixed(2)}</td>
                                 {/* CE IV */}
                                 <td className="py-3 font-mono text-[8px] text-slate-500">{ceIv.toFixed(1)}%</td>
                                 {/* CE OI */}
-                                <td className="py-3 font-mono text-[8.5px] text-rose-300">
+                                <td className={cn(
+                                  "py-3 font-mono text-[8.5px] transition-colors",
+                                  isResistance ? "bg-rose-500/10 text-rose-200 font-extrabold" : "text-rose-300"
+                                )}>
                                    <span className="font-extrabold">{ceOiStr}</span>
                                    {c.ce_oi_change !== undefined && (
                                      <span className={cn(
@@ -1684,20 +1718,37 @@ export default function App() {
                                    )}
                                 </td>
                                 {/* CE Price */}
-                                <td className="py-3 font-mono font-black text-rose-400 border-r border-white/5">₹{c.ce_price?.toFixed(1) || '0.0'}</td>
+                                <td className={cn(
+                                  "py-3 font-mono font-black border-r border-white/5 transition-colors",
+                                  isResistance ? "bg-rose-500/15 text-rose-200" : "text-rose-400"
+                                )}>₹{c.ce_price?.toFixed(1) || '0.0'}</td>
                                 
                                 {/* STRIKE */}
                                 <td className={cn(
-                                  "py-3 font-mono font-black text-[12px] bg-slate-950/20 border-r border-white/5 border-l border-white/5 shrink-0 min-w-[80px]",
+                                  "py-3 font-mono font-black text-[12px] bg-slate-950/20 border-r border-white/5 border-l border-white/5 shrink-0 min-w-[80px] transition-colors",
                                   isAtm ? "text-blue-400 ring-1 ring-blue-500/20 font-black" : "text-slate-300"
                                 )}>
-                                  {c.strike} {isAtm ? "●" : ""}
+                                  <div className="flex flex-col items-center justify-center gap-0.5">
+                                    <span>{c.strike} {isAtm ? "●" : ""}</span>
+                                    {isSupport && (
+                                      <span className="text-[7px] text-emerald-400 bg-emerald-500/20 px-1 py-[1.5px] rounded-sm font-black tracking-widest uppercase scale-90">SUPPORT</span>
+                                    )}
+                                    {isResistance && (
+                                      <span className="text-[7px] text-rose-400 bg-rose-500/20 px-1 py-[1.5px] rounded-sm font-black tracking-widest uppercase scale-90">RESIST</span>
+                                    )}
+                                  </div>
                                 </td>
 
                                 {/* PE Price */}
-                                <td className="py-3 font-mono font-black text-emerald-400 border-r border-white/5">₹{c.pe_price?.toFixed(1) || '0.0'}</td>
+                                <td className={cn(
+                                  "py-3 font-mono font-black border-r border-white/5 transition-colors",
+                                  isSupport ? "bg-emerald-500/15 text-emerald-200" : "text-emerald-400"
+                                )}>₹{c.pe_price?.toFixed(1) || '0.0'}</td>
                                 {/* PE OI */}
-                                <td className="py-3 font-mono text-[8.5px] text-emerald-300">
+                                <td className={cn(
+                                  "py-3 font-mono text-[8.5px] transition-colors",
+                                  isSupport ? "bg-emerald-500/10 text-emerald-200 font-extrabold" : "text-emerald-300"
+                                )}>
                                    <span className="font-extrabold">{peOiStr}</span>
                                    {c.pe_oi_change !== undefined && (
                                      <span className={cn(
@@ -3514,6 +3565,7 @@ export default function App() {
           </div>
         </div>
       </footer>
+         </div>
     </div>
   </div>
   );

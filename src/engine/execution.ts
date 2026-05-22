@@ -195,6 +195,24 @@ class ExecutionEngine {
       return Math.max(5, 100 - (dist * 0.5));
     };
 
+    const chain = marketEngine.getOptionChain();
+    let support = atmStrike;
+    let resistance = atmStrike;
+    if (chain.length > 0) {
+      let maxPeOi = -1;
+      let maxCeOi = -1;
+      chain.forEach(c => {
+        if ((c.pe_oi || 0) > maxPeOi) {
+          maxPeOi = c.pe_oi || 0;
+          support = c.strike;
+        }
+        if ((c.ce_oi || 0) > maxCeOi) {
+          maxCeOi = c.ce_oi || 0;
+          resistance = c.strike;
+        }
+      });
+    }
+
     const newPositions: Position[] = [];
 
     switch (score.strategyType) {
@@ -228,7 +246,8 @@ class ExecutionEngine {
       }
 
       case 'BULL_PUT_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.40, 'PE', config.MIN_CREDIT_PREMIUM);
+        // Position short leg exactly at or below structural Support
+        const sellStrike = Math.round(support / 50) * 50;
         const buyStrike = sellStrike - 100;
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -238,7 +257,8 @@ class ExecutionEngine {
       }
 
       case 'BEAR_CALL_SPREAD': {
-        const sellStrike = getStrikeByDelta(0.40, 'CE', config.MIN_CREDIT_PREMIUM);
+        // Position short leg exactly at or above structural Resistance
+        const sellStrike = Math.round(resistance / 50) * 50;
         const buyStrike = sellStrike + 100;
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -248,9 +268,10 @@ class ExecutionEngine {
       }
 
       case 'IRON_CONDOR': {
-        const sellPE = getStrikeByDelta(0.15, 'PE', config.MIN_CREDIT_PREMIUM);
+        // Anchored tightly above structural boundaries
+        const sellPE = Math.round(support / 50) * 50;
         const buyPE = sellPE - 100;
-        const sellCE = getStrikeByDelta(0.15, 'CE', config.MIN_CREDIT_PREMIUM);
+        const sellCE = Math.round(resistance / 50) * 50;
         const buyCE = sellCE + 100;
         newPositions.push(
           { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
