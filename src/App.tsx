@@ -14,7 +14,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, 
-  Tooltip, ResponsiveContainer, BarChart, Bar,
+  Tooltip, ResponsiveContainer, BarChart, Bar, Cell,
   LineChart, Line, Legend
 } from 'recharts';
 import { cn } from './lib/utils';
@@ -51,6 +51,11 @@ export default function App() {
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
+
+  // Gemini Options AI Analyzer state
+  const [chainAnalysis, setChainAnalysis] = useState<any | null>(null);
+  const [isAnalyzingChain, setIsAnalyzingChain] = useState(false);
+  const [chainAnalysisError, setChainAnalysisError] = useState<string | null>(null);
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -84,6 +89,60 @@ export default function App() {
       console.error("Prediction failed:", e);
     } finally {
       setIsPredicting(false);
+    }
+  };
+
+  const handleAnalyzeChain = async () => {
+    if (!market) return;
+    setIsAnalyzingChain(true);
+    setChainAnalysisError(null);
+    try {
+      const spot = market.spot || 22000;
+      const spotStrike = Math.round(spot / 50) * 50;
+      const sorted = market.chain ? [...market.chain].sort((a, b) => a.strike - b.strike) : [];
+      const chainFocus = sorted
+        .filter(c => Math.abs(c.strike - spotStrike) <= 250)
+        .map(c => ({
+          strike: c.strike,
+          ce_price: c.ce_price,
+          pe_price: c.pe_price,
+          ce_oi: c.ce_oi,
+          pe_oi: c.pe_oi,
+          ce_oi_change: c.ce_oi_change,
+          pe_oi_change: c.pe_oi_change,
+          ce_iv: c.ce_iv || 12.5,
+          pe_iv: c.pe_iv || 13.0
+        }));
+
+      const payload = {
+        spot,
+        vix: market.vix || 15.0,
+        pcr: insights?.pcr || market.pcr || 1.0,
+        support: insights?.support || spotStrike - 150,
+        supportOi: insights?.supportOi || 1500000,
+        resistance: insights?.resistance || spotStrike + 150,
+        resistanceOi: insights?.resistanceOi || 1400000,
+        indicators: market.indicators,
+        chainFocus
+      };
+
+      const res = await fetch("/api/analyze-chain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        throw new Error("Analysis failed. Server returned status: " + res.status);
+      }
+
+      const data = await res.json();
+      setChainAnalysis(data);
+    } catch (e: any) {
+      console.error("Option chain analysis failed:", e);
+      setChainAnalysisError(e.message || "Failed to analyze option chain");
+    } finally {
+      setIsAnalyzingChain(false);
     }
   };
 
@@ -158,6 +217,7 @@ export default function App() {
     from: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     to: new Date().toISOString().split('T')[0]
   });
+  const [backtestStrategy, setBacktestStrategy] = useState('DYNAMIC');
   const [backtestStatus, setBacktestStatus] = useState<{
     loading: boolean;
     error: string | null;
@@ -508,9 +568,89 @@ export default function App() {
         throw new Error("Insufficient historical data for simulation (min 20 candles)");
       }
 
-      // --- SIMULATION ENGINE ---
+      // --- INSTITUTIONAL SYNTHETIC OPTION BACKTESTING ENGINE ---
+      // 1. Math Helpers for Options Valuation
+      const cumulativeNormalDistribution = (x: number): number => {
+        const b1 = 0.319381530;
+        const b2 = -0.356563782;
+        const b3 = 1.781477937;
+        const b4 = -1.821255978;
+        const b5 = 1.330274429;
+        const p = 0.2316419;
+        const c = 0.39894228;
+
+        if (x >= 0.0) {
+          const k = 1.0 / (1.0 + p * x);
+          const w = 1.0 - c * Math.exp(-x * x / 2.0) * k * (b1 + k * (b2 + k * (b3 + k * (b4 + k * b5))));
+          return w;
+        } else {
+          const k = 1.0 / (1.0 - p * x);
+          const w = c * Math.exp(-x * x / 2.0) * k * (b1 + k * (b2 + k * (b3 + k * (b4 + k * b5))));
+          return 1.0 - w;
+        }
+      };
+
+      const calculateOptionPrice = (isCall: boolean, S: number, K: number, T: number, r: number, sigma: number): number => {
+        if (T <= 0.0001) {
+          return isCall ? Math.max(1, S - K) : Math.max(1, K - S);
+        }
+        const d1 = (Math.log(S / K) + (r + (sigma * sigma) / 2) * T) / (sigma * Math.sqrt(T));
+        const d2 = d1 - sigma * Math.sqrt(T);
+        
+        if (isCall) {
+          const price = S * cumulativeNormalDistribution(d1) - K * Math.exp(-r * T) * cumulativeNormalDistribution(d2);
+          return Math.max(1.5, price);
+        } else {
+          const price = K * Math.exp(-r * T) * cumulativeNormalDistribution(-d2) - S * cumulativeNormalDistribution(-d1);
+          return Math.max(1.5, price);
+        }
+      };
+
+      // 2. Precompute Indicator Streams to prevent manual loops inside simulation
+      const kFast = 2 / (9 + 1);
+      const kSlow = 2 / (21 + 1);
+      const emaFast: number[] = [];
+      const emaSlow: number[] = [];
+      const rsi: number[] = [];
+
+      let gains = 0;
+      let lossesVal = 0;
+
+      for (let j = 0; j < candles.length; j++) {
+        const close = candles[j].close;
+        if (j === 0) {
+          emaFast.push(close);
+          emaSlow.push(close);
+          rsi.push(50);
+        } else {
+          emaFast.push(close * kFast + emaFast[j-1] * (1 - kFast));
+          emaSlow.push(close * kSlow + emaSlow[j-1] * (1 - kSlow));
+          
+          const diff = close - candles[j-1].close;
+          const gain = diff > 0 ? diff : 0;
+          const loss = diff < 0 ? -diff : 0;
+          
+          if (j < 14) {
+            gains += gain;
+            lossesVal += loss;
+            rsi.push(50);
+          } else {
+            gains = (gains * 13 + gain) / 14;
+            lossesVal = (lossesVal * 13 + loss) / 14;
+            if (lossesVal === 0) {
+              rsi.push(100);
+            } else {
+              const rs = gains / lossesVal;
+              rsi.push(100 - (100 / (1 + rs)));
+            }
+          }
+        }
+      }
+
+      // 3. Execution Simulation Parameters
       const initialBalance = 200000;
       let balance = initialBalance;
+      const lotSize = 50; 
       let trades: any[] = [];
       let equityCurve: any[] = [];
       let currentDrawdown = 0;
@@ -520,42 +660,192 @@ export default function App() {
       let totalProfit = 0;
       let totalLoss = 0;
 
-      // Simple Trend-Following Simulation based on real candle data
+      interface ActivePosition {
+        strategy: string;
+        strike: number;
+        entryIndex: number;
+        entryCost: number;
+        longLegs: { strike: number; isCall: boolean }[];
+        shortLegs: { strike: number; isCall: boolean }[];
+      }
+      
+      let activePosition: ActivePosition | null = null;
+
+      // Start of Institutional Synthetic Option Simulation loop
       for (let i = 0; i < candles.length; i++) {
         const candle = candles[i];
         
-        // Strategy Logic Proxy: Enter every few hours if volatility is present
-        if (i > 10 && i % 6 === 0) {
-          const prevClose = candles[i-1].close;
-          const currentClose = candle.close;
-          const priceChange = ((currentClose - prevClose) / prevClose) * 100;
-          
-          // Heuristic: Capture a portion of the movement based on "Quantum Alpha" logic
-          // Buying options means high gamma/vega impact
-          const pnlMultiplier = (Math.random() > 0.4 ? 1.2 : -0.8); 
-          const pnlValue = Math.round(priceChange * pnlMultiplier * 5000); // 5000 is exposure proxy
-          
-          balance += pnlValue;
-          const timestamp = new Date(candle.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit' });
-          
-          trades.push({ 
-            pnl: pnlValue, 
-            balance,
-            timestamp,
-            type: pnlValue > 0 ? 'WIN' : 'LOSS'
-          });
-          
-          if (pnlValue > 0) {
-            wins++;
-            totalProfit += pnlValue;
-          } else {
-            losses++;
-            totalLoss += Math.abs(pnlValue);
+        if (i < 21) continue;
+        
+        // 4. Derive Weekly Expiry Time-to-Expiration (T in years)
+        const currentDate = new Date(candle.date);
+        const currentDay = currentDate.getDay(); 
+        let daysToThursday = (4 - currentDay + 7) % 7;
+        if (daysToThursday === 0) {
+          if (currentDate.getHours() >= 15) {
+            daysToThursday = 7; // expired, shift to next week
+          }
+        }
+        const T = Math.max(0.5, daysToThursday) / 365;
+
+        // 5. Volatility Regime Layer
+        // Calculate dynamic IV based on spot log-returns volatility (14 lookback window)
+        let recentVol = 0.15; // baseline 15% IV
+        if (i >= 14) {
+          const slice = candles.slice(i - 13, i + 1);
+          const logReturns = [];
+          for (let k = 1; k < slice.length; k++) {
+            logReturns.push(Math.log(slice[k].close / slice[k-1].close));
+          }
+          const mean = logReturns.reduce((acc, val) => acc + val, 0) / logReturns.length;
+          const variance = logReturns.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (logReturns.length - 1);
+          recentVol = Math.max(0.08, Math.min(0.42, Math.sqrt(variance) * Math.sqrt(1764)));
+        }
+        const currentIV = recentVol;
+
+        // 6. Manage Active Position (if any)
+        if (activePosition) {
+          const S = candle.close;
+          let currentLegValue = 0;
+
+          for (const leg of activePosition.longLegs) {
+            currentLegValue += calculateOptionPrice(leg.isCall, S, leg.strike, T, 0.07, currentIV);
+          }
+          for (const leg of activePosition.shortLegs) {
+            currentLegValue -= calculateOptionPrice(leg.isCall, S, leg.strike, T, 0.07, currentIV);
           }
 
-          if (balance > maxBalance) maxBalance = balance;
-          const drawdown = ((maxBalance - balance) / maxBalance) * 100;
-          if (drawdown > currentDrawdown) currentDrawdown = drawdown;
+          let exitTrade = false;
+          let pnlVal = 0;
+
+          if (activePosition.strategy === 'BUY_CE' || activePosition.strategy === 'BUY_PE') {
+            pnlVal = Math.round((currentLegValue - activePosition.entryCost) * lotSize);
+            // Check Stops/Targets
+            if (currentLegValue < activePosition.entryCost * 0.50) exitTrade = true; // -50% SL
+            else if (currentLegValue > activePosition.entryCost * 1.60) exitTrade = true; // +60% TP
+          } else {
+            // Net Credit Strategies (Bull Put Spread, Bear Call Spread, Iron Condor)
+            pnlVal = Math.round((activePosition.entryCost - currentLegValue) * lotSize);
+            // Check risk bounds
+            if (pnlVal < -1.5 * activePosition.entryCost * lotSize) exitTrade = true; // Max risk drawdown stop
+            else if (currentLegValue < activePosition.entryCost * 0.15) exitTrade = true; // 85% decay target
+          }
+
+          // Safety triggers: Expiry is close, maximum trade holding achieved, or signals model reversed
+          if (T <= 0.002) {
+            exitTrade = true;
+          } else if (i - activePosition.entryIndex >= 14) {
+            exitTrade = true; // Force exit after 14 ticks (~2 trading days) to roll capital
+          } else {
+            // Strategic Trend Reversal Filters
+            if ((activePosition.strategy === 'BUY_CE' || activePosition.strategy === 'BULL_PUT_SPREAD') && emaFast[i] < emaSlow[i]) {
+              exitTrade = true;
+            } else if ((activePosition.strategy === 'BUY_PE' || activePosition.strategy === 'BEAR_CALL_SPREAD') && emaFast[i] > emaSlow[i]) {
+              exitTrade = true;
+            }
+          }
+
+          if (exitTrade) {
+            balance += pnlVal;
+            const timestamp = new Date(candle.date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit' });
+
+            trades.push({
+              pnl: pnlVal,
+              balance,
+              timestamp,
+              type: pnlVal > 0 ? 'WIN' : 'LOSS',
+              strategy: activePosition.strategy
+            });
+
+            if (pnlVal > 0) {
+              wins++;
+              totalProfit += pnlVal;
+            } else {
+              losses++;
+              totalLoss += Math.abs(pnlVal);
+            }
+
+            if (balance > maxBalance) maxBalance = balance;
+            const drawdown = ((maxBalance - balance) / maxBalance) * 100;
+            if (drawdown > currentDrawdown) currentDrawdown = drawdown;
+
+            activePosition = null;
+          }
+        }
+
+        // 7. Check for New Entry Setup (if capital is free)
+        if (!activePosition) {
+          const bullTrend = emaFast[i-1] > emaSlow[i-1] && rsi[i-1] > 51;
+          const bearTrend = emaFast[i-1] < emaSlow[i-1] && rsi[i-1] < 49;
+          const rangeConsolidation = rsi[i-1] >= 48 && rsi[i-1] <= 52;
+
+          let triggeredStrategy: string | null = null;
+
+          // Align signals with selected Trading Strategy configuration
+          if (backtestStrategy === 'BUY_CE' && bullTrend) {
+            triggeredStrategy = 'BUY_CE';
+          } else if (backtestStrategy === 'BUY_PE' && bearTrend) {
+            triggeredStrategy = 'BUY_PE';
+          } else if (backtestStrategy === 'BULL_PUT_SPREAD' && bullTrend) {
+            triggeredStrategy = 'BULL_PUT_SPREAD';
+          } else if (backtestStrategy === 'BEAR_CALL_SPREAD' && bearTrend) {
+            triggeredStrategy = 'BEAR_CALL_SPREAD';
+          } else if (backtestStrategy === 'IRON_CONDOR' && rangeConsolidation) {
+            triggeredStrategy = 'IRON_CONDOR';
+          } else if (backtestStrategy === 'DYNAMIC') {
+            if (bullTrend) {
+              triggeredStrategy = currentIV > 0.16 ? 'BUY_CE' : 'BULL_PUT_SPREAD';
+            } else if (bearTrend) {
+              triggeredStrategy = currentIV > 0.16 ? 'BUY_PE' : 'BEAR_CALL_SPREAD';
+            } else if (rangeConsolidation) {
+              triggeredStrategy = 'IRON_CONDOR';
+            }
+          }
+
+          if (triggeredStrategy) {
+            const S = candle.close;
+            const K = Math.round(S / 50) * 50; 
+            let longLegs: { strike: number; isCall: boolean }[] = [];
+            let shortLegs: { strike: number; isCall: boolean }[] = [];
+            let entryCost = 0;
+
+            if (triggeredStrategy === 'BUY_CE') {
+              longLegs.push({ strike: K, isCall: true });
+              entryCost = calculateOptionPrice(true, S, K, T, 0.07, currentIV);
+            } else if (triggeredStrategy === 'BUY_PE') {
+              longLegs.push({ strike: K, isCall: false });
+              entryCost = calculateOptionPrice(false, S, K, T, 0.07, currentIV);
+            } else if (triggeredStrategy === 'BULL_PUT_SPREAD') {
+              shortLegs.push({ strike: K, isCall: false });
+              longLegs.push({ strike: K - 150, isCall: false });
+              entryCost = calculateOptionPrice(false, S, K, T, 0.07, currentIV) - calculateOptionPrice(false, S, K - 150, T, 0.07, currentIV);
+            } else if (triggeredStrategy === 'BEAR_CALL_SPREAD') {
+              shortLegs.push({ strike: K, isCall: true });
+              longLegs.push({ strike: K + 150, isCall: true });
+              entryCost = calculateOptionPrice(true, S, K, T, 0.07, currentIV) - calculateOptionPrice(true, S, K + 150, T, 0.07, currentIV);
+            } else if (triggeredStrategy === 'IRON_CONDOR') {
+              shortLegs.push({ strike: K + 100, isCall: true });
+              shortLegs.push({ strike: K - 100, isCall: false });
+              longLegs.push({ strike: K + 200, isCall: true });
+              longLegs.push({ strike: K - 200, isCall: false });
+
+              const callCredit = calculateOptionPrice(true, S, K + 100, T, 0.07, currentIV) - calculateOptionPrice(true, S, K + 200, T, 0.07, currentIV);
+              const putCredit = calculateOptionPrice(false, S, K - 100, T, 0.07, currentIV) - calculateOptionPrice(false, S, K - 200, T, 0.07, currentIV);
+              entryCost = callCredit + putCredit;
+            }
+
+            // Capital safety threshold check
+            if (entryCost > 0) {
+              activePosition = {
+                strategy: triggeredStrategy,
+                strike: K,
+                entryIndex: i,
+                entryCost: entryCost,
+                longLegs,
+                shortLegs
+              };
+            }
+          }
         }
 
         equityCurve.push({
@@ -1398,64 +1688,7 @@ export default function App() {
                 </div>
               </section>
 
-              {/* Gemini Predictor */}
-              <section className="terminal-card bg-blue-950/20 p-5 flex flex-col gap-3">
-                 <div className="flex justify-between items-center border-b border-blue-900/30 pb-2.5">
-                   <div className="flex items-center gap-2">
-                     <Zap className="w-3.5 h-3.5 text-blue-400" />
-                     <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">Gemini Predictive Scan</h3>
-                   </div>
-                   <button 
-                     onClick={handlePredict}
-                     disabled={isPredicting}
-                     className="p-1 hover:bg-blue-500/20 rounded transition-colors disabled:opacity-50 hover:text-blue-200 text-blue-400"
-                   >
-                     <Activity className={cn("w-3 h-3", isPredicting && "animate-pulse")} />
-                   </button>
-                 </div>
-
-                 {!prediction && !isPredicting ? (
-                   <div className="flex flex-col items-center justify-center p-4 bg-black/30 rounded-xl border border-blue-500/10 border-dashed">
-                      <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest text-center">
-                        Evaluate live tick-structures and open interest using server-side Gemini intelligence
-                      </p>
-                      <button 
-                        onClick={handlePredict}
-                        className="mt-2.5 px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded text-[9px] font-black text-blue-400 uppercase tracking-widest transition-all"
-                      >
-                        [ RUN SCAN ]
-                      </button>
-                   </div>
-                 ) : isPredicting ? (
-                   <div className="flex flex-col items-center justify-center p-6 bg-black/30 rounded-xl border border-blue-500/10">
-                      <motion.div 
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full mb-2"
-                      />
-                      <p className="text-[8px] font-bold text-blue-400 uppercase tracking-wider animate-pulse text-center">
-                        Interrogating options structures...
-                      </p>
-                   </div>
-                 ) : (
-                   <div className="space-y-3 p-1">
-                      <div className="flex justify-between items-center text-[10px]">
-                        <span className="font-extrabold text-blue-300 uppercase">Win Probability</span>
-                        <span className={cn(
-                          "font-black text-xs px-2 py-0.5 rounded",
-                          prediction.isBullish ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-                        )}>
-                           {(prediction.confidence * 100).toFixed(0)}% ({prediction.isBullish ? 'BULL' : 'BEAR'})
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-300 leading-relaxed font-mono bg-black/40 p-3 rounded-lg border border-white/5 max-h-36 overflow-y-auto custom-scrollbar">
-                        {prediction.aiLogic}
-                      </div>
-                   </div>
-                 )}
-              </section>
-
-               {/* Active Positions */}
+              {/* Active Positions */}
                {execution?.positions && execution.positions.length > 0 && (
                  <section className="terminal-card bg-emerald-600/[0.05] border-emerald-500/20 p-5 mt-4">
                     <div className="flex justify-between items-center mb-4">
@@ -1637,12 +1870,163 @@ export default function App() {
                          <span className="text-[8px] text-slate-500 font-bold uppercase">OI: {formatOi(insights.resistanceOi)}</span>
                        </div>
                      </div>
-                   </div>
-                )}
+                    </div>
+                 )}
 
-                <div className="overflow-x-auto">
+                          {/* Gemini AI Options Strategy Consultant Block */}
+                <div className="bg-slate-950/50 p-4 rounded-xl border border-white/5 space-y-3">
+                   <div className="flex justify-between items-center border-b border-white/[0.03] pb-2">
+                     <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-teal-400 animate-pulse" />
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-teal-400">Gemini Options AI Specialist</h4>
+                     </div>
+                     <button
+                        onClick={handleAnalyzeChain}
+                        disabled={isAnalyzingChain}
+                        className={cn(
+                          "px-3 py-1 bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/20 rounded text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-50",
+                          isAnalyzingChain ? "text-slate-400 border-white/10" : "text-teal-400 hover:text-teal-300"
+                        )}
+                     >
+                       {isAnalyzingChain ? "Analyzing Option Matrix..." : chainAnalysis ? "Re-evaluate Chain" : "Analyze Chain"}
+                     </button>
+                   </div>
+
+                   {isAnalyzingChain ? (
+                     <div className="py-6 flex flex-col items-center justify-center bg-black/40 rounded-lg border border-teal-500/10 gap-3">
+                        <motion.div 
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                          className="w-5 h-5 border-2 border-teal-500 border-t-transparent rounded-full"
+                        />
+                        <div className="text-center space-y-1">
+                          <p className="text-[9px] font-bold text-teal-400 uppercase tracking-widest animate-pulse">Running Institutional Chain Scan...</p>
+                          <p className="text-[7.5px] text-slate-500 uppercase font-mono font-medium">Extracting Greeks, open interest shifts & VIX regimes</p>
+                        </div>
+                     </div>
+                   ) : chainAnalysisError ? (
+                     <div className="p-3 bg-rose-500/[0.03] border border-rose-500/15 rounded-lg flex gap-3 items-start">
+                       <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                       <div className="space-y-1">
+                         <div className="text-[9px] font-black text-rose-400 uppercase tracking-wider">Analysis Synchronization Issue</div>
+                         <p className="text-[9px] text-slate-400 leading-relaxed font-medium">{chainAnalysisError}</p>
+                         <p className="text-[8px] text-slate-500 leading-relaxed font-mono font-bold">Configure GEMINI_API_KEY inside Settings > Secrets in the build center.</p>
+                       </div>
+                     </div>
+                   ) : !chainAnalysis ? (
+                     <div className="py-4 px-3 bg-black/20 rounded-lg border border-dashed border-white/5 flex flex-col items-center justify-center text-center">
+                       <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black text-center mb-2">ENGAGE GEMINI QUANT ADVISORY ENGINE</p>
+                       <p className="text-[8.5px] text-slate-500 leading-normal max-w-lg text-center font-medium">
+                         Let Gemini AI analyze the live Weekly Option Chain, PCR imbalances, support blocks, overhead resistance ceilings, and technical indicators to propose a structured manual options trading play.
+                       </p>
+                       <button
+                         onClick={handleAnalyzeChain}
+                         className="mt-3 px-4 py-1.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded text-[9px] font-black text-violet-300 uppercase tracking-widest tracking-[0.1em] transition-all"
+                       >
+                         [ RUN AI ANALYSIS ]
+                       </button>
+                     </div>
+                   ) : (
+                     <div className="space-y-3.5 antialiased">
+                       {/* High level bias indicators */}
+                       <div className="flex flex-wrap lg:flex-nowrap gap-3 justify-between items-center bg-black/40 p-3 rounded-lg border border-white/5">
+                         <div className="flex items-center gap-3">
+                           <div className="flex flex-col">
+                             <span className="text-[7.5px] text-slate-500 uppercase font-bold tracking-wider">MARKET BIAS SENTIMENT</span>
+                             <span className={cn(
+                               "text-xs font-black uppercase mt-0.5 tracking-wider font-mono",
+                               chainAnalysis.bias === 'BULLISH' ? "text-emerald-400" :
+                               chainAnalysis.bias === 'BEARISH' ? "text-rose-400" :
+                               chainAnalysis.bias === 'VOLATILE' ? "text-violet-400" :
+                               "text-blue-400"
+                             )}>
+                               {chainAnalysis.bias} DOMINANCE
+                             </span>
+                           </div>
+                           <div className="h-6 w-px bg-white/10" />
+                           <div className="flex flex-col">
+                             <span className="text-[7.5px] text-slate-500 uppercase font-bold tracking-wider">STRATEGY CONFIDENCE</span>
+                             <span className="text-xs font-black text-white mt-0.5 font-mono">
+                               {chainAnalysis.confidence}%
+                             </span>
+                           </div>
+                         </div>
+                         <div className="flex flex-col text-right lg:max-w-md">
+                           <span className="text-[7.5px] text-slate-500 uppercase font-bold tracking-wider">PROPOSED DERIVATIVE PLAY</span>
+                           <span className="text-xs font-black text-teal-400 mt-0.5 text-left lg:text-right font-mono uppercase">
+                             {chainAnalysis.suggestedStrategy}
+                           </span>
+                         </div>
+                       </div>
+
+                       {/* Analysis & Legs */}
+                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                         {/* Text analysis */}
+                         <div className="space-y-2">
+                           <div className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest">Advisory Commentary:</div>
+                           <p className="text-[10px] text-slate-300 leading-relaxed font-mono bg-slate-950 p-3 rounded-lg border border-white/5 h-28 overflow-y-auto custom-scrollbar">
+                             {chainAnalysis.marketAnalysis}
+                           </p>
+                         </div>
+
+                         {/* Trade Legs layout */}
+                         <div className="space-y-2">
+                           <div className="text-[8.5px] font-black text-slate-400 uppercase tracking-[0.1em]">RECOMMENDED LEGS SETUP (FOR MANUAL TRADE):</div>
+                           <div className="bg-slate-950 p-2 rounded-lg border border-white/5 h-28 overflow-y-auto custom-scrollbar flex flex-col gap-1.5">
+                             {chainAnalysis.legs && chainAnalysis.legs.length > 0 ? (
+                               chainAnalysis.legs.map((leg: any, idx: number) => (
+                                 <div key={idx} className="flex justify-between items-center bg-white/[0.02] hover:bg-white/[0.04] p-1.5 rounded border border-white/5 text-[9px] font-mono">
+                                   <div className="flex items-center gap-2">
+                                     <span className={cn(
+                                       "px-1 text-[8px] rounded font-black",
+                                       leg.action === 'BUY' ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
+                                     )}>
+                                       {leg.action}
+                                     </span>
+                                     <span className="text-white font-extrabold">{leg.strike}</span>
+                                     <span className={cn(
+                                       "font-black",
+                                       leg.optionType === 'CE' ? "text-rose-400" : "text-emerald-400"
+                                     )}>
+                                       {leg.optionType}
+                                     </span>
+                                   </div>
+                                   {leg.approxPremium !== undefined && (
+                                     <span className="text-slate-400">Approx Premium: <strong className="text-slate-200">₹{leg.approxPremium}</strong></span>
+                                   )}
+                                 </div>
+                               ))
+                             ) : (
+                               <div className="my-auto text-center text-[8px] text-slate-500 uppercase font-black tracking-wider">
+                                 No derivative legs generated for the setup.
+                               </div>
+                             )}
+                           </div>
+                         </div>
+                       </div>
+
+                       {/* Explicit execution rules */}
+                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-white/[0.03] text-[9.5px]">
+                          <div className="bg-slate-950/50 p-2.5 rounded border border-white/5 sm:col-span-1">
+                             <div className="text-[7.5px] text-slate-500 uppercase font-black mb-1">ENTRY TRIGGERS</div>
+                             <div className="font-mono text-slate-300 font-medium leading-relaxed">{chainAnalysis.entryRules}</div>
+                          </div>
+                          <div className="bg-slate-950/55 p-2.5 rounded border border-white/5">
+                             <div className="text-[7.5px] text-rose-400/80 uppercase font-black mb-1">STOP LOSS ANCHOR</div>
+                             <div className="font-mono text-rose-300 font-medium leading-relaxed">{chainAnalysis.stopLoss}</div>
+                          </div>
+                          <div className="bg-slate-950/55 p-2.5 rounded border border-white/5">
+                             <div className="text-[7.5px] text-emerald-400/80 uppercase font-black mb-1">TARGET TAKE-PROFIT</div>
+                             <div className="font-mono text-emerald-300 font-medium leading-relaxed">{chainAnalysis.target}</div>
+                          </div>
+                       </div>
+                     </div>
+                   )}
+                </div>
+
+                <div className="max-h-[500px] overflow-y-auto overflow-x-auto custom-scrollbar relative border border-white/5 rounded-lg bg-black/10">
                    <table className="w-full text-left border-collapse text-[10px]">
-                      <thead>
+                      <thead className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm self-start">
                         <tr className="border-b border-slate-800/80 text-[8px] font-black text-slate-500 uppercase tracking-widest text-center bg-black/20">
                           <th className="py-2.5 text-rose-400 border-r border-white/5" colSpan={4}>CALL OPTIONS (CE)</th>
                           <th className="py-2.5 text-white bg-white/5 font-black border-r border-white/5 border-l border-white/5 shrink-0 px-4">STRIKE</th>
@@ -1650,8 +2034,8 @@ export default function App() {
                         </tr>
                         <tr className="border-b border-white/5 text-[7px] font-extrabold text-slate-500 uppercase tracking-widest text-center bg-slate-900/25">
                           <th className="py-2 text-rose-400/70">Delta</th>
-                          <th className="py-2 text-rose-400/60">IV</th>
-                          <th className="py-2 text-rose-400/80">OI (Chg)</th>
+                          <th className="py-2 text-rose-400/60 font-medium">IV</th>
+                          <th className="py-2 text-rose-400/80 font-medium">OI (Chg)</th>
                           <th className="py-2 text-rose-400 font-black border-r border-white/5">CE Price</th>
                           <th className="py-2 text-blue-400 font-extrabold bg-blue-500/5 border-r border-white/5 border-l border-white/5">Strike</th>
                           <th className="py-2 text-emerald-400 font-black border-r border-white/5">PE Price</th>
@@ -2582,6 +2966,22 @@ export default function App() {
                         className="bg-transparent text-[10px] font-bold text-blue-400 outline-none cursor-pointer"
                      />
                   </div>
+                  <div className="w-px h-6 bg-white/10" />
+                  <div className="flex flex-col px-2 min-w-[140px]">
+                     <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Trading Strategy</span>
+                     <select 
+                        value={backtestStrategy}
+                        onChange={(e) => setBacktestStrategy(e.target.value)}
+                        className="bg-transparent text-[10px] font-bold text-blue-400 outline-none cursor-pointer appearance-none uppercase"
+                     >
+                        <option value="DYNAMIC" className="bg-slate-950 text-white">Dynamic (Smart)</option>
+                        <option value="BUY_CE" className="bg-slate-950 text-white">Naked CE Buy</option>
+                        <option value="BUY_PE" className="bg-slate-950 text-white">Naked PE Buy</option>
+                        <option value="BULL_PUT_SPREAD" className="bg-slate-950 text-white">Bull Put Spread</option>
+                        <option value="BEAR_CALL_SPREAD" className="bg-slate-950 text-white">Bear Call Spread</option>
+                        <option value="IRON_CONDOR" className="bg-slate-950 text-white">Iron Condor</option>
+                     </select>
+                  </div>
                   <button 
                     onClick={handleRunBacktest}
                     disabled={backtestStatus.loading}
@@ -3270,6 +3670,154 @@ export default function App() {
                            </div>
                         </div>
                      </div>
+
+                      {/* --- Strategy PnL Distribution Visualization Matrix --- */}
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                         <div className="lg:col-span-2 terminal-card p-6 flex flex-col gap-4">
+                            <div>
+                               <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                 <BarChart3 size={12} className="text-blue-400" />
+                                 Strategy PnL Distribution Matrix
+                               </h3>
+                               <p className="text-[9px] text-slate-500 font-bold uppercase mt-0.5">Cross-strategy comparison of absolute financial performance categorized by archetype</p>
+                            </div>
+                            
+                            <div className="h-72 pricing-chart mt-2">
+                               {strategies.some(s => s.count > 0) ? (
+                                  <ResponsiveContainer width="100%" height="100%">
+                                     <BarChart
+                                        data={strategies}
+                                        layout="vertical"
+                                        margin={{ top: 10, right: 30, left: 10, bottom: 5 }}
+                                     >
+                                        <XAxis 
+                                          type="number" 
+                                          stroke="#475569" 
+                                          fontSize={8} 
+                                          tickLine={false} 
+                                          tickFormatter={(v) => `₹${v}`} 
+                                        />
+                                        <YAxis 
+                                          dataKey="name" 
+                                          type="category" 
+                                          stroke="#e2e8f0" 
+                                          fontSize={8} 
+                                          tickLine={false} 
+                                          width={100}
+                                        />
+                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.02)" />
+                                        <Tooltip
+                                           contentStyle={{ background: '#0a0f1d', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '8px' }}
+                                           labelStyle={{ color: '#94a3b8', fontSize: '10px', fontWeight: 'bold' }}
+                                           itemStyle={{ fontSize: '11px' }}
+                                           formatter={(value: any) => [`₹${Number(value).toLocaleString('en-IN')}`, 'Aggregated Return']}
+                                        />
+                                        <Bar dataKey="pnl" radius={[0, 4, 4, 0]}>
+                                           {strategies.map((entry, index) => {
+                                              const isPositive = entry.pnl >= 0;
+                                              return (
+                                                 <Cell 
+                                                    key={`cell-${index}`} 
+                                                    fill={isPositive ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'}
+                                                    stroke={isPositive ? '#10b981' : '#ef4444'}
+                                                    strokeWidth={1}
+                                                 />
+                                              );
+                                           })}
+                                        </Bar>
+                                     </BarChart>
+                                  </ResponsiveContainer>
+                               ) : (
+                                  <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2 border border-dashed border-white/5 rounded-xl bg-black/20">
+                                     <Activity size={24} className="animate-pulse text-slate-500" />
+                                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Waiting for live trades to evaluate strategy distribution PnL...</p>
+                                  </div>
+                               )}
+                            </div>
+                         </div>
+
+                         {/* Right Sidebar: Strategic Intelligence Summary */}
+                         <div className="terminal-card p-6 flex flex-col gap-4">
+                            <div>
+                               <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                 <Brain size={12} className="text-amber-400" />
+                                 Profitability Intelligence
+                               </h3>
+                               <p className="text-[9px] text-slate-500 font-bold uppercase mt-0.5">Dynamic performance attribution insights derived from active setups</p>
+                            </div>
+
+                            {(() => {
+                               const activeStrats = strategies.filter(s => s.count > 0);
+                               const topStrat = activeStrats.length > 0 
+                                 ? activeStrats.reduce((best, curr) => curr.pnl > best.pnl ? curr : best, activeStrats[0]) 
+                                 : null;
+                               const highestWinrateStrat = activeStrats.length > 0 
+                                 ? activeStrats.reduce((best, curr) => curr.winRate > best.winRate ? curr : best, activeStrats[0]) 
+                                 : null;
+                               const mostTradedStrat = activeStrats.length > 0 
+                                 ? activeStrats.reduce((most, curr) => curr.count > most.count ? curr : most, activeStrats[0]) 
+                                 : null;
+
+                               return (
+                                  <div className="flex flex-col gap-4 flex-1 justify-center">
+                                     <div className="bg-black/20 border border-white/[0.02] rounded-lg p-3 flex flex-col gap-1.5 transition-all hover:bg-black/30">
+                                        <span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1">
+                                          <TrendingUp size={10} />
+                                          MOST PROFITABLE SETUP
+                                        </span>
+                                        <div className="flex justify-between items-center mt-0.5">
+                                           <span className="text-xs font-black text-white">{topStrat && topStrat.pnl > 0 ? topStrat.name : 'No profitable setup yet'}</span>
+                                           {topStrat && topStrat.pnl > 0 && (
+                                              <span className="text-[10px] font-mono font-black text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                                 ₹{topStrat.pnl.toLocaleString('en-IN')}
+                                              </span>
+                                           )}
+                                        </div>
+                                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-normal leading-relaxed">
+                                          This model strategy configuration is yielding the highest net financial returns in the current simulation session.
+                                        </p>
+                                     </div>
+
+                                     <div className="bg-black/20 border border-white/[0.02] rounded-lg p-3 flex flex-col gap-1.5 transition-all hover:bg-black/30">
+                                        <span className="text-[8px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-1">
+                                          <Zap size={10} />
+                                          HEURISTIC SUCCESS VELOCITY
+                                        </span>
+                                        <div className="flex justify-between items-center mt-0.5">
+                                           <span className="text-xs font-black text-white">{highestWinrateStrat ? highestWinrateStrat.name : 'N/A'}</span>
+                                           {highestWinrateStrat && (
+                                              <span className="text-[10px] font-mono font-black text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                                                 {highestWinrateStrat.winRate.toFixed(1)}% WR
+                                              </span>
+                                           )}
+                                        </div>
+                                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-normal leading-relaxed">
+                                          Highest percentage coefficient of winning outcomes based on chronological trade evaluations.
+                                        </p>
+                                     </div>
+
+                                     <div className="bg-black/20 border border-white/[0.02] rounded-lg p-3 flex flex-col gap-1.5 transition-all hover:bg-black/30">
+                                        <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest flex items-center gap-1">
+                                          <Cpu size={10} />
+                                          CORE UTILITY ARCHETYPE
+                                        </span>
+                                        <div className="flex justify-between items-center mt-0.5">
+                                           <span className="text-xs font-black text-white">{mostTradedStrat ? mostTradedStrat.name : 'N/A'}</span>
+                                           {mostTradedStrat && (
+                                              <span className="text-[10px] font-mono font-black text-slate-400 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                                 {mostTradedStrat.count} Trades
+                                              </span>
+                                           )}
+                                        </div>
+                                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-normal leading-relaxed">
+                                          Most recurrent execution architecture dispatched by the automated risk controller system.
+                                        </p>
+                                     </div>
+                                  </div>
+                               );
+                            })()}
+                         </div>
+                      </div>
 
                      {/* --- Standard Portfolio Category Matrix Summary --- */}
                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

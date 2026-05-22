@@ -989,6 +989,27 @@ async function startServer() {
     }
   });
 
+  apiRouter.post("/analyze-chain", async (req, res) => {
+    const { spot, vix, pcr, support, supportOi, resistance, resistanceOi, indicators, chainFocus } = req.body;
+    try {
+      const result = await aiEngine.analyzeOptionChain({
+        spot,
+        vix,
+        pcr,
+        support,
+        supportOi,
+        resistance,
+        resistanceOi,
+        indicators,
+        chainFocus
+      });
+      res.json(result);
+    } catch (e) {
+      console.error("[SERVER-AI] Option chain analysis failed:", e);
+      res.status(500).json({ error: "Option chain analysis failed" });
+    }
+  });
+
   apiRouter.get("/stock-intel/:symbol", async (req, res) => {
     const { symbol } = req.params;
     

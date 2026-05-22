@@ -19,9 +19,24 @@ class AIEngine {
   private cache: Map<string, { data: any, timestamp: number }> = new Map();
 
   constructor() {
-    if (config.GEMINI_API_KEY) {
-      this.ai = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
+    this.getClient();
+  }
+
+  private getClient(): GoogleGenAI | null {
+    if (this.ai) return this.ai;
+    const key = process.env.GEMINI_API_KEY || config.GEMINI_API_KEY;
+    if (key && key !== 'MY_GEMINI_API_KEY' && key.length > 10) {
+      this.ai = new GoogleGenAI({ 
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+      return this.ai;
     }
+    return null;
   }
 
   private getCached(key: string, ttlMs: number): any | null {
@@ -41,7 +56,8 @@ class AIEngine {
     const cached = this.getCached(cacheKey, 30000); // 30s cache for probability
     if (cached !== null) return cached;
 
-    if (!this.ai) {
+    const client = this.getClient();
+    if (!client) {
       return 0.5 + (Math.random() - 0.5) * 0.4;
     }
 
@@ -53,8 +69,8 @@ class AIEngine {
         Return ONLY a number between 0 and 1.
       `;
 
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
         contents: prompt,
       });
 
@@ -77,7 +93,8 @@ class AIEngine {
     const cached = this.getCached(cacheKey, 60000); // 1 min cache
     if (cached) return cached;
 
-    if (!this.ai) {
+    const client = this.getClient();
+    if (!client) {
       return {
         prediction: 'NEUTRAL',
         confidence: 0,
@@ -123,8 +140,8 @@ class AIEngine {
         }
       `;
 
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -179,7 +196,8 @@ class AIEngine {
       return cached;
     }
 
-    if (!this.ai) {
+    const client = this.getClient();
+    if (!client) {
       return {
         verdict: { bias: 'NEUTRAL', score: 50, reasoning: 'AI Offline (No API Key).', sl: 0, target: 0 },
         institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
@@ -219,8 +237,8 @@ class AIEngine {
 
     try {
       console.log(`[AI-STOCK] Analyzing ${stockContext.symbol}...`);
-      const response = await this.ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -283,6 +301,125 @@ class AIEngine {
           strategy: "Manual analysis recommended due to AI downtime."
         },
         institutionalActivity: { oiTrend: 'NEUTRAL', volatilityRegime: 'STABLE' }
+      };
+    }
+  }
+
+  async analyzeOptionChain(chainContext: any): Promise<any> {
+    const cacheKey = `chain_analysis_${chainContext.spot}_${chainContext.vix}`;
+    const cached = this.getCached(cacheKey, 20 * 1000); // 20s cache
+    if (cached) return cached;
+
+    const client = this.getClient();
+    if (!client) {
+      return {
+        bias: 'NEUTRAL',
+        confidence: 0,
+        marketAnalysis: "Option Chain AI analysis is currently offline (Check Settings > Secrets to provide GEMINI_API_KEY).",
+        suggestedStrategy: "Deterministic System Analysis",
+        legs: [],
+        entryRules: "No automated suggestions. Rely on spot price and standard Support/Resistance indicators.",
+        stopLoss: "Manual Setup",
+        target: "Manual Setup"
+      };
+    }
+
+    const pcrText = chainContext.pcr ? `Put-Call Ratio (PCR) is ${chainContext.pcr.toFixed(2)}.` : '';
+    const vixText = chainContext.vix ? `VIX value is ${chainContext.vix.toFixed(1)}% (volatility regulator).` : '';
+    const spotText = `NIFTY 50 Spot price is Index Level ₹${chainContext.spot.toFixed(1)}.`;
+
+    const prompt = `
+      You are a world-class Indian Index Options proprietary trader specializing in NIFTY 50 weekly derivatives structures.
+      Conduct a live quantitative analysis of the option chain table context and propose an optimal, high-probability manual F&O setup.
+      
+      Current Spot and Volatility Environment:
+      - ${spotText}
+      - ${vixText}
+      - ${pcrText}
+      - Support Levels: ₹${chainContext.support} (OI: ${chainContext.supportOi})
+      - Resistance Levels: ₹${chainContext.resistance} (OI: ${chainContext.resistanceOi})
+      - Technical indicators: RSI=${chainContext.indicators?.rsi?.toFixed(1) || '50'}, MACD=${chainContext.indicators?.macd?.bias || 'NEUTRAL'}
+      
+      Option Chain Segment (ATM strikes focus):
+      ${JSON.stringify(chainContext.chainFocus || [])}
+      
+      Requirements:
+      1. Interpret PCR, VIX conditions and option chain OI build-up around the ATM strike.
+      2. Suggest one distinct options trading setup: Naked Buy (CE/PE), Spread (Bull Put Spread / Bear Call Spread), or Range-Bound Play (Iron Condor) suited for MANUAL trade execution.
+      3. Supply exact option leg details including Action (BUY/SELL), Strike, Option Type (CE/PE).
+      4. Note explicit entry rules, stop-loss premium bounds, and target premium targets, ensuring they are practical for manual execution.
+
+      Return the result in the following JSON schema:
+      {
+        "bias": "BULLISH" | "BEARISH" | "NEUTRAL" | "VOLATILE",
+        "confidence": number (between 0 and 100),
+        "marketAnalysis": "A crisp, expert 2-sentence market analysis highlighting the active support/resistance blocks and key option concentration flows",
+        "suggestedStrategy": "The specific named options strategy tailored to the current regime",
+        "legs": [
+          {
+            "action": "BUY" | "SELL",
+            "strike": number,
+            "optionType": "CE" | "PE",
+            "approxPremium": number
+          }
+        ],
+        "entryRules": "Practical entry trigger criteria (e.g. wait for spot to cross ₹23750 or buy when underlying tests floor support)",
+        "stopLoss": "Pre-decided premium exit limit instructions",
+        "target": "Take profit premium benchmarks"
+      }
+    `;
+
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              bias: { type: Type.STRING, enum: ["BULLISH", "BEARISH", "NEUTRAL", "VOLATILE"] },
+              confidence: { type: Type.NUMBER },
+              marketAnalysis: { type: Type.STRING },
+              suggestedStrategy: { type: Type.STRING },
+              legs: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    action: { type: Type.STRING, enum: ["BUY", "SELL"] },
+                    strike: { type: Type.NUMBER },
+                    optionType: { type: Type.STRING, enum: ["CE", "PE"] },
+                    approxPremium: { type: Type.NUMBER }
+                  },
+                  required: ["action", "strike", "optionType"]
+                }
+              },
+              entryRules: { type: Type.STRING },
+              stopLoss: { type: Type.STRING },
+              target: { type: Type.STRING }
+            },
+            required: ["bias", "confidence", "marketAnalysis", "suggestedStrategy", "legs", "entryRules", "stopLoss", "target"]
+          }
+        }
+      });
+
+      const text = response.text;
+      if (!text) throw new Error("Empty chain analysis string");
+      const result = JSON.parse(text);
+      this.setCache(cacheKey, result);
+      return result;
+    } catch (e: any) {
+      console.error("[GEMINI] Chain Analysis Error:", e);
+      return {
+        bias: 'NEUTRAL',
+        confidence: 0,
+        marketAnalysis: `Failed to synthesize model response: ${e.message || 'Server timeout'}.`,
+        suggestedStrategy: "Conservative Holding",
+        legs: [],
+        entryRules: "Wait for the options block telemetry to align.",
+        stopLoss: "Rely on physical stop logs.",
+        target: "Observe PCR targets."
       };
     }
   }
