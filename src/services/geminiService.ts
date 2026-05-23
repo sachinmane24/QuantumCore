@@ -31,7 +31,7 @@ export async function getTradePrediction(
     
     return await res.json();
   } catch (error) {
-    console.error("[GEMINI-CLIENT] Prediction Request Error:", error);
+    console.error("[LOCAL-QUANT-CLIENT] Prediction Request Error:", error);
     return {
       prediction: 'NEUTRAL',
       confidence: 0,

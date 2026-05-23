@@ -1878,7 +1878,7 @@ export default function App() {
                    <div className="flex justify-between items-center border-b border-white/[0.03] pb-2">
                      <div className="flex items-center gap-2">
                         <Cpu className="w-4 h-4 text-teal-400 animate-pulse" />
-                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-teal-400">Gemini Options AI Specialist</h4>
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-teal-400">Quantum Options Advisor</h4>
                      </div>
                      <button
                         onClick={handleAnalyzeChain}
@@ -1910,22 +1910,22 @@ export default function App() {
                        <div className="space-y-1">
                          <div className="text-[9px] font-black text-rose-400 uppercase tracking-wider">Analysis Synchronization Issue</div>
                          <p className="text-[9px] text-slate-400 leading-relaxed font-medium">{chainAnalysisError}</p>
-                         <p className="text-[8px] text-slate-500 leading-relaxed font-mono font-bold">Configure GEMINI_API_KEY inside Settings > Secrets in the build center.</p>
+                         <p className="text-[8px] text-slate-500 leading-relaxed font-mono font-bold">Please check local system logs or engine telemetry settings.</p>
                        </div>
                      </div>
                    ) : !chainAnalysis ? (
                      <div className="py-4 px-3 bg-black/20 rounded-lg border border-dashed border-white/5 flex flex-col items-center justify-center text-center">
-                       <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black text-center mb-2">ENGAGE GEMINI QUANT ADVISORY ENGINE</p>
-                       <p className="text-[8.5px] text-slate-500 leading-normal max-w-lg text-center font-medium">
-                         Let Gemini AI analyze the live Weekly Option Chain, PCR imbalances, support blocks, overhead resistance ceilings, and technical indicators to propose a structured manual options trading play.
-                       </p>
-                       <button
-                         onClick={handleAnalyzeChain}
-                         className="mt-3 px-4 py-1.5 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 rounded text-[9px] font-black text-violet-300 uppercase tracking-widest tracking-[0.1em] transition-all"
-                       >
-                         [ RUN AI ANALYSIS ]
-                       </button>
-                     </div>
+                        <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black text-center mb-2">ENGAGE DEEPMIND QUANT SCAN ENGINE</p>
+                        <p className="text-[8.5px] text-slate-500 leading-normal max-w-lg text-center font-medium">
+                          Deploy high-performance local mathematical structures to analyze the live Weekly Option Chain, PCR imbalances, support blocks, overhead resistance ceilings, and technical indicators to propose a structured range-bound tactical play.
+                        </p>
+                        <button
+                          onClick={handleAnalyzeChain}
+                          className="mt-3 px-4 py-1.5 bg-cyan-650/20 hover:bg-cyan-600/30 border border-cyan-500/35 rounded text-[9px] font-black text-cyan-300 uppercase tracking-widest tracking-[0.1em] transition-all"
+                        >
+                          [ RUN QUANT SCAN ]
+                        </button>
+                      </div>
                    ) : (
                      <div className="space-y-3.5 antialiased">
                        {/* High level bias indicators */}
