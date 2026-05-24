@@ -47,7 +47,13 @@ export default function App() {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [kiteStatus, setKiteStatus] = useState<{ connected: boolean; hasConfig: boolean; error?: string | null }>({ connected: false, hasConfig: false });
+  const [kiteStatus, setKiteStatus] = useState<{
+    connected: boolean;
+    hasConfig: boolean;
+    tickerConnected?: boolean;
+    tickerCachedTicksCount?: number;
+    error?: string | null;
+  }>({ connected: false, hasConfig: false });
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
@@ -1516,6 +1522,19 @@ export default function App() {
             <div className="flex items-center gap-2 px-4 py-1.5 rounded bg-emerald-600/10 border border-emerald-600/30 text-emerald-500 text-[9px] font-black tracking-widest uppercase">
               <ShieldCheck className="w-3 h-3" />
               Kite Active
+            </div>
+          )}
+          {kiteStatus.connected && (
+            <div className={cn(
+              "flex items-center gap-2 px-4 py-1.5 rounded text-[9px] font-black tracking-widest uppercase border",
+              kiteStatus.tickerConnected 
+                ? "bg-emerald-600/10 border-emerald-500/30 text-emerald-400" 
+                : "bg-amber-600/10 border-amber-600/30 text-amber-500 animate-pulse"
+            )}>
+              <Zap className={cn("w-3 h-3", kiteStatus.tickerConnected && "text-emerald-400 fill-emerald-400 animate-bounce")} />
+              {kiteStatus.tickerConnected 
+                ? `WS Online` 
+                : "WS Connecting..."}
             </div>
           )}
           <div className="flex items-center gap-3 p-1 pl-3 bg-slate-900/50 border border-terminal-line rounded-lg">

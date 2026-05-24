@@ -9,7 +9,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { KiteConnect } from "kiteconnect";
+import { KiteConnect, KiteTicker } from "kiteconnect";
 import { marketEngine } from "./src/engine/market.ts";
 import { strategyEngine } from "./src/engine/strategy.ts";
 import { executionEngine } from "./src/engine/execution.ts";
@@ -121,6 +121,20 @@ async function startServer() {
   let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
   let baselineOIMap = new Map<string, number>();
 
+  // Kite Ticker and real-time WebSocket state
+  let tickerInstance: any = null;
+  let tickerConnected = false;
+  const liveTicksCache = new Map<number, any>();
+  const tokenToSymbolMap = new Map<number, string>();
+  const symbolToTokenMap = new Map<string, number>();
+  let lastSubscribedTokens: number[] = [];
+
+  // Prepopulate index and VIX tokens
+  tokenToSymbolMap.set(256265, "NSE:NIFTY 50");
+  symbolToTokenMap.set("NSE:NIFTY 50", 256265);
+  tokenToSymbolMap.set(264969, "NSE:INDIA VIX");
+  symbolToTokenMap.set("NSE:INDIA VIX", 264969);
+
   // Basic Middlewares
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json({ limit: '10mb' }));
@@ -219,6 +233,9 @@ async function startServer() {
       // Trigger background instrument refresh
       refreshNfoCache().catch(e => console.error("Post-auth instrument fetch failed", e));
 
+      // Spawn WebSocket ticker for real-time sub-second updates!
+      initKiteTicker();
+
       res.send(`
         <html>
           <body style="background: #070b14; color: #3b82f6; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 20px;">
@@ -288,6 +305,18 @@ async function startServer() {
           
           niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
           console.log(`[SYSTEM] NIFTY Cache Updated: ${niftyInstruments.length} strikes for ${selectedExpiry}`);
+
+          // Hydrate the WebSocket token maps for options
+          for (const ins of niftyInstruments) {
+            const fullSymbol = `NFO:${ins.tradingsymbol}`;
+            tokenToSymbolMap.set(Number(ins.instrument_token), fullSymbol);
+            symbolToTokenMap.set(fullSymbol, Number(ins.instrument_token));
+          }
+          
+          // Re-subscribe if we have active WebSocket
+          if (tickerConnected) {
+             subscribeToMarketTokens();
+          }
         }
       } catch (e) {
         console.error("[SYSTEM] NFO cache refresh failed:", e);
@@ -340,6 +369,132 @@ async function startServer() {
       return futureOptions;
     }
 
+    // --- START REAL-TIME WEBSOCKET TICKER IMPLEMENTATION ---
+    function getQuoteFromTick(tick: any) {
+      if (!tick) return null;
+      const open = tick.ohlc?.open || 0;
+      const close = tick.ohlc?.close || 0;
+      const lastPrice = tick.last_price || 0;
+      const netChange = tick.change !== undefined ? (lastPrice - close) : (tick.net_change || 0);
+
+      return {
+        instrument_token: tick.instrument_token,
+        last_price: lastPrice,
+        volume: tick.volume_traded !== undefined ? tick.volume_traded : (tick.volume || 0),
+        oi: tick.oi || 0,
+        oi_day_high: tick.oi_day_high || 0,
+        oi_day_low: tick.oi_day_low || 0,
+        ohlc: tick.ohlc || { open, high: tick.ohlc?.high || lastPrice, low: tick.ohlc?.low || lastPrice, close },
+        net_change: netChange,
+        change: tick.change || 0
+      };
+    }
+
+    function subscribeToMarketTokens() {
+      if (!tickerInstance || !tickerConnected) return;
+
+      const tokens = new Set<number>([256265, 264969]);
+
+      if (niftyInstruments && niftyInstruments.length > 0) {
+        const currentSpot = marketEngine.getSpotPrice();
+        const atmStrike = currentSpot > 0 ? Math.round(currentSpot / 50) * 50 : 24300;
+        
+        for (let i = -7; i <= 7; i++) {
+          const strike = atmStrike + (i * 50);
+          const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+          const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
+          if (ce && ce.instrument_token) tokens.add(Number(ce.instrument_token));
+          if (pe && pe.instrument_token) tokens.add(Number(pe.instrument_token));
+        }
+      }
+
+      const tokenList = Array.from(tokens).filter(token => !isNaN(token) && token > 0).sort((a,b) => a - b);
+      
+      const hasChanged = tokenList.length !== lastSubscribedTokens.length || 
+                        tokenList.some((t, idx) => t !== lastSubscribedTokens[idx]);
+
+      if (!hasChanged) return;
+
+      try {
+        const unsubscribeList = lastSubscribedTokens.filter(t => !tokens.has(t));
+        if (unsubscribeList.length > 0) {
+          tickerInstance.unsubscribe(unsubscribeList);
+        }
+
+        console.log(`[TICKER] Subscribing to ${tokenList.length} instruments (Full mode)...`);
+        tickerInstance.subscribe(tokenList);
+        tickerInstance.setMode(tickerInstance.modeFull, tokenList);
+        
+        lastSubscribedTokens = tokenList;
+      } catch (err) {
+        console.error("[TICKER] Subscription failed:", err);
+      }
+    }
+
+    function initKiteTicker() {
+      if (!apiKey || !accessToken) {
+        console.log("[TICKER] Cannot initialize Websocket: apiKey or accessToken is missing");
+        return;
+      }
+
+      if (tickerInstance) {
+        console.log("[TICKER] Existing ticker found, disconnecting first.");
+        try {
+          tickerInstance.disconnect();
+        } catch (e) {}
+        tickerInstance = null;
+      }
+
+      console.log("[TICKER] Spawning real-time Kite Ticker WebSocket connection...");
+      tickerConnected = false;
+
+      tickerInstance = new KiteTicker({
+        api_key: apiKey,
+        access_token: accessToken
+      });
+
+      tickerInstance.autoReconnect(true, 20, 5);
+
+      tickerInstance.on("connect", () => {
+        tickerConnected = true;
+        console.log("[TICKER] WebSocket connected successfully! Real-time streaming ACTIVE.");
+        subscribeToMarketTokens();
+      });
+
+      tickerInstance.on("ticks", (ticks: any[]) => {
+        if (ticks && ticks.length > 0) {
+          for (const tick of ticks) {
+            liveTicksCache.set(Number(tick.instrument_token), tick);
+          }
+        }
+      });
+
+      tickerInstance.on("disconnect", (error: any) => {
+        tickerConnected = false;
+        console.warn("[TICKER] WebSocket disconnected. Reason:", error);
+      });
+
+      tickerInstance.on("reconnecting", (interval: number, times: number) => {
+        console.log(`[TICKER] WebSocket reconnecting (attempt ${times}, interval ${interval}ms)...`);
+      });
+
+      tickerInstance.on("noreconnect", () => {
+        tickerConnected = false;
+        console.error("[TICKER] WebSocket connection failed permanently. No more automatic reconnect retries.");
+      });
+
+      tickerInstance.on("error", (err: any) => {
+        console.error("[TICKER] WebSocket error encountered:", err);
+      });
+
+      try {
+        tickerInstance.connect();
+      } catch (err) {
+        console.error("[TICKER] Execution of WebSockets connection failed:", err);
+      }
+    }
+    // --- END REAL-TIME WEBSOCKET TICKER IMPLEMENTATION ---
+
     // Background Trading Loop
     let isSyncing = false;
     let liveFailureCount = 0;
@@ -390,14 +545,58 @@ async function startServer() {
             }
           }
 
-          const fetchSymbols = [...symbols, ...optionSymbols];
-          const quotes = await kiteInstance.getQuote(fetchSymbols);
-          lastRawQuotes = quotes;
-          lastFetchTimestamp = new Date().toISOString();
-          lastFetchError = null;
-          liveFailureCount = 0; // Reset on success
+          // Re-subscribe when ATM strike moves or new options are tracked
+          if (tickerConnected) {
+            subscribeToMarketTokens();
+          }
+
+          let quotes: any = null;
+          let loadedFromWebsocket = false;
+
+          if (tickerConnected && liveTicksCache.has(256265)) {
+            const wsQuotes: any = {};
+            const spotTick = liveTicksCache.get(256265);
+            wsQuotes["NSE:NIFTY 50"] = getQuoteFromTick(spotTick);
+
+            const vixTick = liveTicksCache.get(264969);
+            if (vixTick) {
+              wsQuotes["NSE:INDIA VIX"] = getQuoteFromTick(vixTick);
+            }
+
+            let optionTicksCount = 0;
+            for (const sym of optionSymbols) {
+              const cleanedSym = sym.startsWith("NFO:") ? sym.substring(4) : sym;
+              const ins = niftyInstruments.find(i => i.tradingsymbol === cleanedSym);
+              if (ins && ins.instrument_token) {
+                const tick = liveTicksCache.get(Number(ins.instrument_token));
+                if (tick) {
+                  wsQuotes[sym] = getQuoteFromTick(tick);
+                  optionTicksCount++;
+                }
+              }
+            }
+
+            // We proceed with WebSocket quotes if Nifty 50 spot tick is present
+            if (wsQuotes["NSE:NIFTY 50"]) {
+              quotes = wsQuotes;
+              loadedFromWebsocket = true;
+              lastRawQuotes = quotes;
+              lastFetchTimestamp = new Date().toISOString();
+              lastFetchError = null;
+              liveFailureCount = 0;
+            }
+          }
+
+          if (!loadedFromWebsocket) {
+            const fetchSymbols = [...symbols, ...optionSymbols];
+            quotes = await kiteInstance.getQuote(fetchSymbols);
+            lastRawQuotes = quotes;
+            lastFetchTimestamp = new Date().toISOString();
+            lastFetchError = null;
+            liveFailureCount = 0; // Reset on success
+          }
           
-          if (quotes["NSE:NIFTY 50"]) {
+          if (quotes && quotes["NSE:NIFTY 50"]) {
             const spotQuote = quotes["NSE:NIFTY 50"];
             const spot = spotQuote.last_price;
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
@@ -611,6 +810,9 @@ async function startServer() {
     res.json({
       loggedIn: !!accessToken,
       dataSource: config.DATA_SOURCE,
+      tickerConnected: tickerConnected,
+      tickerCachedTicksCount: liveTicksCache.size,
+      lastSubscribedTokensCount: lastSubscribedTokens.length,
       nfoCacheSize: nfoCache.length,
       lastNfoRefresh: new Date(lastNfoRefresh).toISOString(),
       niftyInstrumentsCount: niftyInstruments.length,
@@ -649,7 +851,9 @@ async function startServer() {
   apiRouter.get("/kite/status", (req, res) => {
     res.json({ 
       connected: !!accessToken,
-      hasConfig: !!(apiKey && apiSecret)
+      hasConfig: !!(apiKey && apiSecret),
+      tickerConnected: tickerConnected,
+      tickerCachedTicksCount: liveTicksCache.size
     });
   });
 
@@ -1354,6 +1558,9 @@ async function startServer() {
             setDataMode('LIVE');
             marketEngine.syncMode();
             console.log("[SYSTEM] Background: Kite session restored.");
+            
+            // Initialize Kite Ticker WebSocket connection
+            initKiteTicker();
           }
       }
       loadRiskConfig();
