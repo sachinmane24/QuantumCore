@@ -1242,7 +1242,7 @@ export default function App() {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-x-auto overflow-y-hidden custom-scrollbar">
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-auto overflow-y-auto custom-scrollbar">
          <div className="flex-grow flex flex-col min-w-[1240px]">
            {/* --- TOP SUMMARY BAR --- */}
         <div className="bg-black/60 border-b border-white/5 py-1.5 px-8 flex justify-between items-center text-[9px] font-black uppercase tracking-[0.15em] text-slate-400 shrink-0">
@@ -2169,7 +2169,7 @@ export default function App() {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="flex-1 p-6 overflow-hidden flex flex-col gap-6"
+            className="flex-1 p-6 overflow-y-auto flex flex-col gap-6"
           >
             <div className="flex justify-between items-end">
                <div>
@@ -2770,7 +2770,7 @@ export default function App() {
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            className="flex-1 p-6 overflow-hidden flex flex-col gap-6"
+            className="flex-1 p-6 overflow-y-auto flex flex-col gap-6"
           >
             <div className="flex justify-between items-end">
                <div>
@@ -3235,7 +3235,7 @@ export default function App() {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="flex-1 p-8 overflow-hidden flex flex-col gap-6"
+            className="flex-1 p-8 overflow-y-auto flex flex-col gap-6"
           >
             <div className="flex justify-between items-end">
                <div>
