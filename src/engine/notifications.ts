@@ -1,9 +1,37 @@
 import { config } from './config';
 
 export class NotificationService {
+  private static isMarketClosed(): boolean {
+    const holidays = [
+      "2026-01-26", "2026-03-08", "2026-03-25", "2026-03-29", "2026-04-11",
+      "2026-04-17", "2026-05-01", "2026-06-17", "2026-07-17", "2026-08-15",
+      "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
+    ];
+    
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    const day = istTime.getUTCDay();
+    const hours = istTime.getUTCHours();
+    const minutes = istTime.getUTCMinutes();
+    const currentTimeMinutes = hours * 60 + minutes;
+    
+    const today = istTime.toISOString().split('T')[0];
+    const isWeekend = day === 0 || day === 6;
+    const isHoliday = holidays.includes(today);
+    const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
+    
+    return isWeekend || isHoliday || isOffMarketHours;
+  }
+
   private static async sendTelegram(message: string) {
     if (!config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) {
       console.log('[NOTIFY] Telegram not configured. Message:', message);
+      return;
+    }
+
+    if (this.isMarketClosed()) {
+      console.log('[NOTIFY] Telegram message blocked because market is closed (weekend, holiday, or off-market hours):', message.replace(/<[^>]*>/g, '').substring(0, 100) + '...');
       return;
     }
 
