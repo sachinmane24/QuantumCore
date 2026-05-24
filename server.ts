@@ -18,6 +18,7 @@ import { aiEngine } from "./src/engine/aiModel.ts";
 import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
 import { savePersistentData, loadPersistentData } from "./src/engine/persistence.ts";
+import { NotificationService } from "./src/engine/notifications.ts";
 import fs from "fs-extra";
 
 const KITE_STORE = path.join(process.cwd(), "kite_session.json");
@@ -783,6 +784,50 @@ async function startServer() {
     updateConfig(req.body);
     await saveRiskConfig(req.body);
     res.json({ success: true, config });
+  });
+
+  apiRouter.post("/test-telegram", async (req, res) => {
+    const { token, chatId } = req.body;
+    const botToken = token || config.TELEGRAM_BOT_TOKEN;
+    const cid = chatId || config.TELEGRAM_CHAT_ID;
+
+    if (!botToken || !cid) {
+      return res.status(400).json({ error: "Telegram Bot Token and Chat ID are required." });
+    }
+
+    try {
+      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: cid,
+          text: `⚡ <b>QUANTUM CORE TEST</b>\n\nYour Telegram Channel / Chat has been successfully connected! Current System Status: <b>ONLINE</b>\n\nLocal Server Time: <code>${new Date().toISOString()}</code>`,
+          parse_mode: "HTML"
+        })
+      });
+
+      const resJson = await response.json();
+      if (!response.ok) {
+        return res.status(400).json({
+          success: false,
+          status: response.status,
+          error: resJson.description || "Telegram API error",
+          response: resJson
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Test message sent successfully!",
+        response: resJson
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message || "Failed to contact Telegram API"
+      });
+    }
   });
 
   apiRouter.post("/toggle-data-mode", async (req, res) => {

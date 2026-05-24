@@ -450,9 +450,11 @@ class ExecutionEngine {
     NotificationService.notifyTradeEntry({
       symbol: config.TRADING_SYMBOL,
       strategyMode: score.mode,
+      strategyType: score.strategyType,
       bias: bias,
       entrySpot: spot,
-      status: 'OPEN'
+      status: 'OPEN',
+      params: derivation
     });
 
     await tradeLogger.logAudit({
@@ -924,7 +926,10 @@ class ExecutionEngine {
     NotificationService.notifyTradeExit({
       symbol: config.TRADING_SYMBOL,
       pnl: this.pnl,
-      entryTimestamp: this.currentEntryTime
+      entryTimestamp: this.currentEntryTime,
+      entrySpot: this.currentSpotAtEntry,
+      strategyType: this.lastTradeScore?.strategyType || "N/A",
+      params: this.currentTradeParams
     }, reason);
 
     this.activePositions = [];

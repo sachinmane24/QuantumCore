@@ -225,6 +225,97 @@ export default function App() {
     data: any | null;
   }>({ loading: false, error: null, success: false, data: null });
 
+  // Telegram Integration State
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramSaveStatus, setTelegramSaveStatus] = useState<{
+    success: boolean | null;
+    message?: string | null;
+  }>({ success: null });
+  const [telegramTestStatus, setTelegramTestStatus] = useState<{
+    loading: boolean;
+    success: boolean | null;
+    error?: string | null;
+    message?: string | null;
+  }>({ loading: false, success: null });
+
+  useEffect(() => {
+    if (appConfig) {
+      if (appConfig.TELEGRAM_BOT_TOKEN) setTelegramToken(appConfig.TELEGRAM_BOT_TOKEN);
+      if (appConfig.TELEGRAM_CHAT_ID) setTelegramChatId(appConfig.TELEGRAM_CHAT_ID);
+    }
+  }, [appConfig]);
+
+  const handleSaveTelegramConfig = async () => {
+    setTelegramSaveStatus({ success: null });
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...appConfig,
+          TELEGRAM_BOT_TOKEN: telegramToken,
+          TELEGRAM_CHAT_ID: telegramChatId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAppConfig(data.config);
+        setTelegramSaveStatus({
+          success: true,
+          message: "Telegram configuration saved successfully!"
+        });
+        setTimeout(() => setTelegramSaveStatus({ success: null }), 4000);
+      } else {
+        setTelegramSaveStatus({
+          success: false,
+          message: "Failed to persist configuration to server database."
+        });
+      }
+    } catch (e: any) {
+      console.error("Failed to save Telegram config:", e);
+      setTelegramSaveStatus({
+        success: false,
+        message: e?.message || "Failed to save configuration."
+      });
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setTelegramTestStatus({ loading: true, success: null, error: null, message: null });
+    try {
+      const res = await fetch('/api/test-telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: telegramToken,
+          chatId: telegramChatId
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTelegramTestStatus({
+          loading: false,
+          success: true,
+          message: data.message || "Test message transmitted successfully! Check Telegram."
+        });
+      } else {
+        setTelegramTestStatus({
+          loading: false,
+          success: false,
+          error: data.error || "Telegram service returned validation failure.",
+          message: data.response ? JSON.stringify(data.response) : null
+        });
+      }
+    } catch (e: any) {
+      setTelegramTestStatus({
+        loading: false,
+        success: false,
+        error: e.message || "Network request failed to contact Gateway."
+      });
+    }
+  };
+
   // Data Fetching
   useEffect(() => {
     const fetchKiteStatus = async (retryCount = 0) => {
@@ -4103,6 +4194,105 @@ export default function App() {
                         </div>
                       )}
                    </div>
+                </div>
+             </section>
+              <section className="terminal-card p-8 space-y-6 mt-6">
+                <div className="flex items-center gap-4 border-b border-terminal-line pb-6">
+                   <div className="w-12 h-12 bg-blue-600/10 rounded-xl flex items-center justify-center border border-blue-500/20">
+                      <Bell className="text-blue-500 w-6 h-6" />
+                   </div>
+                   <div>
+                      <h4 className="text-sm font-black text-white uppercase tracking-widest">Telegram Notification Gateway</h4>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Status: Real-time Outbound Dispatcher</p>
+                   </div>
+                </div>
+
+                <div className="space-y-6">
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex flex-col gap-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Telegram Bot Token</label>
+                         <input 
+                            type="password"
+                            value={telegramToken}
+                            onChange={(e) => setTelegramToken(e.target.value)}
+                            placeholder="Enter Telegram Bot Token (e.g. 123456:ABC...)"
+                            className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-xs font-mono text-blue-400 outline-none focus:border-blue-500/50 transition-all"
+                         />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Telegram Chat ID / Channel ID</label>
+                         <input 
+                            type="text"
+                            value={telegramChatId}
+                            onChange={(e) => setTelegramChatId(e.target.value)}
+                            placeholder="Enter Chat ID or @channel (e.g. -10012345678)"
+                            className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-xs font-mono text-blue-400 outline-none focus:border-blue-500/50 transition-all"
+                         />
+                      </div>
+                   </div>
+
+                   {/* Save Status Banner */}
+                   {telegramSaveStatus.success !== null && (
+                      <div className={cn(
+                        "p-3.5 rounded-lg border text-[9px] font-black uppercase tracking-widest flex items-center gap-2",
+                        telegramSaveStatus.success ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                      )}>
+                         <Info className="w-3 h-3 shrink-0" />
+                         <span>{telegramSaveStatus.message}</span>
+                      </div>
+                   )}
+
+                   {/* Test Status Banner */}
+                   {telegramTestStatus.success !== null && (
+                      <div className={cn(
+                        "p-4 rounded-lg border text-[9.5px] font-bold flex flex-col gap-1.5",
+                        telegramTestStatus.success ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                      )}>
+                         <div className="flex items-center gap-2 uppercase tracking-wider font-black text-[10px]">
+                            <Info className="w-3.5 h-3.5 shrink-0" />
+                            <span>{telegramTestStatus.success ? "Dispatch Succeeded!" : "Dispatch Rejected (Error Details)"}</span>
+                         </div>
+                         <p className="font-mono text-[8.5px] font-semibold text-slate-400 leading-relaxed bg-black/50 p-2 rounded border border-white/5 break-all">
+                            {telegramTestStatus.success ? telegramTestStatus.message : telegramTestStatus.error}
+                            {telegramTestStatus.message && !telegramTestStatus.success && (
+                              <span className="block mt-1 font-mono text-[8px] text-slate-500">
+                                Raw API response: {telegramTestStatus.message}
+                              </span>
+                            )}
+                         </p>
+                      </div>
+                   )}
+
+                   <div className="flex flex-col md:flex-row gap-3 pt-2">
+                      <button 
+                         onClick={handleSaveTelegramConfig}
+                         className="flex-1 py-3 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-400 font-black rounded-lg uppercase tracking-widest text-[9px] transition-all"
+                      >
+                         Save & Apply Settings
+                      </button>
+                      <button 
+                         onClick={handleTestTelegram}
+                         disabled={telegramTestStatus.loading}
+                         className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed border border-white/10 text-slate-200 font-black rounded-lg uppercase tracking-widest text-[9px] transition-all flex items-center justify-center gap-2"
+                      >
+                         {telegramTestStatus.loading ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-slate-400 border-t-white rounded-full animate-spin" />
+                              <span>Dispatching Test...</span>
+                            </>
+                         ) : (
+                            <span>Send Live Test Alert</span>
+                         )}
+                      </button>
+                   </div>
+
+                   <p className="text-[9px] text-slate-500 leading-relaxed font-bold uppercase tracking-wider bg-black/20 p-4 border border-white/5 rounded-xl">
+                      ⚙️ <b>IMPORTANT STEPS FOR TELEGRAM NOTIFICATION SETUP</b>:<br />
+                      1. Talk to @BotFather on Telegram to create a Bot and copy the <b>Bot Token</b>.<br />
+                      2. Add the Bot as an Admin (or Member) to your Telegram Group/Channel, or start a Direct Message conversation with your bot.<br />
+                      3. Send a message to the bot (e.g. <code>/start</code>) or text anything in the chat so that the chat exists.<br />
+                      4. Enter your exact <b>Chat ID</b> (tip: forward any channel message to @userinfobot or use online ID tools) and click <b>Send Live Test Alert</b>!
+                   </p>
                 </div>
              </section>
           </motion.main>
