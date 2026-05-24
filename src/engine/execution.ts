@@ -79,6 +79,20 @@ class ExecutionEngine {
   private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
+    // Market Closed Protection: Prohibit executing any live trades when the market is closed
+    if (config.DATA_SOURCE === 'LIVE' && marketEngine.isMarketClosed()) {
+      const reason = "Live market is closed (Weekend, Holiday, or Off-Market Hours)";
+      if (isManual) {
+        throw new Error(`Execution Blocked: ${reason}`);
+      } else {
+        if (!this.lastTradeSuppression || this.lastTradeSuppression.reason !== reason) {
+          console.log(`[EXECUTION] Auto Entry Suppressed: ${reason}`);
+        }
+        this.lastTradeSuppression = { reason, timestamp: Date.now() };
+        return;
+      }
+    }
+
     // Entry Cooldown: 2 minute break between trades for Auto-Mode only
     if (!isManual) {
       const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;

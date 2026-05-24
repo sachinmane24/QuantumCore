@@ -972,9 +972,9 @@ async function startServer() {
     try {
       await executionEngine.executeTrade(bias, true);
       res.json({ status: "success" });
-    } catch (err) {
+    } catch (err: any) {
       console.error("[API] Manual Execution failed:", err);
-      res.status(500).json({ error: "Execution failed" });
+      res.status(400).json({ error: err?.message || "Execution failed" });
     }
   });
 

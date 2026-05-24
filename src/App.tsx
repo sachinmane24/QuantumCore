@@ -650,7 +650,7 @@ export default function App() {
       // 3. Execution Simulation Parameters
       const initialBalance = 200000;
       let balance = initialBalance;
-      const lotSize = 50; 
+      const lotSize = 65; 
       let trades: any[] = [];
       let equityCurve: any[] = [];
       let currentDrawdown = 0;
@@ -754,7 +754,12 @@ export default function App() {
               balance,
               timestamp,
               type: pnlVal > 0 ? 'WIN' : 'LOSS',
-              strategy: activePosition.strategy
+              strategy: activePosition.strategy,
+              entrySpot: candles[activePosition.entryIndex].close,
+              exitSpot: S,
+              entryPremium: Math.round(activePosition.entryCost * 10) / 10,
+              exitPremium: Math.round(currentLegValue * 10) / 10,
+              strike: activePosition.strike
             });
 
             if (pnlVal > 0) {
@@ -875,6 +880,7 @@ export default function App() {
         data: {
           ...result,
           equityCurve,
+          trades,
           stats: {
             winRate: winRate.toFixed(1) + '%',
             rr: `1:${avgRR.toFixed(1)}`,
@@ -2939,7 +2945,7 @@ export default function App() {
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            className="flex-1 p-8 overflow-hidden flex flex-col gap-6"
+            className="flex-1 p-8 overflow-y-auto flex flex-col gap-6"
           >
             <div className="flex justify-between items-end">
                <div>
@@ -3038,7 +3044,7 @@ export default function App() {
                ))}
             </div>
 
-            <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
+            <div className="grid grid-cols-12 gap-4 h-[500px] shrink-0">
                <div className="col-span-8 flex flex-col gap-4">
                   <div className="terminal-card p-6 flex flex-col flex-1">
                      <div className="flex justify-between items-center mb-6">
@@ -3162,6 +3168,66 @@ export default function App() {
                   </div>
                </div>
             </div>
+
+            {backtestStatus.success && backtestStatus.data?.trades && backtestStatus.data.trades.length > 0 && (
+              <div className="terminal-card p-6 flex flex-col gap-4 mt-2">
+                 <div className="flex justify-between items-center border-b border-white/5 pb-3">
+                    <div>
+                       <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-400">Backtest Trade Ledger</h3>
+                       <p className="text-[8px] text-slate-500 font-bold uppercase mt-0.5">Diagnostic historical simulation trade execution log</p>
+                    </div>
+                    <span className="text-[8px] font-black uppercase tracking-widest bg-blue-500/10 text-blue-400 px-2 py-1 rounded">
+                       {backtestStatus.data.trades.length} Trades Executed
+                    </span>
+                 </div>
+                 <div className="overflow-x-auto">
+                    <div className="max-h-[350px] overflow-y-auto pr-1">
+                       <table className="w-full text-left border-collapse">
+                          <thead>
+                             <tr className="border-b border-white/[0.03] text-[8px] font-black text-slate-500 uppercase tracking-widest">
+                                <th className="py-2.5 px-3">Date/Time (IST)</th>
+                                <th className="py-2.5 px-3">Option Strategy</th>
+                                <th className="py-2.5 px-3 text-right">Atm Strike</th>
+                                <th className="py-2.5 px-3 text-right">Entry Spot</th>
+                                <th className="py-2.5 px-3 text-right">Exit Spot</th>
+                                <th className="py-2.5 px-3 text-right">Entry Premium</th>
+                                <th className="py-2.5 px-3 text-right">Exit Premium</th>
+                                <th className="py-2.5 px-3 text-right">PnL (₹)</th>
+                             </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/[0.02]">
+                             {backtestStatus.data.trades.slice().reverse().map((trade: any, idx: number) => (
+                                <tr key={idx} className="hover:bg-white/[0.01] transition-all text-[9.5px] font-bold">
+                                   <td className="py-2.5 px-3 font-mono text-slate-400 text-[8.5px]">{trade.timestamp}</td>
+                                   <td className="py-2.5 px-3">
+                                      <span className={cn(
+                                         "px-1.5 py-0.5 rounded-[3px] text-[7.5px] font-black tracking-wider border",
+                                         trade.strategy === 'IRON_CONDOR' ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
+                                         trade.strategy.startsWith('BUY_CE') || trade.strategy.startsWith('BULL') ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                         "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                                      )}>
+                                         {trade.strategy.replace(/_/g, ' ')}
+                                       </span>
+                                   </td>
+                                   <td className="py-2.5 px-3 text-right font-mono text-slate-300">₹{trade.strike}</td>
+                                   <td className="py-2.5 px-3 text-right font-mono text-slate-400">₹{trade.entrySpot?.toFixed(1) || '--'}</td>
+                                   <td className="py-2.5 px-3 text-right font-mono text-slate-400">₹{trade.exitSpot?.toFixed(1) || '--'}</td>
+                                   <td className="py-2.5 px-3 text-right font-mono text-slate-300">₹{trade.entryPremium?.toFixed(1) || '0.0'}</td>
+                                   <td className="py-2.5 px-3 text-right font-mono text-slate-300">₹{trade.exitPremium?.toFixed(1) || '0.0'}</td>
+                                   <td className={cn(
+                                      "py-2.5 px-3 text-right font-mono text-[10px] font-black",
+                                      trade.pnl >= 0 ? "text-emerald-400" : "text-rose-400"
+                                   )}>
+                                      {trade.pnl >= 0 ? '+' : ''}₹{trade.pnl.toLocaleString('en-IN')}
+                                   </td>
+                                </tr>
+                             ))}
+                          </tbody>
+                       </table>
+                    </div>
+                 </div>
+              </div>
+            )}
           </motion.main>
         ) : activeTab === 'history' ? (
           <motion.main 
