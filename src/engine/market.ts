@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config } from './config.ts';
+import { config, getActiveSpec } from './config.ts';
 import type { OptionChainData } from './types.ts';
 
 export interface Tick {
@@ -317,10 +317,10 @@ class MarketEngine {
   }
 
   private generateChain(spot: number): OptionChainData[] {
-    const atmStrike = Math.round(spot / 50) * 50;
+    const atmStrike = Math.round(spot / config.STRIKE_STEP) * config.STRIKE_STEP;
     const chain: OptionChainData[] = [];
     for (let i = -5; i <= 5; i++) {
-      const strike = atmStrike + (i * 50);
+      const strike = atmStrike + (i * config.STRIKE_STEP);
       const ce_iv = 12 + Math.random() * 4;
       const pe_iv = 13 + Math.random() * 4;
       chain.push({
@@ -348,8 +348,10 @@ class MarketEngine {
 
   private startMockData() {
     // Initial Gap for testing
-    this.yesterdayClose = 24300;
-    this.todayOpen = 24350; // +50 pts gap (~0.2%)
+    // Baseline derived from the active symbol so SENSEX mock starts at ~78k, not 24k.
+    const baseline = getActiveSpec().mockBaseline;
+    this.yesterdayClose = baseline;
+    this.todayOpen = baseline + Math.round(baseline * 0.002 / config.STRIKE_STEP) * config.STRIKE_STEP; // ~0.2% gap, snapped to step
     this.spotPrice = this.todayOpen;
     this.vwap = this.spotPrice;
 
@@ -357,7 +359,7 @@ class MarketEngine {
     this.priceHistory = [];
     let simPrice = this.yesterdayClose;
     for (let i = 0; i < 80; i++) {
-      simPrice += (Math.random() - 0.49) * 4; // micro-oscillations
+      simPrice += (Math.random() - 0.49) * 4 * getActiveSpec().pointScale; // micro-oscillations, scaled by index
       this.priceHistory.push(simPrice);
     }
     // Set current price history endpoint
@@ -374,7 +376,7 @@ class MarketEngine {
       }
 
       // Mock spot price movement with slight momentum/drift
-      const change = (Math.random() - 0.495) * 6;
+      const change = (Math.random() - 0.495) * 6 * getActiveSpec().pointScale;
       this.spotPrice += change;
       
       // Update VWAP (simple moving weighted average mock)
@@ -386,7 +388,7 @@ class MarketEngine {
       const mockTick: Tick = {
         tradable: true,
         mode: 'full',
-        instrument_token: 256265, // NIFTY
+        instrument_token: getActiveSpec().spotToken,
         last_price: this.spotPrice,
         last_quantity: Math.floor(Math.random() * 500),
         average_price: this.spotPrice - 2,
@@ -407,8 +409,11 @@ class MarketEngine {
     }, 1000);
   }
 
-  getLatestTick(token: number = 256265): Tick | undefined {
-    return this.ticks.get(token);
+  // Default to the active symbol's spot token so callers don't need to know
+  // which index is current.
+  getLatestTick(token?: number): Tick | undefined {
+    const t = token ?? getActiveSpec().spotToken;
+    return this.ticks.get(t);
   }
 
   getSpotPrice(): number {
@@ -416,7 +421,9 @@ class MarketEngine {
   }
 
   getVix(): number {
-    return this.ticks.get(264969)?.last_price || 12.42; // Token for INDIA VIX is 264969
+    const vt = getActiveSpec().vixToken;
+    if (vt === null) return 12.42;
+    return this.ticks.get(vt)?.last_price || 12.42;
   }
 
   getPCR(): number {
@@ -585,20 +592,22 @@ class MarketEngine {
       }
     }
     
-    // Update VIX tick if provided
-    if (vix) {
-      if (this.ticks.get(264969)) {
-        const prevVix = this.ticks.get(264969)!.last_price;
+    // Update VIX tick if provided (token from the active symbol's spec — INDIA VIX
+    // for all currently-supported indices since neither SENSEX nor BANKNIFTY has its
+    // own VIX index).
+    const spec = getActiveSpec();
+    if (vix && spec.vixToken !== null) {
+      const vxToken = spec.vixToken;
+      if (this.ticks.get(vxToken)) {
+        const prevVix = this.ticks.get(vxToken)!.last_price;
         if (prevVix > 0) {
-           // We can calculate a session delta if we want, but usually VIX % change is from prev close.
-           // However, if we don't have prev close, we just show 0 or calculate from first tick.
            this.vixDelta = ((vix - prevVix) / prevVix) * 100;
         }
       }
       const vixTick: Tick = {
         tradable: true,
         mode: 'full',
-        instrument_token: 264969,
+        instrument_token: vxToken,
         last_price: vix,
         last_quantity: 0,
         average_price: vix,
@@ -612,14 +621,14 @@ class MarketEngine {
         oi_day_low: 0,
         timestamp: new Date()
       };
-      this.ticks.set(264969, vixTick);
+      this.ticks.set(vxToken, vixTick);
     }
-    
-    // Also update NIFTY tick
+
+    // Spot tick for the active symbol.
     const tick: Tick = {
       tradable: true,
       mode: 'full',
-      instrument_token: 256265,
+      instrument_token: spec.spotToken,
       last_price: spotPrice,
       last_quantity: 0,
       average_price: spotPrice,
@@ -633,7 +642,7 @@ class MarketEngine {
       oi_day_low: 0,
       timestamp: new Date()
     };
-    this.ticks.set(256265, tick);
+    this.ticks.set(spec.spotToken, tick);
   }
 }
 

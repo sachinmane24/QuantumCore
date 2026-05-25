@@ -77,6 +77,13 @@ export default function App() {
   const [isFlattening, setIsFlattening] = useState(false);
   const [pendingExecute, setPendingExecute] = useState<{ bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' } | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [showSymbolPicker, setShowSymbolPicker] = useState(false);
+  const [symbolSwitchError, setSymbolSwitchError] = useState<string | null>(null);
+  // Active-symbol-derived constants — every place that used to hardcode 50 or NIFTY
+  // reads these instead.
+  const activeSymbol: 'NIFTY' | 'SENSEX' = (execution as any)?.activeSymbol || 'NIFTY';
+  const activeSpec: any = (execution as any)?.activeSpec || { strikeStep: 50, lotSize: 75, displayName: 'Nifty 50', key: 'NIFTY' };
+  const strikeStep: number = activeSpec.strikeStep || 50;
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -119,7 +126,7 @@ export default function App() {
     setChainAnalysisError(null);
     try {
       const spot = market.spot || 22000;
-      const spotStrike = Math.round(spot / 50) * 50;
+      const spotStrike = Math.round(spot / strikeStep) * strikeStep;
       const sorted = market.chain ? [...market.chain].sort((a, b) => a.strike - b.strike) : [];
       const chainFocus = sorted
         .filter(c => Math.abs(c.strike - spotStrike) <= 250)
@@ -1147,7 +1154,7 @@ export default function App() {
 
           if (triggeredStrategy) {
             const S = candle.close;
-            const K = Math.round(S / 50) * 50; 
+            const K = Math.round(S / strikeStep) * strikeStep;
             let longLegs: { strike: number; isCall: boolean }[] = [];
             let shortLegs: { strike: number; isCall: boolean }[] = [];
             let entryCost = 0;
@@ -1647,8 +1654,8 @@ export default function App() {
                     animate={{ opacity: 1 }}
                     className="text-emerald-400 font-bold"
                   >
-                    ₹{((market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.ce_price || 0) + 
-                       (market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/50)*50)?.pe_price || 0))?.toFixed(1) || '---'}
+                    ₹{((market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/strikeStep)*strikeStep)?.ce_price || 0) + 
+                       (market?.chain?.find(c => c.strike === Math.round((market?.spot || 0)/strikeStep)*strikeStep)?.pe_price || 0))?.toFixed(1) || '---'}
                   </motion.span>
                 </div>
               </div>
@@ -1706,7 +1713,7 @@ export default function App() {
           <div className="hidden lg:flex space-x-10 items-center">
             <div className="flex flex-col">
               <span className="terminal-label !mb-0.5 flex items-center gap-2">
-                Nifty 50 Spot
+                {activeSpec.displayName || 'Nifty 50'} Spot
                 {execution?.dataSource === 'LIVE' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               </span>
               <div className="terminal-value text-lg">
@@ -1828,6 +1835,78 @@ export default function App() {
                 : "WS Connecting..."}
             </div>
           )}
+          {/* Symbol picker — disabled while positions are open (server-side enforced too) */}
+          <div className="relative">
+            <button
+              onClick={() => setShowSymbolPicker(v => !v)}
+              disabled={(execution?.positions?.length ?? 0) > 0}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded border text-[10px] font-black tracking-[0.1em] uppercase transition-all",
+                activeSymbol === 'NIFTY'
+                  ? "bg-blue-500/10 border-blue-500/30 text-blue-300 hover:bg-blue-500/20"
+                  : "bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20",
+                (execution?.positions?.length ?? 0) > 0 && "opacity-50 cursor-not-allowed"
+              )}
+              title={(execution?.positions?.length ?? 0) > 0 ? "Flatten positions to switch symbol" : "Switch active index"}
+            >
+              <Layers className="w-3 h-3" />
+              <span>{activeSymbol}</span>
+              <span className="text-slate-500 text-[8px]">▾</span>
+            </button>
+            {showSymbolPicker && (
+              <div className="absolute right-0 top-full mt-1 z-50 bg-[#0b0f19] border border-white/10 rounded-lg shadow-2xl overflow-hidden min-w-[200px]">
+                {(['NIFTY', 'SENSEX'] as const).map(sym => {
+                  const isActive = sym === activeSymbol;
+                  return (
+                    <button
+                      key={sym}
+                      onClick={async () => {
+                        setShowSymbolPicker(false);
+                        setSymbolSwitchError(null);
+                        if (isActive) return;
+                        try {
+                          const res = await fetch('/api/active-symbol', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ symbol: sym })
+                          });
+                          const j = await res.json();
+                          if (!res.ok) {
+                            setSymbolSwitchError(j?.reason || 'Switch failed');
+                            setTimeout(() => setSymbolSwitchError(null), 6000);
+                          } else {
+                            await fetchData('fast');
+                          }
+                        } catch (e) {
+                          setSymbolSwitchError('Network error switching symbol');
+                          setTimeout(() => setSymbolSwitchError(null), 6000);
+                        }
+                      }}
+                      className={cn(
+                        "w-full text-left px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-between",
+                        isActive ? "bg-blue-600/20 text-blue-300" : "text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      <span>{sym}</span>
+                      <span className="text-[8px] text-slate-500">
+                        {sym === 'NIFTY' ? 'NSE · lot 75 · step 50' : 'BSE · lot 20 · step 100'}
+                      </span>
+                    </button>
+                  );
+                })}
+                {execution?.dataSource === 'LIVE' && (
+                  <div className="px-3 py-2 text-[8px] text-amber-400/80 font-bold uppercase tracking-widest bg-amber-500/5 border-t border-amber-500/15">
+                    LIVE: only NIFTY wired. SENSEX live coming soon — use MOCK to test.
+                  </div>
+                )}
+              </div>
+            )}
+            {symbolSwitchError && (
+              <div className="absolute right-0 top-full mt-1 z-40 bg-rose-500/95 text-white text-[9px] font-bold uppercase tracking-widest px-3 py-1.5 rounded shadow-xl border border-rose-300/30 max-w-[300px]">
+                {symbolSwitchError}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-3 p-1 pl-3 bg-slate-900/50 border border-terminal-line rounded-lg">
             <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Data:</span>
             <div 
@@ -1914,7 +1993,7 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <h2 className="text-sm font-black uppercase tracking-wider text-white">NIFTY 50 COGNITIVE COCKPIT</h2>
+                  <h2 className="text-sm font-black uppercase tracking-wider text-white">{(activeSpec.displayName || 'Nifty 50').toUpperCase()} COGNITIVE COCKPIT</h2>
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">Real-time Parameters & Market Structure Analytics</p>
               </div>
@@ -2258,7 +2337,7 @@ export default function App() {
                       <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((strategy?.score?.trendScore || 0) / 25) * 100}%` }} />
                     </div>
                     <div className="flex justify-between text-[8px] text-slate-400 font-bold uppercase">
-                      <span>Proximity: {Math.abs((market?.spot || 0) - Math.round((market?.spot || 0)/50)*50).toFixed(1)} pts</span>
+                      <span>Proximity: {Math.abs((market?.spot || 0) - Math.round((market?.spot || 0)/strikeStep)*strikeStep).toFixed(1)} pts</span>
                       <span>Trend Bias: Cleared</span>
                     </div>
                   </div>
@@ -2653,7 +2732,7 @@ export default function App() {
                       <tbody className="divide-y divide-white/[0.02]">
                         {(() => {
                           const spot = market?.spot || 22000;
-                          const spotStrike = Math.round(spot / 50) * 50;
+                          const spotStrike = Math.round(spot / strikeStep) * strikeStep;
                           const displayedStrikes = [...(market?.chain || [])]
                             .sort((a: any, b: any) => b.strike - a.strike);
 
@@ -3381,7 +3460,7 @@ export default function App() {
                   <div className="terminal-card px-4 py-2 border-blue-500/20">
                      <span className="terminal-label !mb-0 text-[8px]">ATM Strike</span>
                      <div className="terminal-value text-lg text-blue-400">
-                        {market?.spot ? Math.round(market.spot / 50) * 50 : '----'}
+                        {market?.spot ? Math.round(market.spot / strikeStep) * strikeStep : '----'}
                      </div>
                   </div>
                   <div className="terminal-card px-4 py-2">
@@ -3425,7 +3504,7 @@ export default function App() {
                       <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">Max Pain (Est)</span>
                       <div className="flex items-baseline gap-1.5">
                          <span className="text-base font-black text-blue-400">
-                            {market?.maxPain ? market.maxPain : (market?.spot ? Math.round(market.spot / 50) * 50 : '----')}
+                            {market?.maxPain ? market.maxPain : (market?.spot ? Math.round(market.spot / strikeStep) * strikeStep : '----')}
                          </span>
                       </div>
                    </div>
@@ -3464,7 +3543,7 @@ export default function App() {
                     </thead>
                     <tbody className="divide-y divide-white/[0.02]">
                       {(market?.chain || []).map((c) => {
-                        const isAtm = c.strike === Math.round((market?.spot || 0) / 50) * 50;
+                        const isAtm = c.strike === Math.round((market?.spot || 0) / strikeStep) * strikeStep;
                         const isResistance = c.strike === market?.maxOi?.ce?.strike;
                         const isSupport = c.strike === market?.maxOi?.pe?.strike;
                         const biasNum = (c.pe_oi_change - c.ce_oi_change);
@@ -3921,7 +4000,7 @@ export default function App() {
                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                                     <div className="flex flex-col">
                                        <span className="text-[7px] text-slate-500 uppercase font-black">Strike</span>
-                                       <span className="text-[10px] text-white font-mono">{log.strike || Math.round((log.spot || 0)/50)*50 || '---'}</span>
+                                       <span className="text-[10px] text-white font-mono">{log.strike || Math.round((log.spot || 0)/strikeStep)*strikeStep || '---'}</span>
                                     </div>
                                     <div className="flex flex-col">
                                        <span className="text-[7px] text-slate-500 uppercase font-black">RR Ratio</span>
@@ -5011,7 +5090,7 @@ export default function App() {
                   <span className="text-slate-200 font-mono">
                     ₹{(market?.spot || 0).toFixed(1)}
                     <span className="text-slate-500 mx-1">·</span>
-                    ₹{(Math.round((market?.spot || 0) / 50) * 50).toLocaleString('en-IN')}
+                    ₹{(Math.round((market?.spot || 0) / strikeStep) * strikeStep).toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="flex justify-between text-[10px]">
