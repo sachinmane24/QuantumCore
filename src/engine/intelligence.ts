@@ -186,21 +186,22 @@ class IntelligenceEngine {
     peakPnL: number,
     params: TradeParams
   ): number {
-    // Stage 1: Move to Break-even once 30% target reached
-    if (currentPnL >= params.targetRupees * 0.30) {
-      // Lock at least 15% of target once 30% hit
-      const floor = params.targetRupees * 0.15;
-      return Math.max(-params.stopLossRupees, floor);
+    // Use peakPnL to ladder up — never give back a locked level even if PnL retraces.
+    const reference = Math.max(currentPnL, peakPnL);
+
+    // Stage 3: Lock 70% once 90% of target was touched
+    if (reference >= params.targetRupees * 0.90) {
+      return params.targetRupees * 0.70;
     }
 
-    // Stage 2: Move to 40% lock once 60% target reached
-    if (currentPnL >= params.targetRupees * 0.60) {
+    // Stage 2: Lock 40% once 60% of target was touched
+    if (reference >= params.targetRupees * 0.60) {
       return params.targetRupees * 0.40;
     }
 
-    // Stage 3: Move to 70% lock once 90% target reached
-    if (currentPnL >= params.targetRupees * 0.90) {
-        return params.targetRupees * 0.70;
+    // Stage 1: Lock 15% (above break-even) once 30% of target was touched
+    if (reference >= params.targetRupees * 0.30) {
+      return params.targetRupees * 0.15;
     }
 
     return -params.stopLossRupees;

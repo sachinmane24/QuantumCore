@@ -73,6 +73,10 @@ export default function App() {
     color: 'emerald' | 'rose' | 'blue';
   } | null>(null);
   const prevPositionsRef = React.useRef<any[] | null>(null);
+  const [showFlattenConfirm, setShowFlattenConfirm] = useState(false);
+  const [isFlattening, setIsFlattening] = useState(false);
+  const [pendingExecute, setPendingExecute] = useState<{ bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' } | null>(null);
+  const [isExecuting, setIsExecuting] = useState(false);
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -221,6 +225,33 @@ export default function App() {
   }, [isLoggedIn]);
 
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  // Independent 1s heartbeat so the staleness badge keeps ticking even when polling stalls.
+  const [uiClock, setUiClock] = useState<number>(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setUiClock(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Global keyboard shortcut: K = open Flatten-All confirm (only when positions are open
+  // and we're not typing in an input). Escape closes the confirm modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const inEditable = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
+      if (inEditable) return;
+      if (e.key === 'Escape') {
+        if (showFlattenConfirm) { setShowFlattenConfirm(false); return; }
+        if (pendingExecute) { setPendingExecute(null); return; }
+      }
+      if ((e.key === 'k' || e.key === 'K') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if ((execution?.positions?.length ?? 0) > 0) {
+          setShowFlattenConfirm(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [execution?.positions?.length, showFlattenConfirm, pendingExecute]);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
   
@@ -464,7 +495,29 @@ export default function App() {
 
   const strategyRef = React.useRef<StrategyData | null>(null);
 
-  // Data Fetching
+  // Data Fetching — per-request timeout + allSettled so one slow endpoint
+  // doesn't freeze the whole polling chain.
+  const fetchWithTimeout = useCallback(async (url: string, timeoutMs: number) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) return null;
+      return await res.json();
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        console.error(`Network error fetching ${url}:`, e);
+      } else {
+        console.warn(`[POLL] Timeout (${timeoutMs}ms) fetching ${url}`);
+      }
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }, []);
+
   const fetchData = useCallback(async (type: 'fast' | 'slow' = 'fast') => {
     if (!isLoggedIn) return;
     try {
@@ -479,21 +532,10 @@ export default function App() {
       ];
 
       const endpoints = type === 'fast' ? fastEndpoints : slowEndpoints;
+      const timeoutMs = type === 'fast' ? 6000 : 12000;
 
-      const results = await Promise.all(endpoints.map(async (url) => {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const contentType = res.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-              return await res.json();
-            }
-          }
-        } catch (e) {
-          console.error(`Network error fetching ${url}:`, e);
-        }
-        return null;
-      }));
+      const settled = await Promise.allSettled(endpoints.map(url => fetchWithTimeout(url, timeoutMs)));
+      const results = settled.map(s => s.status === 'fulfilled' ? s.value : null);
       
       if (type === 'fast') {
         const [marketData, executionData, strategyData] = results;
@@ -530,17 +572,20 @@ export default function App() {
         if (marketInfoData) setMarketInfo(marketInfoData);
       }
 
-      // Fetch config once
-      if (!appConfig) {
-        fetch('/api/config').then(r => r.json()).then(setAppConfig);
-      }
-      
-      setLastSync(new Date());
+      // Mark sync only when at least one endpoint returned data this cycle
+      const anyOk = results.some(r => r !== null);
+      if (anyOk) setLastSync(new Date());
       setLoading(false);
     } catch (err) {
       console.error("Fetch Data Critical Error:", err);
     }
-  }, [isLoggedIn, appConfig]);
+  }, [isLoggedIn, fetchWithTimeout]);
+
+  // Config — fetched once, independent of polling so it doesn't recreate fetchData
+  useEffect(() => {
+    if (!isLoggedIn || appConfig) return;
+    fetchWithTimeout('/api/config', 6000).then(cfg => { if (cfg) setAppConfig(cfg); });
+  }, [isLoggedIn, appConfig, fetchWithTimeout]);
 
   // Native Terminal Chime Synthesizer via Web Audio API
   const playSynthSound = useCallback((type: 'ENTRY' | 'EXIT' | 'ROLL') => {
@@ -679,17 +724,23 @@ export default function App() {
 
     const pollFast = async () => {
       if (!isActive) return;
-      await fetchData('fast');
-      if (isActive) {
-        fastTimer = setTimeout(pollFast, 1500);
+      try {
+        await fetchData('fast');
+      } catch (e) {
+        console.error('[POLL] fast cycle threw, will retry:', e);
+      } finally {
+        if (isActive) fastTimer = setTimeout(pollFast, 1500);
       }
     };
 
     const pollSlow = async () => {
       if (!isActive) return;
-      await fetchData('slow');
-      if (isActive) {
-        slowTimer = setTimeout(pollSlow, 15000);
+      try {
+        await fetchData('slow');
+      } catch (e) {
+        console.error('[POLL] slow cycle threw, will retry:', e);
+      } finally {
+        if (isActive) slowTimer = setTimeout(pollSlow, 15000);
       }
     };
 
@@ -704,16 +755,52 @@ export default function App() {
     };
   }, [fetchData, isLoggedIn]);
 
+  // Manual-execute path:
+  //  - In LIVE mode (real broker), open a confirm modal showing exactly what's about
+  //    to be sent (structure, legs, SL, target). One stray click should never fire
+  //    real-money orders.
+  //  - In PAPER / MOCK, fire immediately as before.
   const handleExecute = async (bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
-    await fetch('/api/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bias })
-    });
+    if (execution?.executionMode === 'LIVE') {
+      setPendingExecute({ bias });
+      return;
+    }
+    await submitExecute(bias);
+  };
+
+  const submitExecute = async (bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
+    setIsExecuting(true);
+    try {
+      await fetch('/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bias })
+      });
+      await fetchData('fast');
+    } catch (e) {
+      console.error("[EXECUTE] failed:", e);
+    } finally {
+      setIsExecuting(false);
+      setPendingExecute(null);
+    }
   };
 
   const handleExit = async () => {
     await fetch('/api/exit', { method: 'POST' });
+  };
+
+  const handleFlattenAll = async () => {
+    setIsFlattening(true);
+    try {
+      await fetch('/api/exit', { method: 'POST' });
+      // Force an immediate refresh so the user sees positions cleared right away.
+      await fetchData('fast');
+    } catch (e) {
+      console.error("[FLATTEN] failed:", e);
+    } finally {
+      setIsFlattening(false);
+      setShowFlattenConfirm(false);
+    }
   };
 
   const handleToggleDataMode = async (targetMode?: 'MOCK' | 'LIVE') => {
@@ -1439,6 +1526,7 @@ export default function App() {
         <nav className="flex flex-col gap-6">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
+            { id: 'options', icon: Layers, label: 'Chain' },
             { id: 'risk', icon: ShieldAlert, label: 'Risk' },
             { id: 'analytics', icon: TrendingUp, label: 'Analytics' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
@@ -1518,23 +1606,37 @@ export default function App() {
             <div className="flex items-center gap-metric">
               <div className="flex items-center gap-2">
                  <span className="text-slate-500">SYNC</span>
-                 <div className="flex items-center gap-1 group bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
-                    <motion.div 
-                      key={lastSync?.getTime()}
-                      initial={{ scale: 2, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      className={cn(
-                        "w-1.5 h-1.5 rounded-full transition-all duration-300",
-                        loading ? "bg-slate-700" : "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]"
-                      )} 
-                    />
-                    <span className={cn(
-                      "text-[8px] font-mono transition-colors",
-                      lastSync && (new Date().getTime() - lastSync.getTime() < 3000) ? "text-emerald-400" : "text-amber-400/50"
-                    )}>
-                      {market?.error ? 'FAIL' : (lastSync ? `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s` : 'OFFLINE')}
-                    </span>
-                 </div>
+                 {(() => {
+                    const ageMs = lastSync ? uiClock - lastSync.getTime() : Infinity;
+                    const fresh = ageMs < 3000;
+                    const stale = ageMs >= 3000 && ageMs < 8000;
+                    const frozen = ageMs >= 8000;
+                    return (
+                      <div className={cn(
+                        "flex items-center gap-1 group px-2 py-0.5 rounded-full border",
+                        frozen ? "bg-rose-500/20 border-rose-500/40 animate-pulse" : "bg-white/5 border-white/5"
+                      )}>
+                        <motion.div
+                          key={lastSync?.getTime()}
+                          initial={{ scale: 2, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className={cn(
+                            "w-1.5 h-1.5 rounded-full transition-all duration-300",
+                            loading ? "bg-slate-700" :
+                              fresh ? "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" :
+                              stale ? "bg-amber-400" :
+                              "bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]"
+                          )}
+                        />
+                        <span className={cn(
+                          "text-[8px] font-mono transition-colors",
+                          fresh ? "text-emerald-400" : stale ? "text-amber-400" : "text-rose-400 font-bold"
+                        )}>
+                          {market?.error ? 'FAIL' : !lastSync ? 'OFFLINE' : frozen ? `FROZEN ${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 1000)}s`}
+                        </span>
+                      </div>
+                    );
+                 })()}
               </div>
               <div className="hidden md:flex gap-10">
                  <div className="flex items-center gap-2">
@@ -1551,10 +1653,45 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500">IV Rank / Percentile</span>
-              <span className="text-purple-400">42 / 68%</span>
-            </div>
+            {(() => {
+              const ivRank = strategy?.score?.ivRank;
+              const ivPct = strategy?.score?.ivPercentile;
+              const rankColor = ivRank === null || ivRank === undefined
+                ? "text-slate-500"
+                : ivRank > 70 ? "text-rose-400"
+                : ivRank < 30 ? "text-emerald-400"
+                : "text-purple-400";
+              const rankLabel = ivRank === null || ivRank === undefined
+                ? "WARMING"
+                : ivRank > 70 ? "RICH"
+                : ivRank < 30 ? "CHEAP"
+                : "NORMAL";
+              return (
+                <div className="flex items-center gap-2" title="IV Rank: position of current IV in trailing min-max band. RICH = sell premium, CHEAP = buy premium.">
+                  <span className="text-slate-500">IV RANK / %ILE</span>
+                  <span className={cn("font-bold", rankColor)}>
+                    {ivRank !== null && ivRank !== undefined ? Math.round(ivRank) : '--'}
+                    <span className="text-slate-500 mx-1">/</span>
+                    {ivPct !== null && ivPct !== undefined ? `${Math.round(ivPct)}%` : '--'}
+                  </span>
+                  <span className={cn("text-[7px] px-1.5 py-0.5 rounded border", rankColor, "border-current/30 bg-current/10")}>{rankLabel}</span>
+                </div>
+              );
+            })()}
+            {execution && execution.positions && execution.positions.length > 0 && (
+              <div className="flex items-center gap-3" title="Portfolio Greeks (live).">
+                <span className="text-slate-500">Greeks</span>
+                <span className="text-slate-300 font-mono text-[9px]">
+                  <span className={cn(Math.abs(execution.netDelta || 0) > 1.5 ? "text-amber-400" : "text-blue-400")}>Δ {(execution.netDelta || 0).toFixed(2)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className="text-purple-400">Γ {(execution.netGamma || 0).toFixed(3)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className={cn((execution.netTheta || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>Θ {(execution.netTheta || 0).toFixed(1)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className="text-amber-400">ν {(execution.netVega || 0).toFixed(1)}</span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1733,13 +1870,23 @@ export default function App() {
               {execution?.autoMode ? 'AUTO' : 'MANUAL'}
             </button>
             <div className="w-px h-4 bg-white/5" />
-            <button 
+            <button
               onClick={handleResetEngine}
               className="px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all bg-zinc-850 hover:bg-zinc-800 text-slate-200 border border-white/5"
             >
               RESET ENGINE
             </button>
           </div>
+          {(execution?.positions?.length ?? 0) > 0 && (
+            <button
+              onClick={() => setShowFlattenConfirm(true)}
+              title="Emergency square-off all open legs (K)"
+              className="px-4 py-2 rounded text-[10px] font-black tracking-[0.15em] uppercase bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_18px_rgba(225,29,72,0.5)] border border-rose-400/40 transition-all animate-pulse-slow flex items-center gap-2"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Flatten All
+            </button>
+          )}
           <div className="flex items-center space-x-3 px-4 border-l border-white/5">
             <div className="text-right">
               <div className="text-[10px] font-bold text-white leading-none">ADMIN</div>
@@ -1844,29 +1991,65 @@ export default function App() {
                           {execution?.positions && execution.positions.length > 0 ? (
                             <>
                               <span className="text-emerald-400">●</span>
-                              <span>{strategy?.score?.strategyType?.replace(/_/g, ' ') || 'QUANT SETUP'}</span>
+                              {/* Show the structure of the *open book*, not the current recommendation. */}
+                              <span>
+                                {execution.actualStructure
+                                  ?? execution.entryStrategyType?.replace(/_/g, ' ')
+                                  ?? 'OPEN BOOK'}
+                              </span>
                             </>
                           ) : (
                             <span className="text-slate-500 font-bold uppercase text-xs tracking-widest">STANDBY (IDLE)</span>
                           )}
                         </div>
+                        {execution?.positions && execution.positions.length > 0
+                          && strategy?.score?.strategyType
+                          && execution.entryStrategyType
+                          && strategy.score.strategyType !== execution.entryStrategyType && (
+                          <div className="mt-1 text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                            Engine now favors:
+                            <span className="text-amber-400 ml-1">{strategy.score.strategyType.replace(/_/g, ' ')}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    {execution?.positions && execution.positions.length > 0 && (
-                      <div className="mt-4 flex gap-2">
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider",
-                          strategy?.score?.bias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
-                          strategy?.score?.bias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
-                          "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        )}>
-                          BIAS: {strategy?.score?.bias || "NEUTRAL"}
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black bg-white/5 border border-white/5 text-slate-300 uppercase tracking-wider">
-                          SCORE: {strategy?.score?.score || 0}
-                        </span>
-                      </div>
-                    )}
+                    {execution?.positions && execution.positions.length > 0 && (() => {
+                      const entryBias = execution.entryBias || 'NEUTRAL';
+                      const liveBias = strategy?.score?.bias || 'NEUTRAL';
+                      const biasConflict = entryBias !== liveBias;
+                      return (
+                        <div className="mt-4 flex gap-2 items-center flex-wrap">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider",
+                            entryBias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                            entryBias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
+                            "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                          )}>
+                            ENTRY BIAS: {entryBias}
+                          </span>
+                          {biasConflict && (
+                            <span className="px-2 py-0.5 rounded text-[8px] font-black bg-amber-500/15 border border-amber-500/40 text-amber-300 uppercase tracking-wider animate-pulse flex items-center gap-1" title="Live system bias has flipped vs. the bias at entry. Trade is fighting the current signal.">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              CONFLICT → LIVE: {liveBias}
+                            </span>
+                          )}
+                          <span className="px-2 py-0.5 rounded text-[8px] font-black bg-white/5 border border-white/5 text-slate-300 uppercase tracking-wider">
+                            SCORE: {strategy?.score?.score ?? strategy?.score?.total ?? 0}
+                          </span>
+                          {strategy?.score?.pinAlignment && strategy.score.pinAlignment !== 'NONE' && strategy.score.pinStrike && (
+                            <span className={cn(
+                              "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border flex items-center gap-1",
+                              strategy.score.pinAlignment === 'STRONG'
+                                ? "bg-purple-500/15 border-purple-500/40 text-purple-300"
+                                : "bg-purple-500/10 border-purple-500/20 text-purple-400"
+                            )} title={`Max-OI CE and PE walls aligned ${strategy.score.pinDistance === 0 ? 'on the same strike' : `${strategy.score.pinDistance} pts apart`} — pin magnet at ${strategy.score.pinStrike}.`}>
+                              <Target className="w-2.5 h-2.5" />
+                              PIN {strategy.score.pinStrike} ({strategy.score.pinAlignment})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Middle: Active Leg Breakdown */}
@@ -1990,6 +2173,55 @@ export default function App() {
                     Score: {strategy?.score?.total || 0} / 100
                   </div>
                 </div>
+
+                {/* Compact segmented score breakdown — each colored block is one component's
+                    contribution to the total. Width is proportional to points scored,
+                    so you can read *why* the total looks the way it does at a glance. */}
+                {strategy?.score && (() => {
+                  const s = strategy.score as any;
+                  const segs: { key: string; pts: number; max: number; color: string; label: string }[] = [
+                    { key: 'trend', pts: s.trendScore || 0, max: 25, color: 'bg-blue-500',   label: 'Trend' },
+                    { key: 'oi',    pts: s.oiBiasScore || 0, max: 20, color: 'bg-violet-500', label: 'OI Bias' },
+                    { key: 'tech',  pts: Math.max(0, (s.total || 0) - (s.trendScore || 0) - (s.oiBiasScore || 0) - (s.gammaScore || 0) - (s.timeFilterScore || 0)), max: 30, color: 'bg-cyan-500', label: 'Tech + ORB + Pin' },
+                    { key: 'gamma', pts: s.gammaScore || 0, max: 15, color: 'bg-amber-500',  label: 'Gamma (VIX)' },
+                    { key: 'time',  pts: s.timeFilterScore || 0, max: 20, color: 'bg-teal-500',   label: 'Time Filter' },
+                  ];
+                  const total = s.total || 0;
+                  const scale = Math.max(100, total);
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-0.5 h-2.5 rounded-full overflow-hidden bg-white/[0.04] border border-white/5">
+                        {segs.map(seg => {
+                          const width = (seg.pts / scale) * 100;
+                          if (width < 0.5) return null;
+                          return (
+                            <div
+                              key={seg.key}
+                              className={cn(seg.color, "h-full transition-all duration-300")}
+                              style={{ width: `${width}%` }}
+                              title={`${seg.label}: ${seg.pts} / ${seg.max} pts`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[7.5px] font-bold uppercase tracking-widest text-slate-500">
+                        {segs.map(seg => (
+                          <span key={`lbl-${seg.key}`} className="flex items-center gap-1">
+                            <span className={cn("w-1.5 h-1.5 rounded-sm", seg.color)} />
+                            <span className="text-slate-400">{seg.label}</span>
+                            <span className="text-slate-200 font-mono tabular-nums">{seg.pts}</span>
+                          </span>
+                        ))}
+                        {s.pinAlignment && s.pinAlignment !== 'NONE' && (
+                          <span className="flex items-center gap-1 text-purple-300">
+                            <Target className="w-2 h-2" />
+                            <span>PIN +{s.pinAlignment === 'STRONG' ? 15 : 8}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Active Directive & Sentiment */}
                 <div className="bg-slate-950/60 p-4 border border-white/5 rounded-lg flex flex-col gap-2">
@@ -4646,6 +4878,277 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Sticky Position Blotter — visible from every tab while positions are open */}
+      {(execution?.positions?.length ?? 0) > 0 && (
+        <div className="fixed bottom-0 left-20 right-0 z-30 bg-black/85 backdrop-blur-xl border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]">
+          <div className="px-6 py-2 flex items-center gap-4 overflow-x-auto custom-scrollbar">
+            {/* Header chip with aggregate PnL + time-in-trade + structure */}
+            <div className="shrink-0 flex items-center gap-3 pr-4 border-r border-white/10">
+              <div className="flex items-center gap-1.5">
+                <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse",
+                  (execution?.pnl ?? 0) >= 0 ? "bg-emerald-500" : "bg-rose-500")} />
+                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">
+                  {execution?.actualStructure || 'Open Book'}
+                </span>
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className={cn("text-sm font-black font-mono tabular-nums",
+                  (execution?.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                  {(execution?.pnl ?? 0) >= 0 ? '+' : ''}₹{Math.abs(execution?.pnl ?? 0).toLocaleString('en-IN')}
+                </span>
+                <span className="text-[7px] text-slate-500 font-bold uppercase tracking-widest">
+                  {execution?.entryTime
+                    ? `${Math.floor((uiClock - execution.entryTime) / 60000)}m ${Math.floor(((uiClock - execution.entryTime) % 60000) / 1000)}s`
+                    : 'live'}
+                  {execution?.params?.targetRupees ? ` · ${Math.round(((execution.pnl || 0) / execution.params.targetRupees) * 100)}% of tgt` : ''}
+                </span>
+              </div>
+              {/* Bias-conflict badge: warns when live system bias has flipped vs entry bias */}
+              {execution?.entryBias && strategy?.score?.bias && execution.entryBias !== strategy.score.bias && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 animate-pulse"
+                  title={`Trade entered ${execution.entryBias} but live bias is ${strategy.score.bias}. Position may be fighting the current signal.`}
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                    Bias Conflict
+                    <span className="block text-[7px] font-bold opacity-80 mt-0.5">
+                      {execution.entryBias} → {strategy.score.bias}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
+            {/* Per-leg blotter rows */}
+            {(execution?.positions || []).map((p: any, idx: number) => {
+              const atm = market?.chain?.find(c => c.strike === p.strike);
+              const ltp = p.type === 'FUT'
+                ? (market?.spot ?? p.entryPrice)
+                : (atm ? (p.type === 'CE' ? atm.ce_price : atm.pe_price) : p.entryPrice);
+              const legPnl = (p.side === 'BUY' ? (ltp - p.entryPrice) : (p.entryPrice - ltp)) * p.qty;
+              const sideColor = p.side === 'BUY' ? 'text-emerald-400' : 'text-rose-400';
+              const sideBg = p.side === 'BUY' ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20';
+              const symbol = p.type === 'FUT' ? 'FUT' : `${p.strike}${p.type}`;
+              return (
+                <div key={`blotter-${idx}-${p.strike}-${p.type}-${p.side}`}
+                  className={cn("shrink-0 flex items-center gap-3 px-3 py-1.5 rounded-md border", sideBg,
+                    p.isHedge && "ring-1 ring-amber-500/40")}>
+                  <div className="flex flex-col leading-tight">
+                    <span className="text-[7px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1">
+                      {p.isHedge && <span className="text-amber-400">HEDGE</span>}
+                      <span className={sideColor}>{p.side}</span>
+                      <span className="text-slate-600">·</span>
+                      <span>{Math.round(p.qty / (appConfig?.LOT_SIZE || 75))}L</span>
+                    </span>
+                    <span className="text-[11px] font-black text-white font-mono leading-tight">{symbol}</span>
+                  </div>
+                  <div className="flex flex-col leading-tight text-right">
+                    <span className="text-[7px] font-bold uppercase tracking-widest text-slate-500">LTP / Avg</span>
+                    <span className="text-[10px] font-mono text-slate-200 tabular-nums">
+                      ₹{ltp.toFixed(1)}
+                      <span className="text-slate-600 mx-1">·</span>
+                      <span className="text-slate-500">₹{p.entryPrice.toFixed(1)}</span>
+                    </span>
+                  </div>
+                  <div className="flex flex-col leading-tight text-right pl-2 border-l border-white/10">
+                    <span className="text-[7px] font-bold uppercase tracking-widest text-slate-500">P/L</span>
+                    <span className={cn("text-[11px] font-black font-mono tabular-nums",
+                      legPnl >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                      {legPnl >= 0 ? '+' : ''}₹{Math.round(legPnl).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* LIVE Execute Confirm Modal — only opens when EXECUTION_MODE is LIVE */}
+      {pendingExecute && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => !isExecuting && setPendingExecute(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-[#0b0f19] border border-amber-500/40 rounded-2xl w-full max-w-md shadow-[0_0_60px_rgba(245,158,11,0.3)] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-4 flex items-center gap-3">
+              <ShieldAlert className="w-5 h-5 text-amber-400" />
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-amber-300">Confirm Live Order</h3>
+                <p className="text-[9px] text-amber-300/60 font-bold uppercase tracking-widest mt-0.5">Real money — broker order will be submitted</p>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-black/40 border border-white/5 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Direction</span>
+                  <span className={cn(
+                    "font-black uppercase tracking-widest",
+                    pendingExecute.bias === 'BULLISH' ? "text-emerald-400" :
+                    pendingExecute.bias === 'BEARISH' ? "text-rose-400" : "text-blue-400"
+                  )}>
+                    {pendingExecute.bias}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Structure</span>
+                  <span className="text-white font-black font-mono uppercase">
+                    {strategy?.score?.strategyType?.replace(/_/g, ' ') || '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">System Score</span>
+                  <span className="text-white font-black font-mono">{strategy?.score?.total || 0} / 100</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Spot / ATM</span>
+                  <span className="text-slate-200 font-mono">
+                    ₹{(market?.spot || 0).toFixed(1)}
+                    <span className="text-slate-500 mx-1">·</span>
+                    ₹{(Math.round((market?.spot || 0) / 50) * 50).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">IV Rank</span>
+                  <span className="text-slate-200 font-mono">
+                    {strategy?.score?.ivRank !== null && strategy?.score?.ivRank !== undefined
+                      ? `${Math.round(strategy.score.ivRank)}%`
+                      : '—'}
+                  </span>
+                </div>
+                {strategy?.score?.pinAlignment && strategy.score.pinAlignment !== 'NONE' && (
+                  <div className="flex justify-between text-[10px]">
+                    <span className="text-slate-500 font-bold uppercase tracking-widest">Pin Magnet</span>
+                    <span className="text-purple-400 font-black font-mono">
+                      {strategy.score.pinStrike} ({strategy.score.pinAlignment})
+                    </span>
+                  </div>
+                )}
+                <div className="border-t border-white/5 pt-2 mt-2 flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Lot Size</span>
+                  <span className="text-slate-200 font-mono">{appConfig?.LOT_SIZE || 75} per leg</span>
+                </div>
+              </div>
+              {strategy?.score?.recommendation && (
+                <div className="text-[10px] text-blue-300 bg-blue-500/5 border border-blue-500/15 rounded p-2 font-medium leading-relaxed">
+                  <span className="font-black text-blue-400 uppercase tracking-widest text-[8px] mr-2">Engine note:</span>
+                  {strategy.score.recommendation}
+                </div>
+              )}
+              <p className="text-[10px] text-amber-300 font-bold leading-relaxed">
+                This action will place real orders at the broker. SL / Target rules will be applied automatically by the risk engine after fill.
+              </p>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setPendingExecute(null)}
+                  disabled={isExecuting}
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 text-[10px] font-black uppercase tracking-[0.15em] text-slate-300 hover:bg-white/5 transition disabled:opacity-50"
+                >
+                  Cancel <span className="text-slate-600 ml-1">(Esc)</span>
+                </button>
+                <button
+                  onClick={() => submitExecute(pendingExecute.bias)}
+                  disabled={isExecuting}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-[0.15em] shadow-[0_0_18px_rgba(245,158,11,0.5)] transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isExecuting ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5" />
+                      Place Live Order
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Flatten All Confirm Modal */}
+      {showFlattenConfirm && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => !isFlattening && setShowFlattenConfirm(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-[#0b0f19] border border-rose-500/40 rounded-2xl w-full max-w-md shadow-[0_0_60px_rgba(225,29,72,0.3)] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-rose-500/10 border-b border-rose-500/30 px-6 py-4 flex items-center gap-3">
+              <ShieldAlert className="w-5 h-5 text-rose-400" />
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-rose-300">Emergency Square-Off</h3>
+                <p className="text-[9px] text-rose-300/60 font-bold uppercase tracking-widest mt-0.5">All open legs will be exited at market</p>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-black/40 border border-white/5 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Legs to close</span>
+                  <span className="text-white font-black font-mono">{execution?.positions?.length ?? 0}</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Current PnL</span>
+                  <span className={cn("font-black font-mono",
+                    (execution?.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                    {(execution?.pnl ?? 0) >= 0 ? '+' : ''}₹{(execution?.pnl ?? 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Mode</span>
+                  <span className={cn("font-black font-mono",
+                    execution?.executionMode === 'LIVE' ? "text-rose-400" : "text-blue-400")}>
+                    {execution?.executionMode === 'LIVE' ? 'LIVE — REAL MONEY' : 'PAPER'}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                This action exits every open position immediately and cannot be undone.
+                {execution?.executionMode === 'LIVE' && <span className="block mt-1 text-rose-400 font-bold">Live orders will be submitted to the broker.</span>}
+              </p>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setShowFlattenConfirm(false)}
+                  disabled={isFlattening}
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 text-[10px] font-black uppercase tracking-[0.15em] text-slate-300 hover:bg-white/5 transition disabled:opacity-50"
+                >
+                  Cancel <span className="text-slate-600 ml-1">(Esc)</span>
+                </button>
+                <button
+                  onClick={handleFlattenAll}
+                  disabled={isFlattening}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black uppercase tracking-[0.15em] shadow-[0_0_18px_rgba(225,29,72,0.5)] transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isFlattening ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      Exiting...
+                    </>
+                  ) : (
+                    <>
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Confirm Flatten
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       {/* Floating Live Quantum Terminal Notification Toast */}
       {toast && (

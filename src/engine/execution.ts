@@ -58,6 +58,91 @@ class ExecutionEngine {
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
   private isProcessing: boolean = false;
 
+  // Wing width for credit spreads, scaled by volatility regime.
+  // Wider wings in high IV = more credit, more breathing room.
+  private dynamicWingWidth(): number {
+    const ivRank = marketEngine.getIVRank();
+    if (ivRank === null) return 100;
+    if (ivRank > 70) return 150;
+    if (ivRank < 30) return 75;
+    return 100;
+  }
+
+  // Classify the open book into a human-readable structure name.
+  // Hedges are ignored for the core structure and noted as a suffix.
+  // Returns null when there are no positions.
+  private classifyStructure(): string | null {
+    if (this.activePositions.length === 0) return null;
+    const hedges = this.activePositions.filter(p => p.isHedge);
+    const core = this.activePositions.filter(p => !p.isHedge);
+    if (core.length === 0) return `Hedge-only (${hedges.length})`;
+
+    const buys = core.filter(p => p.side === 'BUY');
+    const sells = core.filter(p => p.side === 'SELL');
+    const ces = core.filter(p => p.type === 'CE');
+    const pes = core.filter(p => p.type === 'PE');
+    const futs = core.filter(p => p.type === 'FUT');
+
+    let label = '';
+
+    if (core.length === 1) {
+      const p = core[0];
+      label = `${p.side === 'BUY' ? 'Long' : 'Short'} ${p.type} ${p.strike}`;
+    } else if (core.length === 2) {
+      if (futs.length > 0) {
+        label = 'Futures Hedge';
+      } else if (buys.length === 2 && ces.length === 1 && pes.length === 1 && buys[0].strike === buys[1].strike) {
+        label = 'Long Straddle';
+      } else if (buys.length === 2 && ces.length === 1 && pes.length === 1) {
+        label = 'Long Strangle';
+      } else if (ces.length === 2 && buys.length === 1 && sells.length === 1) {
+        const buyStrike = buys[0].strike, sellStrike = sells[0].strike;
+        label = buyStrike < sellStrike ? 'Bull Call Spread' : 'Bear Call Spread';
+      } else if (pes.length === 2 && buys.length === 1 && sells.length === 1) {
+        const buyStrike = buys[0].strike, sellStrike = sells[0].strike;
+        label = buyStrike < sellStrike ? 'Bull Put Spread' : 'Bear Put Spread';
+      } else {
+        label = '2-leg Custom';
+      }
+    } else if (core.length === 3) {
+      // Butterfly: 1 buy + 2 sell + 1 buy of the same type at three strikes (middle has 2× qty)
+      if ((ces.length === 3 || pes.length === 3)) {
+        const sellsAtCenter = sells.reduce((s, p) => s + p.qty, 0);
+        const buysTotal = buys.reduce((s, p) => s + p.qty, 0);
+        if (Math.abs(sellsAtCenter - 2 * (buysTotal / Math.max(buys.length, 1))) < 1) {
+          label = ces.length === 3 ? 'Long Call Butterfly' : 'Long Put Butterfly';
+        } else {
+          label = ces.length === 3 ? '3-leg Call Spread' : '3-leg Put Spread';
+        }
+      } else if (buys.length === 1 && sells.length === 1 && (ces.length === 2 || pes.length === 2)) {
+        const isCE = ces.length === 2;
+        label = `${isCE ? 'CE' : 'PE'} Ratio Spread`;
+      } else {
+        label = '3-leg Custom';
+      }
+    } else if (core.length === 4) {
+      const ceSells = ces.filter(p => p.side === 'SELL');
+      const peSells = pes.filter(p => p.side === 'SELL');
+      const ceBuys = ces.filter(p => p.side === 'BUY');
+      const peBuys = pes.filter(p => p.side === 'BUY');
+      if (ces.length === 2 && pes.length === 2 && ceSells.length === 1 && peSells.length === 1) {
+        // Iron Fly: short legs at the same strike. Iron Condor: short legs at different strikes.
+        if (ceSells[0].strike === peSells[0].strike) {
+          label = 'Iron Fly';
+        } else {
+          label = 'Iron Condor';
+        }
+      } else {
+        label = '4-leg Custom';
+      }
+    } else {
+      label = `${core.length}-leg Custom`;
+    }
+
+    if (hedges.length > 0) label += ` + Hedge`;
+    return label;
+  }
+
   private async withLock<T>(fn: () => Promise<T>): Promise<T | null> {
     if (this.isProcessing) {
       return null;
@@ -260,9 +345,12 @@ class ExecutionEngine {
       }
 
       case 'BULL_PUT_SPREAD': {
-        // Position short leg exactly at or below structural Support
-        const sellStrike = Math.round(support / 50) * 50;
-        const buyStrike = sellStrike - 100;
+        // Short leg at ~0.18 delta (institutional credit-spread default for ~80% POP).
+        // Constrain to be at or below structural Support so we get the OI floor as backup.
+        const deltaStrike = getStrikeByDelta(0.18, 'PE', config.MIN_CREDIT_PREMIUM);
+        const supportFloor = Math.round(support / 50) * 50;
+        const sellStrike = Math.min(deltaStrike, supportFloor);
+        const buyStrike = sellStrike - this.dynamicWingWidth();
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' }
@@ -271,9 +359,10 @@ class ExecutionEngine {
       }
 
       case 'BEAR_CALL_SPREAD': {
-        // Position short leg exactly at or above structural Resistance
-        const sellStrike = Math.round(resistance / 50) * 50;
-        const buyStrike = sellStrike + 100;
+        const deltaStrike = getStrikeByDelta(0.18, 'CE', config.MIN_CREDIT_PREMIUM);
+        const resistanceCeil = Math.round(resistance / 50) * 50;
+        const sellStrike = Math.max(deltaStrike, resistanceCeil);
+        const buyStrike = sellStrike + this.dynamicWingWidth();
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
@@ -282,11 +371,15 @@ class ExecutionEngine {
       }
 
       case 'IRON_CONDOR': {
-        // Anchored tightly above structural boundaries
-        const sellPE = Math.round(support / 50) * 50;
-        const buyPE = sellPE - 100;
-        const sellCE = Math.round(resistance / 50) * 50;
-        const buyCE = sellCE + 100;
+        // Each short leg at ~0.15 delta — textbook IC win-rate spot.
+        // Use structural S/R as a cap so we never sell *inside* a heavy OI wall.
+        const wing = this.dynamicWingWidth();
+        const peDeltaStrike = getStrikeByDelta(0.15, 'PE', config.MIN_CREDIT_PREMIUM);
+        const ceDeltaStrike = getStrikeByDelta(0.15, 'CE', config.MIN_CREDIT_PREMIUM);
+        const sellPE = Math.min(peDeltaStrike, Math.round(support / 50) * 50);
+        const sellCE = Math.max(ceDeltaStrike, Math.round(resistance / 50) * 50);
+        const buyPE = sellPE - wing;
+        const buyCE = sellCE + wing;
         newPositions.push(
           { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyPE, type: 'PE', entryPrice: getLTP(buyPE, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
@@ -297,8 +390,11 @@ class ExecutionEngine {
       }
 
       case 'IRON_FLY': {
-        const buyPE = atmStrike - 250;
-        const buyCE = atmStrike + 250;
+        // Wings scale with IV regime. Iron Fly wings are wider than butterflies because
+        // they define max-loss on a credit structure.
+        const wing = this.dynamicWingWidth() * 2; // 150–300 pts
+        const buyPE = atmStrike - wing;
+        const buyCE = atmStrike + wing;
         newPositions.push(
           { strike: atmStrike, type: 'PE', entryPrice: getLTP(atmStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: atmStrike, type: 'CE', entryPrice: getLTP(atmStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -350,8 +446,9 @@ class ExecutionEngine {
       }
 
       case 'BUTTERFLY': {
+        // Wings scale with IV regime so the profit cone matches realized volatility.
         const center = atmStrike;
-        const wingSize = 100;
+        const wingSize = this.dynamicWingWidth();
         const type = bias === 'BULLISH' ? 'CE' : 'PE';
         newPositions.push(
           { strike: center - wingSize, type, entryPrice: getLTP(center - wingSize, type), qty: config.LOT_SIZE, side: 'BUY' },
@@ -493,14 +590,19 @@ class ExecutionEngine {
       
       let currentPnL = 0;
 
+      const spotNow = marketEngine.getSpotPrice();
       this.activePositions.forEach(pos => {
-        const option = chain.find(o => o.strike === pos.strike);
-        // If option is missing from the limited mock generator chain, we don't purge it!
-        // We just assume the price hasn't updated or derive it from intrinsic if necessary.
-        const currentPrice = option ? (pos.type === 'CE' ? option.ce_price : option.pe_price) : pos.entryPrice;
-        
-        const diff = pos.side === 'BUY' 
-          ? (currentPrice - pos.entryPrice) 
+        let currentPrice: number;
+        if (pos.type === 'FUT') {
+          // Futures mark to spot (intraday futures track underlying within bps).
+          currentPrice = spotNow;
+        } else {
+          const option = chain.find(o => o.strike === pos.strike);
+          currentPrice = option ? (pos.type === 'CE' ? option.ce_price : option.pe_price) : pos.entryPrice;
+        }
+
+        const diff = pos.side === 'BUY'
+          ? (currentPrice - pos.entryPrice)
           : (pos.entryPrice - currentPrice);
         currentPnL += diff * pos.qty;
       });
@@ -517,11 +619,11 @@ class ExecutionEngine {
         );
       }
 
-      // Update Risk Engine
-      riskEngine.updatePnL(this.pnl, this.activePositions);
-
-      // Calculate Portfolio Greeks
+      // Calculate Portfolio Greeks first so risk envelope check sees the current state
       this.calculatePortfolioGreeks();
+
+      // Update Risk Engine (with live greeks so vega/delta limits are enforced)
+      riskEngine.updatePnL(this.pnl, this.activePositions, { netDelta: this.netDelta, netVega: this.netVega });
       
       this.calculateCapitalDeployed();
 
@@ -564,6 +666,17 @@ class ExecutionEngine {
           await this.exitAllInternal("Weekly Expiry 2:45 PM Protective Exit");
           return;
         }
+      }
+
+      // Defined-risk take-profit: butterflies, ICs, and Iron Flys should bank a fixed
+      // fraction of their *structural* max reward, not chase the rupee-target intended
+      // for naked buys. Without this, defined-risk plays expire worthless after sitting
+      // through extra theta risk for marginal extra profit.
+      const structureLabel = this.classifyStructure() || '';
+      const isDefinedRisk = /Butterfly|Iron Fly|Iron Condor/i.test(structureLabel);
+      if (isDefinedRisk && this.maxReward > 0 && this.pnl >= this.maxReward * 0.60) {
+        await this.exitAllInternal(`Defined-risk TP (60% of max reward ₹${Math.round(this.maxReward)})`);
+        return;
       }
 
       if (this.currentTradeParams) {
@@ -727,77 +840,76 @@ class ExecutionEngine {
 
   private async checkGammaScalp() {
     if (this.activePositions.length === 0) return;
-    
+
     const now = Date.now();
     const timeSinceLastHedge = (now - this.lastHedgeTime) / 1000;
-    
-    // Cooldown: Don't hedge more than once every 5 minutes unless delta is extreme (> 1.5)
-    // This allows the trade to breathe and follow path dependency.
-    if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) {
-       return;
+
+    // Cooldown: hedge at most once per 5 minutes unless delta is extreme.
+    if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) return;
+    if (Math.abs(this.netDelta) <= config.DELTA_TOLERANCE) return;
+
+    // Options-only hedge — BUY an ATM option of the opposite delta sign.
+    // +delta excess → BUY ATM PE (PE delta ≈ -0.5).
+    // -delta excess → BUY ATM CE (CE delta ≈ +0.5).
+    // Buying limits risk to the premium paid and never adds short gamma.
+    const spot = marketEngine.getSpotPrice();
+    const atmStrike = Math.round(spot / 50) * 50;
+    const chain = marketEngine.getOptionChain();
+    const atmOpt = chain.find(o => o.strike === atmStrike);
+
+    const hedgeType: 'CE' | 'PE' = this.netDelta > 0 ? 'PE' : 'CE';
+    // Per-unit delta magnitude of the hedge contract — fall back to 0.5 if greeks missing.
+    let perUnitDelta = 0.5;
+    if (atmOpt) {
+      const d = hedgeType === 'CE' ? (atmOpt.delta || 0.5) : ((atmOpt as any).pe_delta ?? -0.5);
+      perUnitDelta = Math.abs(d) || 0.5;
     }
 
-    // If net delta exceeds tolerance, we need to scalp/hedge
-    if (Math.abs(this.netDelta) > config.DELTA_TOLERANCE) {
-      const spot = marketEngine.getSpotPrice();
-      // Use a slight OTM strike for hedging to avoid direct conflict with core ATM positions
-      const hedgeBias = this.netDelta > 0 ? 50 : -50;
-      const hedgeStrike = Math.round((spot + hedgeBias) / 50) * 50;
-      
-      const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; 
-      // Use floor to under-hedge slightly, maintaining directional edge
-      const hedgeQty = Math.max(1, Math.floor(Math.abs(this.netDelta) / 0.5)) * config.LOT_SIZE;
-      
-      if (hedgeQty > 0) {
-        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance (${config.DELTA_TOLERANCE}). Hedging ${hedgeQty} ${hedgeType} at ${hedgeStrike}...`);
-        
-        const chain = marketEngine.getOptionChain();
-        const opt = chain.find(o => o.strike === hedgeStrike);
-        const price = opt ? (hedgeType === 'CE' ? opt.ce_price : opt.pe_price) : 100;
+    // Lots needed to absorb the excess (delta beyond tolerance). Under-hedge with floor
+    // so we keep a sliver of directional edge.
+    const excessDelta = Math.abs(this.netDelta) - config.DELTA_TOLERANCE;
+    const lotsNeeded = Math.max(1, Math.floor(excessDelta / perUnitDelta));
+    const hedgeQty = lotsNeeded * config.LOT_SIZE;
+    const hedgePrice = atmOpt ? (hedgeType === 'CE' ? atmOpt.ce_price : atmOpt.pe_price) : 100;
 
-        // Update state
-        this.lastHedgeTime = now;
+    console.log(`[GAMMA SCALP] Net Δ ${this.netDelta.toFixed(2)} > tolerance (${config.DELTA_TOLERANCE}). BUY ${lotsNeeded} ATM ${atmStrike}${hedgeType} @ ₹${hedgePrice.toFixed(1)}`);
 
-        // Check if we already have a position at this strike to net it out
-        const existingIdx = this.activePositions.findIndex(p => p.strike === hedgeStrike && p.type === hedgeType);
-        
-        if (existingIdx !== -1) {
-          const existing = this.activePositions[existingIdx];
-          // If we are selling a hedge but are already long, subtract qty
-          if (existing.side === 'BUY') {
-            if (existing.qty > hedgeQty) {
-              existing.qty -= hedgeQty;
-            } else if (existing.qty === hedgeQty) {
-              this.activePositions.splice(existingIdx, 1);
-            } else {
-              const remaining = hedgeQty - existing.qty;
-              existing.qty = remaining;
-              existing.side = 'SELL';
-              existing.entryPrice = price; 
-            }
-          } else {
-            // Both are SELL sides, just add qty
-            existing.qty += hedgeQty;
-          }
-        } else {
-          // No existing position at this strike, add new hedge leg
-          this.activePositions.push({
-            strike: hedgeStrike,
-            type: hedgeType,
-            entryPrice: price,
-            qty: hedgeQty,
-            side: 'SELL',
-            isHedge: true
-          });
+    this.lastHedgeTime = now;
+
+    // Net against an existing hedge leg at the same strike+type, if one is open.
+    const existingIdx = this.activePositions.findIndex(p => p.strike === atmStrike && p.type === hedgeType && p.isHedge);
+    if (existingIdx !== -1) {
+      const existing = this.activePositions[existingIdx];
+      if (existing.side === 'BUY') {
+        // Same side — average up and add qty.
+        const totalQty = existing.qty + hedgeQty;
+        existing.entryPrice = ((existing.entryPrice * existing.qty) + (hedgePrice * hedgeQty)) / totalQty;
+        existing.qty = totalQty;
+      } else {
+        // Was a short hedge (legacy) — net it out.
+        if (existing.qty > hedgeQty) existing.qty -= hedgeQty;
+        else if (existing.qty === hedgeQty) this.activePositions.splice(existingIdx, 1);
+        else {
+          existing.qty = hedgeQty - existing.qty;
+          existing.side = 'BUY';
+          existing.entryPrice = hedgePrice;
         }
-
-        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Delta threshold crossed (${this.netDelta.toFixed(2)}). Hedged with ${hedgeQty} qty ${hedgeType}.`);
-        if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
-        
-        // Recalculate after hedge
-        this.calculatePortfolioGreeks();
       }
+    } else {
+      this.activePositions.push({
+        strike: atmStrike,
+        type: hedgeType,
+        entryPrice: hedgePrice,
+        qty: hedgeQty,
+        side: 'BUY',
+        isHedge: true
+      });
     }
+
+    this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Δ ${this.netDelta.toFixed(2)} → BUY ${lotsNeeded} × ${atmStrike}${hedgeType} @ ₹${hedgePrice.toFixed(1)}`);
+    if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
+
+    this.calculatePortfolioGreeks();
   }
 
   async exitAll(reason: string) {
@@ -1001,6 +1113,10 @@ class ExecutionEngine {
       peakPnL: Math.round(this.peakPnL),
       params: this.currentTradeParams,
       activeSL: this.currentActiveSL,
+      entryTime: this.currentEntryTime || null,
+      actualStructure: this.classifyStructure(),
+      entryBias: this.currentTradeBias,
+      entryStrategyType: this.lastTradeScore?.strategyType || null,
       rollsToday: this.rollsToday,
       capitalDeployed: Math.round(this.capitalDeployed),
       netPremium: Math.round(this.netPremium),
