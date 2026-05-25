@@ -553,47 +553,68 @@ async function startServer() {
           let quotes: any = null;
           let loadedFromWebsocket = false;
 
-          if (tickerConnected && liveTicksCache.has(256265)) {
-            const wsQuotes: any = {};
-            const spotTick = liveTicksCache.get(256265);
-            wsQuotes["NSE:NIFTY 50"] = getQuoteFromTick(spotTick);
+          const isWebSocketReady = tickerConnected && liveTicksCache.has(256265);
+          const needsRestFetch = !lastRawQuotes || (loopCount % 15 === 0) || !isWebSocketReady;
 
-            const vixTick = liveTicksCache.get(264969);
-            if (vixTick) {
-              wsQuotes["NSE:INDIA VIX"] = getQuoteFromTick(vixTick);
-            }
-
-            let optionTicksCount = 0;
-            for (const sym of optionSymbols) {
-              const cleanedSym = sym.startsWith("NFO:") ? sym.substring(4) : sym;
-              const ins = niftyInstruments.find(i => i.tradingsymbol === cleanedSym);
-              if (ins && ins.instrument_token) {
-                const tick = liveTicksCache.get(Number(ins.instrument_token));
-                if (tick) {
-                  wsQuotes[sym] = getQuoteFromTick(tick);
-                  optionTicksCount++;
-                }
-              }
-            }
-
-            // We proceed with WebSocket quotes if Nifty 50 spot tick is present
-            if (wsQuotes["NSE:NIFTY 50"]) {
-              quotes = wsQuotes;
-              loadedFromWebsocket = true;
-              lastRawQuotes = quotes;
+          if (needsRestFetch) {
+            try {
+              const fetchSymbols = [...symbols, ...optionSymbols];
+              const restQuotes = await kiteInstance.getQuote(fetchSymbols);
+              
+              // Seed or merge with lastRawQuotes to prevent overwriting other previously fetched strikes
+              lastRawQuotes = { ...(lastRawQuotes || {}), ...restQuotes };
               lastFetchTimestamp = new Date().toISOString();
               lastFetchError = null;
               liveFailureCount = 0;
+            } catch (restErr: any) {
+              console.error("[LIVE-SYNC] Background REST quote fetch failed:", restErr?.message || restErr);
+              if (!lastRawQuotes) {
+                throw restErr;
+              }
             }
           }
 
-          if (!loadedFromWebsocket) {
-            const fetchSymbols = [...symbols, ...optionSymbols];
-            quotes = await kiteInstance.getQuote(fetchSymbols);
-            lastRawQuotes = quotes;
-            lastFetchTimestamp = new Date().toISOString();
-            lastFetchError = null;
-            liveFailureCount = 0; // Reset on success
+          if (lastRawQuotes) {
+            // Deep copy existing baseline to avoid unintended reference mutations
+            quotes = {};
+            for (const key of Object.keys(lastRawQuotes)) {
+              if (lastRawQuotes[key]) {
+                quotes[key] = { ...lastRawQuotes[key] };
+              }
+            }
+
+            // Overlay real-time WebSocket ticks if available
+            if (isWebSocketReady) {
+              const spotTick = liveTicksCache.get(256265);
+              if (spotTick) {
+                quotes["NSE:NIFTY 50"] = getQuoteFromTick(spotTick);
+              }
+
+              const vixTick = liveTicksCache.get(264969);
+              if (vixTick) {
+                quotes["NSE:INDIA VIX"] = getQuoteFromTick(vixTick);
+              }
+
+              for (const sym of optionSymbols) {
+                const cleanedSym = sym.startsWith("NFO:") ? sym.substring(4) : sym;
+                const ins = niftyInstruments.find(i => i.tradingsymbol === cleanedSym);
+                if (ins && ins.instrument_token) {
+                  const tick = liveTicksCache.get(Number(ins.instrument_token));
+                  if (tick) {
+                    quotes[sym] = getQuoteFromTick(tick);
+                  }
+                }
+              }
+
+              // Update baseline cache with these real-time values for stability in the next loop
+              for (const key of Object.keys(quotes)) {
+                if (quotes[key]) {
+                  lastRawQuotes[key] = { ...quotes[key] };
+                }
+              }
+
+              loadedFromWebsocket = true;
+            }
           }
           
           if (quotes && quotes["NSE:NIFTY 50"]) {
@@ -725,24 +746,32 @@ async function startServer() {
             await executionEngine.exitAll(`Auto Square-off (${config.END_TIME})`);
           }
 
-          const decision = strategyEngine.calculateScore();
-          
-          if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.3) {
-            console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick()?.change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
-          }
+          const isLiveClosed = config.DATA_SOURCE === 'LIVE' && marketEngine.isMarketClosed();
 
-          // Simple Auto-Exit if profit target or SL reached
-          if (state.pnl >= config.TARGET_RUPEES) {
-             console.log("[AUTO] Target hit. Exiting...");
-             await executionEngine.exitAll("Target Hit");
-          } else if (state.pnl <= -config.SL_RUPEES) {
-             console.log("[AUTO] SL hit. Exiting...");
-             await executionEngine.exitAll("SL Hit");
-          }
+          if (isLiveClosed) {
+            if (loopCount % 30 === 0) {
+              console.log("[AUTO] Live market is closed (Weekend, Holiday, or Off-Market Hours). Suspended core intelligence analysis and trade execution.");
+            }
+          } else {
+            const decision = strategyEngine.calculateScore();
+            
+            if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.3) {
+              console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick()?.change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
+            }
 
-          // Entry Logic (Fires on all valid setups - including Neutral Theta-decay spreads)
-          if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
-             await executionEngine.executeTrade(decision.bias);
+            // Simple Auto-Exit if profit target or SL reached
+            if (state.pnl >= config.TARGET_RUPEES) {
+               console.log("[AUTO] Target hit. Exiting...");
+               await executionEngine.exitAll("Target Hit");
+            } else if (state.pnl <= -config.SL_RUPEES) {
+               console.log("[AUTO] SL hit. Exiting...");
+               await executionEngine.exitAll("SL Hit");
+            }
+
+            // Entry Logic (Fires on all valid setups - including Neutral Theta-decay spreads)
+            if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
+               await executionEngine.executeTrade(decision.bias);
+            }
           }
         } catch (err) {
           console.error("Autonomous execution engine error:", err);

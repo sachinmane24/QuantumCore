@@ -8,20 +8,32 @@ export class NotificationService {
       "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
     ];
     
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istTime = new Date(now.getTime() + istOffset);
-    const day = istTime.getUTCDay();
-    const hours = istTime.getUTCHours();
-    const minutes = istTime.getUTCMinutes();
-    const currentTimeMinutes = hours * 60 + minutes;
-    
-    const today = istTime.toISOString().split('T')[0];
-    const isWeekend = day === 0 || day === 6;
-    const isHoliday = holidays.includes(today);
-    const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
-    
-    return isWeekend || isHoliday || isOffMarketHours;
+    try {
+      const now = new Date();
+      
+      // Direct, 100% fail-safe extraction of Asia/Kolkata time parts via Intl
+      const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+      const istDate = new Date(istString);
+      
+      const day = istDate.getDay(); // 0 (Sun) to 6 (Sat)
+      const hours = istDate.getHours(); // 0 to 23
+      const minutes = istDate.getMinutes(); // 0 to 59
+      const currentTimeMinutes = hours * 60 + minutes;
+      
+      const year = istDate.getFullYear();
+      const month = String(istDate.getMonth() + 1).padStart(2, '0');
+      const dateVal = String(istDate.getDate()).padStart(2, '0');
+      const today = `${year}-${month}-${dateVal}`;
+      
+      const isWeekend = day === 0 || day === 6;
+      const isHoliday = holidays.includes(today);
+      const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930; // 9:15 AM to 3:30 PM
+      
+      return isWeekend || isHoliday || isOffMarketHours;
+    } catch (err) {
+      console.error('[NOTIFY] Error calculating market hours:', err);
+      return false;
+    }
   }
 
   private static async sendTelegram(message: string) {
@@ -35,6 +47,9 @@ export class NotificationService {
       return;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     try {
       const url = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`;
       const response = await fetch(url, {
@@ -44,8 +59,11 @@ export class NotificationService {
           chat_id: config.TELEGRAM_CHAT_ID,
           text: message,
           parse_mode: 'HTML'
-        })
+        }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errorDetails = '';
@@ -64,8 +82,13 @@ export class NotificationService {
         }
         throw new Error(`Telegram API returned ${status}${errorDetails}`);
       }
-    } catch (error) {
-      console.error('[NOTIFY] Failed to send Telegram notification:', error);
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.error('[NOTIFY] Telegram notification request TIMEOUT (aborted after 5s)');
+      } else {
+        console.error('[NOTIFY] Failed to send Telegram notification:', error);
+      }
     }
   }
 

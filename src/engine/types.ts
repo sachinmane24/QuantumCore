@@ -65,6 +65,7 @@ export interface OptionChainData {
   pe_iv?: number;
   iv?: number;
   delta?: number;
+  pe_delta?: number;
   gamma?: number;
   theta?: number;
   vega?: number;

@@ -65,20 +65,31 @@ class MarketEngine {
       "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
     ];
     
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istTime = new Date(now.getTime() + istOffset);
-    const day = istTime.getUTCDay();
-    const hours = istTime.getUTCHours();
-    const minutes = istTime.getUTCMinutes();
-    const currentTimeMinutes = hours * 60 + minutes;
-    
-    const today = istTime.toISOString().split('T')[0];
-    const isWeekend = day === 0 || day === 6;
-    const isHoliday = holidays.includes(today);
-    const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
-    
-    return isWeekend || isHoliday || isOffMarketHours;
+    try {
+      const now = new Date();
+      
+      const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+      const istDate = new Date(istString);
+      
+      const day = istDate.getDay(); // 0 (Sun) to 6 (Sat)
+      const hours = istDate.getHours(); // 0 to 23
+      const minutes = istDate.getMinutes(); // 0 to 59
+      const currentTimeMinutes = hours * 60 + minutes;
+      
+      const year = istDate.getFullYear();
+      const month = String(istDate.getMonth() + 1).padStart(2, '0');
+      const dateVal = String(istDate.getDate()).padStart(2, '0');
+      const today = `${year}-${month}-${dateVal}`;
+      
+      const isWeekend = day === 0 || day === 6;
+      const isHoliday = holidays.includes(today);
+      const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930; // 9:15 AM to 3:30 PM
+      
+      return isWeekend || isHoliday || isOffMarketHours;
+    } catch (err) {
+      console.error('[MARKET] Error calculating market hours:', err);
+      return false;
+    }
   }
 
   public getTechnicalIndicators() {
@@ -268,6 +279,8 @@ class MarketEngine {
     const chain: OptionChainData[] = [];
     for (let i = -5; i <= 5; i++) {
       const strike = atmStrike + (i * 50);
+      const ce_iv = 12 + Math.random() * 4;
+      const pe_iv = 13 + Math.random() * 4;
       chain.push({
         strike,
         ce_oi: 5000000 - (i * 500000) + (Math.random() * 100000),
@@ -278,10 +291,11 @@ class MarketEngine {
         pe_price: Math.max(1, 100 + (strike - spot) * 0.4),
         ce_volume: Math.floor(Math.random() * 1000000),
         pe_volume: Math.floor(Math.random() * 1000000),
-        ce_iv: 12 + Math.random() * 4,
-        pe_iv: 13 + Math.random() * 4,
-        iv: 12.5 + Math.random() * 4,
-        delta: Math.max(-1, Math.min(1, (spot - strike) / 100)),
+        ce_iv,
+        pe_iv,
+        iv: (ce_iv + pe_iv) / 2,
+        delta: this.calculateDelta(spot, strike, 'CE', ce_iv),
+        pe_delta: this.calculateDelta(spot, strike, 'PE', pe_iv),
         gamma: Math.max(0.001, (1 / (50 + Math.abs(spot - strike)))) * 2, // ATM Gamma is higher
         theta: -10 - (Math.random() * 5),
         vega: 5 + (Math.random() * 2),

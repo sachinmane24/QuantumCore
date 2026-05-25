@@ -62,6 +62,17 @@ export default function App() {
   const [chainAnalysis, setChainAnalysis] = useState<any | null>(null);
   const [isAnalyzingChain, setIsAnalyzingChain] = useState(false);
   const [chainAnalysisError, setChainAnalysisError] = useState<string | null>(null);
+
+  // Native cockpit notifications & audio alerts state
+  const [toast, setToast] = useState<{
+    id: number;
+    type: 'ENTRY' | 'EXIT' | 'ROLL';
+    title: string;
+    message: string;
+    subMessage?: string;
+    color: 'emerald' | 'rose' | 'blue';
+  } | null>(null);
+  const prevPositionsRef = React.useRef<any[] | null>(null);
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -530,6 +541,133 @@ export default function App() {
       console.error("Fetch Data Critical Error:", err);
     }
   }, [isLoggedIn, appConfig]);
+
+  // Native Terminal Chime Synthesizer via Web Audio API
+  const playSynthSound = useCallback((type: 'ENTRY' | 'EXIT' | 'ROLL') => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      const now = ctx.currentTime;
+      
+      if (type === 'ENTRY') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, now); // D5
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+        osc.frequency.exponentialRampToValueAtTime(1174.66, now + 0.25); // D6
+        
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.12, now + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+        
+        osc.start(now);
+        osc.stop(now + 0.35);
+      } else if (type === 'EXIT') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(880, now); // A5
+        osc.frequency.exponentialRampToValueAtTime(587.33, now + 0.12); // D5
+        osc.frequency.exponentialRampToValueAtTime(440, now + 0.3); // A4
+        
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.15, now + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        
+        osc.start(now);
+        osc.stop(now + 0.4);
+      } else {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(659.25, now); // E5
+        osc.frequency.setValueAtTime(987.77, now + 0.06); // B5
+        
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        
+        osc.start(now);
+        osc.stop(now + 0.2);
+      }
+    } catch (e) {
+      console.warn("AudioContext init failed:", e);
+    }
+  }, []);
+
+  const triggerNotification = useCallback((type: 'ENTRY' | 'EXIT' | 'ROLL', positions: any[]) => {
+    playSynthSound(type);
+    
+    let title = "";
+    let message = "";
+    let subMessage = "";
+    let color: 'emerald' | 'rose' | 'blue' = 'blue';
+
+    const strikesStr = positions.map(p => `NIFTY ${p.strike} ${p.type}`).join(' & ');
+
+    if (type === 'ENTRY') {
+      title = "⚡ QUANTUM TRADE INITIATED";
+      message = `Automated trade setup triggered successfully under Active Portfolio.`;
+      subMessage = `Core contract legs matching: ${strikesStr}`;
+      color = 'emerald';
+    } else if (type === 'EXIT') {
+      title = "🔒 CONSOLIDATION SQUARE-OFF";
+      message = `All open derivative legs have been successfully exited & closed.`;
+      subMessage = `Position liquidations: ${strikesStr}`;
+      color = 'rose';
+    } else {
+      title = "🔄 STRATEGY ADAPTATION ROLL";
+      message = `Risk parameters optimized. Automated trade rolled forward.`;
+      subMessage = `Current contracts: ${strikesStr}`;
+      color = 'blue';
+    }
+
+    const toastId = Date.now();
+    setToast({
+      id: toastId,
+      type,
+      title,
+      message,
+      subMessage,
+      color
+    });
+
+    setTimeout(() => {
+      setToast(prev => prev?.id === toastId ? null : prev);
+    }, 8000);
+  }, [playSynthSound]);
+
+  // Monitor positions changes to trigger chime & status toasts
+  useEffect(() => {
+    if (!execution || loading) return;
+    
+    const prevPositions = prevPositionsRef.current;
+    const currentPositions = execution.positions || [];
+    
+    // Only detect transitions if we already completed the baseline load
+    if (prevPositions !== null) {
+      // 1. Entry detection
+      if (prevPositions.length === 0 && currentPositions.length > 0) {
+        triggerNotification('ENTRY', currentPositions);
+      }
+      // 2. Exit detection
+      else if (prevPositions.length > 0 && currentPositions.length === 0) {
+        triggerNotification('EXIT', prevPositions);
+      }
+      // 3. Roll detection
+      else if (prevPositions.length > 0 && currentPositions.length > 0) {
+        const prevStrikes = prevPositions.map(p => `${p.strike}_${p.type}_${p.side}`).join('|');
+        const currStrikes = currentPositions.map(p => `${p.strike}_${p.type}_${p.side}`).join('|');
+        if (prevStrikes !== currStrikes) {
+          triggerNotification('ROLL', currentPositions);
+        }
+      }
+    }
+
+    prevPositionsRef.current = currentPositions;
+  }, [execution, loading, triggerNotification]);
 
   // Data Fetching Intervals
   useEffect(() => {
@@ -1661,6 +1799,161 @@ export default function App() {
               </div>
             </div>
 
+            {/* --- CORE REAL-TIME EXECUTION & LIVE POSITIONS PANEL --- */}
+            <div className="col-span-12">
+              <section className={cn(
+                "terminal-card p-5 border backdrop-blur-xl transition-all duration-300",
+                execution?.positions && execution.positions.length > 0
+                  ? "bg-emerald-950/20 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.05)]"
+                  : "bg-slate-900/40 border-slate-800/80"
+              )}>
+                <div className="flex flex-col lg:flex-row items-stretch justify-between gap-6">
+                  {/* Left: Engine Status & Active Strategy */}
+                  <div className="flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-white/5 pb-4 lg:pb-0 lg:pr-6 min-w-[220px]">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <div className={cn(
+                          "w-2 h-2 rounded-full",
+                          execution?.positions && execution.positions.length > 0
+                            ? "bg-emerald-500 animate-pulse"
+                            : "bg-amber-500"
+                        )} />
+                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+                          EXECUTION ENGINE STATUS
+                        </span>
+                      </div>
+                      <div className="mt-2.5">
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Active Setup</div>
+                        <div className="text-md font-black text-white mt-0.5 tracking-tight flex items-center gap-2">
+                          {execution?.positions && execution.positions.length > 0 ? (
+                            <>
+                              <span className="text-emerald-400">●</span>
+                              <span>{strategy?.score?.strategyType?.replace(/_/g, ' ') || 'QUANT SETUP'}</span>
+                            </>
+                          ) : (
+                            <span className="text-slate-500 font-bold uppercase text-xs tracking-widest">STANDBY (IDLE)</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    {execution?.positions && execution.positions.length > 0 && (
+                      <div className="mt-4 flex gap-2">
+                        <span className={cn(
+                          "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider",
+                          strategy?.score?.bias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                          strategy?.score?.bias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
+                          "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                        )}>
+                          BIAS: {strategy?.score?.bias || "NEUTRAL"}
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[8px] font-black bg-white/5 border border-white/5 text-slate-300 uppercase tracking-wider">
+                          SCORE: {strategy?.score?.score || 0}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Middle: Active Leg Breakdown */}
+                  <div className="flex-1 flex flex-col justify-center">
+                    {execution?.positions && execution.positions.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left font-mono">
+                          <thead>
+                            <tr className="border-b border-white/5 text-[7px] font-bold text-slate-500 uppercase tracking-widest">
+                              <th className="py-1">LEG</th>
+                              <th className="py-1">STRIKE</th>
+                              <th className="py-1 text-center font-bold">QTY</th>
+                              <th className="py-1 text-right">ENTRY</th>
+                              <th className="py-1 text-right">LTP</th>
+                              <th className="py-1 text-right">REAL-TIME P&L</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/[0.02]">
+                            {execution.positions.map((pos: any, idx: number) => {
+                              const ltp = market?.chain?.find((c: any) => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price'] ?? pos.entryPrice;
+                              const legPnl = (pos.side === 'BUY' ? (ltp - pos.entryPrice) : (pos.entryPrice - ltp)) * pos.qty;
+                              return (
+                                <tr key={idx} className="text-[10px] text-slate-300">
+                                  <td className="py-2.5">
+                                    <span className={cn(
+                                      "px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wide",
+                                      pos.side === 'SELL' ? "bg-rose-500/10 text-rose-100 border border-rose-500/10" : "bg-emerald-500/10 text-emerald-100 border border-emerald-500/10"
+                                    )}>
+                                      {pos.side}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 font-sans font-black text-white p-2">
+                                    NIFTY {pos.strike} {pos.type}
+                                  </td>
+                                  <td className="py-2.5 text-center font-black text-slate-400">{pos.qty}</td>
+                                  <td className="py-2.5 text-right font-black">₹{pos.entryPrice.toFixed(1)}</td>
+                                  <td className="py-2.5 text-right font-black text-blue-400">₹{ltp.toFixed(1)}</td>
+                                  <td className={cn(
+                                    "py-2.5 text-right font-black",
+                                    legPnl >= 0 ? "text-emerald-400" : "text-rose-400"
+                                  )}>
+                                    {legPnl >= 0 ? '+' : ''}₹{legPnl.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-3 text-center">
+                        <div className="text-[11px] font-black tracking-widest text-slate-500 uppercase flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-pulse" />
+                          No active trades currently open
+                        </div>
+                        <p className="text-[9px] text-slate-600 mt-1 uppercase font-bold tracking-wider">
+                          The system is continuously indexing options order books to trigger automated setups
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: Net P&L Summary Dashboard */}
+                  <div className="flex flex-col md:flex-row items-center justify-between gap-6 border-t lg:border-t-0 lg:border-l border-white/5 pt-4 lg:pt-0 lg:pl-6 min-w-[280px]">
+                    <div className="flex-1 flex flex-col items-center md:items-start text-center md:text-left">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                        CONSOLIDATED REAL-TIME P&L
+                      </span>
+                      <div className={cn(
+                        "text-2xl font-black font-mono mt-1 tracking-tight filter drop-shadow-md",
+                        (execution?.pnl || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
+                      )}>
+                        {(execution?.pnl || 0) >= 0 ? '+' : ''}₹{(execution?.pnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="flex gap-4 mt-2">
+                        <div className="flex flex-col">
+                          <span className="text-[7px] text-slate-500 font-bold uppercase tracking-wider">Cap Deployed</span>
+                          <span className="text-[10px] font-black text-white font-mono">
+                            ₹{(execution?.capitalDeployed || 0).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="w-px h-5 bg-white/5" />
+                        <div className="flex flex-col">
+                          <span className="text-[7px] text-slate-500 font-bold uppercase tracking-wider">Today Max SL</span>
+                          <span className="text-[10px] font-black text-rose-500 font-mono">
+                            ₹{(execution?.risk?.limits?.lossLimit || 5000).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    {execution?.positions && execution.positions.length > 0 && (
+                      <button 
+                        onClick={handleExit}
+                        className="w-full md:w-auto px-5 py-3 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/30 text-rose-500 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all shadow-[0_0_15px_rgba(244,63,94,0.05)]"
+                      >
+                        Square Off
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </section>
+            </div>
+
             {/* Column 1: NIFTY Movement Evaluation & Decision Matrix */}
             <div className="col-span-12 lg:col-span-4 flex flex-col gap-4 pr-2">
               <section className="terminal-card bg-slate-900/40 p-5 flex flex-col gap-4">
@@ -1803,65 +2096,6 @@ export default function App() {
                   </div>
                 </div>
               </section>
-
-              {/* Active Positions */}
-               {execution?.positions && execution.positions.length > 0 && (
-                 <section className="terminal-card bg-emerald-600/[0.05] border-emerald-500/20 p-5 mt-4">
-                    <div className="flex justify-between items-center mb-4">
-                       <div className="flex items-center gap-2.5">
-                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Current Positions</h3>
-                       </div>
-                       <div className="flex items-center gap-2.5">
-                         <div className={cn(
-                           "px-2.5 py-0.5 rounded text-[10px] font-black font-mono",
-                           (execution?.pnl || 0) >= 0 ? "text-emerald-400 bg-emerald-400/10" : "text-rose-400 bg-rose-400/10"
-                         )}>
-                           PNL: ₹{execution?.pnl}
-                         </div>
-                         <div className="px-2.5 py-0.5 rounded text-[10px] font-black text-blue-400 bg-blue-400/10 uppercase tracking-tighter font-mono font-mono">
-                           CAP: ₹{execution?.capitalDeployed?.toLocaleString() || 0}
-                         </div>
-                       </div>
-                    </div>
-                    <div className="space-y-2">
-                       {execution.positions.map((pos: any, idx: number) => (
-                         <div key={idx} className="bg-black/40 border border-white/5 rounded-lg p-3 flex justify-between items-center">
-                            <div className="flex items-center gap-4">
-                               <span className={cn(
-                                 "px-2 py-0.5 rounded text-[8px] font-black",
-                                 pos.side === 'SELL' ? "bg-rose-500/20 text-rose-500" : "bg-emerald-500/20 text-emerald-500"
-                               )}>
-                                 {pos.side}
-                               </span>
-                               <div>
-                                  <div className="text-[10px] font-black text-white">NIFTY {pos.strike} {pos.type}</div>
-                                  <div className="flex items-center gap-2">
-                                     <div className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{pos.qty} QTY @ ₹{pos.entryPrice}</div>
-                                     <div className="w-1 h-1 rounded-full bg-white/10" />
-                                     <div className="text-[8px] font-black text-blue-400 uppercase tracking-widest">
-                                        LTP: ₹{
-                                          market?.chain.find(c => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price']?.toFixed(1) || pos.entryPrice
-                                        }
-                                     </div>
-                                  </div>
-                               </div>
-                            </div>
-                            <div className="text-right">
-                               <div className="text-[10px] font-black text-emerald-400">LIVE</div>
-                               <div className="text-[8px] text-slate-500 font-bold">DECAY: OPTIMAL</div>
-                            </div>
-                         </div>
-                       ))}
-                       <button 
-                          onClick={handleExit}
-                          className="w-full mt-2 py-2 bg-rose-600/10 hover:bg-rose-600/20 border border-rose-500/30 text-rose-500 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all"
-                       >
-                          Emergency Square Off
-                       </button>
-                    </div>
-                 </section>
-               )}
             </div>
 
             {/* Column 2: Options Intelligence Suite & Deep Chain Matrix */}
@@ -4388,6 +4622,49 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Floating Live Quantum Terminal Notification Toast */}
+      {toast && (
+        <div className="fixed bottom-24 right-8 z-50 w-full max-w-sm overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900/95 p-4 shadow-2xl backdrop-blur-xl">
+          <div className="flex gap-3">
+            <div className={cn(
+               "w-10 h-10 rounded-lg flex items-center justify-center border shrink-0",
+               toast.color === 'emerald' ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" :
+               toast.color === 'rose' ? "bg-rose-500/10 border-rose-500/20 text-rose-400" :
+               "bg-blue-500/10 border-blue-500/20 text-blue-400"
+            )}>
+              {toast.type === 'ENTRY' ? (
+                 <span className="text-lg font-black leading-none">🚀</span>
+              ) : toast.type === 'EXIT' ? (
+                 <span className="text-lg font-black leading-none">🏁</span>
+              ) : (
+                 <span className="text-lg font-black leading-none">🔄</span>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-white mb-1 leading-normal flex items-center gap-2">
+                <span>{toast.title}</span>
+                <span className={cn(
+                  "w-1.5 h-1.5 rounded-full animate-pulse",
+                  toast.color === 'emerald' ? "bg-emerald-400" : toast.color === 'rose' ? "bg-rose-400" : "bg-blue-400"
+                )} />
+              </h4>
+              <p className="text-[10.5px] text-slate-300 font-bold leading-normal mb-1">{toast.message}</p>
+              {toast.subMessage && (
+                <div className="font-mono text-[8.5px] font-black tracking-tight text-slate-400 border border-white/5 bg-black/40 px-2.5 py-1 rounded truncate">
+                  {toast.subMessage}
+                </div>
+              )}
+            </div>
+            <button 
+              onClick={() => setToast(null)}
+              className="text-slate-500 hover:text-slate-300 transition-colors h-fit text-[11px] font-bold leading-none p-1 shrink-0"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
          </div>
     </div>
   </div>
