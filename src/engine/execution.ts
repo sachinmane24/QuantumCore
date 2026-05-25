@@ -517,11 +517,11 @@ class ExecutionEngine {
         );
       }
 
-      // Update Risk Engine
-      riskEngine.updatePnL(this.pnl, this.activePositions);
-
-      // Calculate Portfolio Greeks
+      // Calculate Portfolio Greeks first so risk envelope check sees the current state
       this.calculatePortfolioGreeks();
+
+      // Update Risk Engine (with live greeks so vega/delta limits are enforced)
+      riskEngine.updatePnL(this.pnl, this.activePositions, { netDelta: this.netDelta, netVega: this.netVega });
       
       this.calculateCapitalDeployed();
 

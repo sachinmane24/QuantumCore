@@ -54,10 +54,10 @@ class RiskEngine {
 
   private lastResetDate: string | null = null;
 
-  updatePnL(currentPnL: number, positions: Position[]) {
+  updatePnL(currentPnL: number, positions: Position[], greeks?: { netDelta: number; netVega: number }) {
     this.checkForDailyReset();
     this.stats.dailyPnL = currentPnL;
-    
+
     // Track Drawdown
     if (currentPnL > this.stats.peakPnLToday) {
       this.stats.peakPnLToday = currentPnL;
@@ -70,7 +70,7 @@ class RiskEngine {
     this.stats.portfolioHeat = Number(((totalRisk / config.CAPITAL_BASE) * 100).toFixed(2));
 
     this.calculateRiskScore(positions);
-    this.checkThresholds();
+    this.checkThresholds(greeks);
     this.saveState();
   }
 
@@ -113,13 +113,13 @@ class RiskEngine {
     this.stats.riskScore = Math.max(0, Math.round(score));
   }
 
-  private checkThresholds() {
+  private checkThresholds(greeks?: { netDelta: number; netVega: number }) {
     if (this.stats.isKillSwitchActive) return;
 
     // Time-based Kill Switch (15:15 IST Square-off)
     const ist = getISTDate();
     const timeStr = ist.timeStr;
-    
+
     if (timeStr >= config.END_TIME && !config.BTST_MODE) {
       this.activateKillSwitch(`Auto-Square-off Time Reached (${config.END_TIME} IST)`);
       return;
@@ -133,7 +133,19 @@ class RiskEngine {
     } else if (this.stats.consecutiveLosses >= config.CONSECUTIVE_LOSS_LIMIT) {
       this.activateKillSwitch('Consecutive Loss Limit Reached');
     }
-    
+
+    // Greek exposure breach — flatten if portfolio drifts outside risk envelope
+    if (greeks) {
+      if (Math.abs(greeks.netDelta) > config.MAX_DELTA_LIMIT) {
+        this.activateKillSwitch(`Net Delta breach (|${greeks.netDelta.toFixed(2)}| > ${config.MAX_DELTA_LIMIT})`);
+        return;
+      }
+      if (Math.abs(greeks.netVega) > config.MAX_VEGA_LIMIT) {
+        this.activateKillSwitch(`Net Vega breach (|${greeks.netVega.toFixed(2)}| > ${config.MAX_VEGA_LIMIT})`);
+        return;
+      }
+    }
+
     // Profit Lock Logic
     if (this.stats.peakPnLToday >= config.DAILY_PROFIT_LOCK) {
       const lockThreshold = this.stats.peakPnLToday * 0.7; // Lock 70% of peak profit
@@ -179,7 +191,7 @@ class RiskEngine {
     this.lastResetDate = today;
   }
 
-  validateEntry(qty: number, expectedSL: number): { allowed: boolean; reason: string | null; score: number } {
+  validateEntry(qty: number, expectedSL: number, projectedGreeks?: { netDelta: number; netVega: number }): { allowed: boolean; reason: string | null; score: number } {
     this.checkForDailyReset();
     
     if (this.stats.isKillSwitchActive) {
@@ -226,6 +238,16 @@ class RiskEngine {
     // Heat check
     if (this.stats.portfolioHeat > config.MAX_PORTFOLIO_HEAT) {
        return { allowed: false, reason: `Portfolio Heat (${this.stats.portfolioHeat}%) too high`, score: this.stats.riskScore };
+    }
+
+    // Greek envelope pre-check
+    if (projectedGreeks) {
+      if (Math.abs(projectedGreeks.netDelta) > config.MAX_DELTA_LIMIT) {
+        return { allowed: false, reason: `Projected Net Delta (${projectedGreeks.netDelta.toFixed(2)}) exceeds limit ${config.MAX_DELTA_LIMIT}`, score: this.stats.riskScore };
+      }
+      if (Math.abs(projectedGreeks.netVega) > config.MAX_VEGA_LIMIT) {
+        return { allowed: false, reason: `Projected Net Vega (${projectedGreeks.netVega.toFixed(2)}) exceeds limit ${config.MAX_VEGA_LIMIT}`, score: this.stats.riskScore };
+      }
     }
 
     return { allowed: true, reason: null, score: this.stats.riskScore };

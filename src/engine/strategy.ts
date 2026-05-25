@@ -127,10 +127,10 @@ class StrategyEngine {
     
     let oiBiasScore = 10;
 
-    if (pcr > 1.2 || Math.abs(oiChangeBias) > 250000) oiBiasScore = 20;
-    else if (pcr > 1.05 || Math.abs(oiChangeBias) > 80000) oiBiasScore = 15;
-    else if (pcr < 0.8 || Math.abs(oiChangeBias) < -250000) oiBiasScore = 20;
-    else if (pcr < 0.95 || Math.abs(oiChangeBias) < -80000) oiBiasScore = 15;
+    if (pcr > 1.2 || oiChangeBias > 250000) oiBiasScore = 20;
+    else if (pcr > 1.05 || oiChangeBias > 80000) oiBiasScore = 15;
+    else if (pcr < 0.8 || oiChangeBias < -250000) oiBiasScore = 20;
+    else if (pcr < 0.95 || oiChangeBias < -80000) oiBiasScore = 15;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));

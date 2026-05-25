@@ -134,14 +134,44 @@ class MarketEngine {
       return { upper: sma + stdDev * sd, middle: sma, lower: sma - stdDev * sd };
     };
 
-    // MACD (12, 26, 9)
-    const ema12 = computeEMA(prices, 12);
-    const ema26 = computeEMA(prices, 26);
-    const macdValue = ema12 - ema26;
-    
+    // MACD (12, 26, 9) — build a rolling MACD-line series, then EMA(9) it for signal.
+    // Need at least 26 + 9 = 35 bars for a meaningful signal line; otherwise return raw line.
+    const macdLineAt = (idxFromEnd: number) => {
+      // Compute EMA(period) over data[0 .. data.length - 1 - idxFromEnd]
+      const slice = prices.slice(0, prices.length - idxFromEnd);
+      if (slice.length < 26) return 0;
+      const ema = (period: number) => {
+        const k = 2 / (period + 1);
+        let e = slice[slice.length - period];
+        for (let i = slice.length - period + 1; i < slice.length; i++) {
+          e = (slice[i] * k) + (e * (1 - k));
+        }
+        return e;
+      };
+      return ema(12) - ema(26);
+    };
+
+    const macdValue = macdLineAt(0);
+    let signal = macdValue;
+    let histogram = 0;
+
+    if (prices.length >= 35) {
+      const signalWindow = 9;
+      const macdSeries: number[] = [];
+      for (let i = signalWindow - 1; i >= 0; i--) {
+        macdSeries.push(macdLineAt(i));
+      }
+      const k = 2 / (signalWindow + 1);
+      signal = macdSeries[0];
+      for (let i = 1; i < macdSeries.length; i++) {
+        signal = (macdSeries[i] * k) + (signal * (1 - k));
+      }
+      histogram = macdValue - signal;
+    }
+
     return {
       rsi: computeRSI(prices),
-      macd: { macd: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
+      macd: { macd: macdValue, signal, histogram },
       bollinger: computeBBands(prices)
     };
   }
