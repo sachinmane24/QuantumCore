@@ -673,18 +673,34 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn) return;
 
-    // Initial load
-    fetchData('fast');
-    fetchData('slow');
+    let fastTimer: NodeJS.Timeout;
+    let slowTimer: NodeJS.Timeout;
+    let isActive = true;
 
-    // Fast polling: 1.5s (optimized for responsiveness)
-    const fastInterval = setInterval(() => fetchData('fast'), 1500);
-    // Slow polling: 15s (improved from 30s)
-    const slowInterval = setInterval(() => fetchData('slow'), 15000);
+    const pollFast = async () => {
+      if (!isActive) return;
+      await fetchData('fast');
+      if (isActive) {
+        fastTimer = setTimeout(pollFast, 1500);
+      }
+    };
+
+    const pollSlow = async () => {
+      if (!isActive) return;
+      await fetchData('slow');
+      if (isActive) {
+        slowTimer = setTimeout(pollSlow, 15000);
+      }
+    };
+
+    // Initial load
+    pollFast();
+    pollSlow();
 
     return () => {
-      clearInterval(fastInterval);
-      clearInterval(slowInterval);
+      isActive = false;
+      clearTimeout(fastTimer);
+      clearTimeout(slowTimer);
     };
   }, [fetchData, isLoggedIn]);
 
