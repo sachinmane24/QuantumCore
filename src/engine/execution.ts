@@ -758,54 +758,65 @@ class ExecutionEngine {
     if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) return;
     if (Math.abs(this.netDelta) <= config.DELTA_TOLERANCE) return;
 
-    // Hedge with NIFTY futures, not by selling more options.
-    // A futures lot is ~1.0 delta per unit; we want to neutralize approximately
-    // the *excess* delta beyond tolerance, leaving a small directional edge.
+    // Options-only hedge — BUY an ATM option of the opposite delta sign.
+    // +delta excess → BUY ATM PE (PE delta ≈ -0.5).
+    // -delta excess → BUY ATM CE (CE delta ≈ +0.5).
+    // Buying limits risk to the premium paid and never adds short gamma.
     const spot = marketEngine.getSpotPrice();
-    const excessDelta = this.netDelta - Math.sign(this.netDelta) * config.DELTA_TOLERANCE;
-    // One FUT lot ≈ 1.0 delta-units (i.e. 1.0 × LOT_SIZE shares of exposure).
-    // Under-hedge by using floor so we keep a sliver of bias.
-    const lotsNeeded = Math.max(1, Math.floor(Math.abs(excessDelta)));
-    const hedgeQty = lotsNeeded * config.LOT_SIZE;
-    // To remove +delta we SELL futures; to remove -delta we BUY futures.
-    const hedgeSide: 'BUY' | 'SELL' = this.netDelta > 0 ? 'SELL' : 'BUY';
+    const atmStrike = Math.round(spot / 50) * 50;
+    const chain = marketEngine.getOptionChain();
+    const atmOpt = chain.find(o => o.strike === atmStrike);
 
-    console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} > tolerance (${config.DELTA_TOLERANCE}). ${hedgeSide} ${lotsNeeded} NIFTY FUT lot(s) @ ~${spot.toFixed(1)}`);
+    const hedgeType: 'CE' | 'PE' = this.netDelta > 0 ? 'PE' : 'CE';
+    // Per-unit delta magnitude of the hedge contract — fall back to 0.5 if greeks missing.
+    let perUnitDelta = 0.5;
+    if (atmOpt) {
+      const d = hedgeType === 'CE' ? (atmOpt.delta || 0.5) : ((atmOpt as any).pe_delta ?? -0.5);
+      perUnitDelta = Math.abs(d) || 0.5;
+    }
+
+    // Lots needed to absorb the excess (delta beyond tolerance). Under-hedge with floor
+    // so we keep a sliver of directional edge.
+    const excessDelta = Math.abs(this.netDelta) - config.DELTA_TOLERANCE;
+    const lotsNeeded = Math.max(1, Math.floor(excessDelta / perUnitDelta));
+    const hedgeQty = lotsNeeded * config.LOT_SIZE;
+    const hedgePrice = atmOpt ? (hedgeType === 'CE' ? atmOpt.ce_price : atmOpt.pe_price) : 100;
+
+    console.log(`[GAMMA SCALP] Net Δ ${this.netDelta.toFixed(2)} > tolerance (${config.DELTA_TOLERANCE}). BUY ${lotsNeeded} ATM ${atmStrike}${hedgeType} @ ₹${hedgePrice.toFixed(1)}`);
 
     this.lastHedgeTime = now;
 
-    // Net out existing FUT hedge if any.
-    const existingIdx = this.activePositions.findIndex(p => p.type === 'FUT' && p.isHedge);
+    // Net against an existing hedge leg at the same strike+type, if one is open.
+    const existingIdx = this.activePositions.findIndex(p => p.strike === atmStrike && p.type === hedgeType && p.isHedge);
     if (existingIdx !== -1) {
       const existing = this.activePositions[existingIdx];
-      if (existing.side === hedgeSide) {
-        // Same direction — just add qty.
-        existing.qty += hedgeQty;
+      if (existing.side === 'BUY') {
+        // Same side — average up and add qty.
+        const totalQty = existing.qty + hedgeQty;
+        existing.entryPrice = ((existing.entryPrice * existing.qty) + (hedgePrice * hedgeQty)) / totalQty;
+        existing.qty = totalQty;
       } else {
-        // Opposite — net it.
-        if (existing.qty > hedgeQty) {
-          existing.qty -= hedgeQty;
-        } else if (existing.qty === hedgeQty) {
-          this.activePositions.splice(existingIdx, 1);
-        } else {
-          const remaining = hedgeQty - existing.qty;
-          existing.qty = remaining;
-          existing.side = hedgeSide;
-          existing.entryPrice = spot;
+        // Was a short hedge (legacy) — net it out.
+        if (existing.qty > hedgeQty) existing.qty -= hedgeQty;
+        else if (existing.qty === hedgeQty) this.activePositions.splice(existingIdx, 1);
+        else {
+          existing.qty = hedgeQty - existing.qty;
+          existing.side = 'BUY';
+          existing.entryPrice = hedgePrice;
         }
       }
     } else {
       this.activePositions.push({
-        strike: 0,
-        type: 'FUT',
-        entryPrice: spot,
+        strike: atmStrike,
+        type: hedgeType,
+        entryPrice: hedgePrice,
         qty: hedgeQty,
-        side: hedgeSide,
+        side: 'BUY',
         isHedge: true
       });
     }
 
-    this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Δ ${this.netDelta.toFixed(2)} → ${hedgeSide} ${lotsNeeded} FUT lot @ ${spot.toFixed(1)}`);
+    this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Δ ${this.netDelta.toFixed(2)} → BUY ${lotsNeeded} × ${atmStrike}${hedgeType} @ ₹${hedgePrice.toFixed(1)}`);
     if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
 
     this.calculatePortfolioGreeks();
