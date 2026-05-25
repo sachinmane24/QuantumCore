@@ -75,6 +75,8 @@ export default function App() {
   const prevPositionsRef = React.useRef<any[] | null>(null);
   const [showFlattenConfirm, setShowFlattenConfirm] = useState(false);
   const [isFlattening, setIsFlattening] = useState(false);
+  const [pendingExecute, setPendingExecute] = useState<{ bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' } | null>(null);
+  const [isExecuting, setIsExecuting] = useState(false);
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -237,7 +239,10 @@ export default function App() {
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const inEditable = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
       if (inEditable) return;
-      if (e.key === 'Escape' && showFlattenConfirm) { setShowFlattenConfirm(false); return; }
+      if (e.key === 'Escape') {
+        if (showFlattenConfirm) { setShowFlattenConfirm(false); return; }
+        if (pendingExecute) { setPendingExecute(null); return; }
+      }
       if ((e.key === 'k' || e.key === 'K') && !e.metaKey && !e.ctrlKey && !e.altKey) {
         if ((execution?.positions?.length ?? 0) > 0) {
           setShowFlattenConfirm(true);
@@ -246,7 +251,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [execution?.positions?.length, showFlattenConfirm]);
+  }, [execution?.positions?.length, showFlattenConfirm, pendingExecute]);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
   
@@ -750,12 +755,34 @@ export default function App() {
     };
   }, [fetchData, isLoggedIn]);
 
+  // Manual-execute path:
+  //  - In LIVE mode (real broker), open a confirm modal showing exactly what's about
+  //    to be sent (structure, legs, SL, target). One stray click should never fire
+  //    real-money orders.
+  //  - In PAPER / MOCK, fire immediately as before.
   const handleExecute = async (bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
-    await fetch('/api/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bias })
-    });
+    if (execution?.executionMode === 'LIVE') {
+      setPendingExecute({ bias });
+      return;
+    }
+    await submitExecute(bias);
+  };
+
+  const submitExecute = async (bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL') => {
+    setIsExecuting(true);
+    try {
+      await fetch('/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bias })
+      });
+      await fetchData('fast');
+    } catch (e) {
+      console.error("[EXECUTE] failed:", e);
+    } finally {
+      setIsExecuting(false);
+      setPendingExecute(null);
+    }
   };
 
   const handleExit = async () => {
@@ -1499,6 +1526,7 @@ export default function App() {
         <nav className="flex flex-col gap-6">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
+            { id: 'options', icon: Layers, label: 'Chain' },
             { id: 'risk', icon: ShieldAlert, label: 'Risk' },
             { id: 'analytics', icon: TrendingUp, label: 'Analytics' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
@@ -2145,6 +2173,55 @@ export default function App() {
                     Score: {strategy?.score?.total || 0} / 100
                   </div>
                 </div>
+
+                {/* Compact segmented score breakdown — each colored block is one component's
+                    contribution to the total. Width is proportional to points scored,
+                    so you can read *why* the total looks the way it does at a glance. */}
+                {strategy?.score && (() => {
+                  const s = strategy.score as any;
+                  const segs: { key: string; pts: number; max: number; color: string; label: string }[] = [
+                    { key: 'trend', pts: s.trendScore || 0, max: 25, color: 'bg-blue-500',   label: 'Trend' },
+                    { key: 'oi',    pts: s.oiBiasScore || 0, max: 20, color: 'bg-violet-500', label: 'OI Bias' },
+                    { key: 'tech',  pts: Math.max(0, (s.total || 0) - (s.trendScore || 0) - (s.oiBiasScore || 0) - (s.gammaScore || 0) - (s.timeFilterScore || 0)), max: 30, color: 'bg-cyan-500', label: 'Tech + ORB + Pin' },
+                    { key: 'gamma', pts: s.gammaScore || 0, max: 15, color: 'bg-amber-500',  label: 'Gamma (VIX)' },
+                    { key: 'time',  pts: s.timeFilterScore || 0, max: 20, color: 'bg-teal-500',   label: 'Time Filter' },
+                  ];
+                  const total = s.total || 0;
+                  const scale = Math.max(100, total);
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-0.5 h-2.5 rounded-full overflow-hidden bg-white/[0.04] border border-white/5">
+                        {segs.map(seg => {
+                          const width = (seg.pts / scale) * 100;
+                          if (width < 0.5) return null;
+                          return (
+                            <div
+                              key={seg.key}
+                              className={cn(seg.color, "h-full transition-all duration-300")}
+                              style={{ width: `${width}%` }}
+                              title={`${seg.label}: ${seg.pts} / ${seg.max} pts`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[7.5px] font-bold uppercase tracking-widest text-slate-500">
+                        {segs.map(seg => (
+                          <span key={`lbl-${seg.key}`} className="flex items-center gap-1">
+                            <span className={cn("w-1.5 h-1.5 rounded-sm", seg.color)} />
+                            <span className="text-slate-400">{seg.label}</span>
+                            <span className="text-slate-200 font-mono tabular-nums">{seg.pts}</span>
+                          </span>
+                        ))}
+                        {s.pinAlignment && s.pinAlignment !== 'NONE' && (
+                          <span className="flex items-center gap-1 text-purple-300">
+                            <Target className="w-2 h-2" />
+                            <span>PIN +{s.pinAlignment === 'STRONG' ? 15 : 8}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Active Directive & Sentiment */}
                 <div className="bg-slate-950/60 p-4 border border-white/5 rounded-lg flex flex-col gap-2">
@@ -4885,6 +4962,116 @@ export default function App() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* LIVE Execute Confirm Modal — only opens when EXECUTION_MODE is LIVE */}
+      {pendingExecute && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => !isExecuting && setPendingExecute(null)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-[#0b0f19] border border-amber-500/40 rounded-2xl w-full max-w-md shadow-[0_0_60px_rgba(245,158,11,0.3)] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-4 flex items-center gap-3">
+              <ShieldAlert className="w-5 h-5 text-amber-400" />
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-amber-300">Confirm Live Order</h3>
+                <p className="text-[9px] text-amber-300/60 font-bold uppercase tracking-widest mt-0.5">Real money — broker order will be submitted</p>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-black/40 border border-white/5 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Direction</span>
+                  <span className={cn(
+                    "font-black uppercase tracking-widest",
+                    pendingExecute.bias === 'BULLISH' ? "text-emerald-400" :
+                    pendingExecute.bias === 'BEARISH' ? "text-rose-400" : "text-blue-400"
+                  )}>
+                    {pendingExecute.bias}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Structure</span>
+                  <span className="text-white font-black font-mono uppercase">
+                    {strategy?.score?.strategyType?.replace(/_/g, ' ') || '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">System Score</span>
+                  <span className="text-white font-black font-mono">{strategy?.score?.total || 0} / 100</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Spot / ATM</span>
+                  <span className="text-slate-200 font-mono">
+                    ₹{(market?.spot || 0).toFixed(1)}
+                    <span className="text-slate-500 mx-1">·</span>
+                    ₹{(Math.round((market?.spot || 0) / 50) * 50).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">IV Rank</span>
+                  <span className="text-slate-200 font-mono">
+                    {strategy?.score?.ivRank !== null && strategy?.score?.ivRank !== undefined
+                      ? `${Math.round(strategy.score.ivRank)}%`
+                      : '—'}
+                  </span>
+                </div>
+                {strategy?.score?.pinAlignment && strategy.score.pinAlignment !== 'NONE' && (
+                  <div className="flex justify-between text-[10px]">
+                    <span className="text-slate-500 font-bold uppercase tracking-widest">Pin Magnet</span>
+                    <span className="text-purple-400 font-black font-mono">
+                      {strategy.score.pinStrike} ({strategy.score.pinAlignment})
+                    </span>
+                  </div>
+                )}
+                <div className="border-t border-white/5 pt-2 mt-2 flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Lot Size</span>
+                  <span className="text-slate-200 font-mono">{appConfig?.LOT_SIZE || 75} per leg</span>
+                </div>
+              </div>
+              {strategy?.score?.recommendation && (
+                <div className="text-[10px] text-blue-300 bg-blue-500/5 border border-blue-500/15 rounded p-2 font-medium leading-relaxed">
+                  <span className="font-black text-blue-400 uppercase tracking-widest text-[8px] mr-2">Engine note:</span>
+                  {strategy.score.recommendation}
+                </div>
+              )}
+              <p className="text-[10px] text-amber-300 font-bold leading-relaxed">
+                This action will place real orders at the broker. SL / Target rules will be applied automatically by the risk engine after fill.
+              </p>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setPendingExecute(null)}
+                  disabled={isExecuting}
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 text-[10px] font-black uppercase tracking-[0.15em] text-slate-300 hover:bg-white/5 transition disabled:opacity-50"
+                >
+                  Cancel <span className="text-slate-600 ml-1">(Esc)</span>
+                </button>
+                <button
+                  onClick={() => submitExecute(pendingExecute.bias)}
+                  disabled={isExecuting}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-[0.15em] shadow-[0_0_18px_rgba(245,158,11,0.5)] transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isExecuting ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5" />
+                      Place Live Order
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
       )}
 
