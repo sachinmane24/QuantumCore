@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config } from './config.ts';
+import { config, getActiveSpec } from './config.ts';
 import { marketEngine } from './market.ts';
 
 export interface TradeParams {
@@ -56,8 +56,9 @@ class IntelligenceEngine {
     // Stop Loss Hunting Protection: 
     // We check the recent swing high/low and put our SL at least X points beyond it 
     // to avoid getting hunted in a liquidity sweep.
-    const swings = marketEngine.getSwingLevels(30); 
-    const huntingBuffer = Math.max(8, atr * 0.2); // Slightly increased buffer for Nifty
+    const swings = marketEngine.getSwingLevels(30);
+    const ptScale = getActiveSpec().pointScale;
+    const huntingBuffer = Math.max(8 * ptScale, atr * 0.2); // SL-hunt buffer, scaled per symbol
     
     let slPoints = 0;
     let targetPoints = 0;
@@ -89,10 +90,13 @@ class IntelligenceEngine {
       // Afternoon Gamma Blast (Post 1:45 PM IST = 825 mins)
       if (isExpiryDay && totalMin >= 825) {
         riskRewardRatio = 5.5; 
-        slPoints = Math.max(18, slPoints * 0.85); // Adjusted for better stability
+        slPoints = Math.max(18 * ptScale, slPoints * 0.85);
       }
 
-      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 55 : 45) : 65, slPoints); // Slightly wider caps
+      // SL caps scaled per symbol (NIFTY 65 → SENSEX 260 on normal day).
+      const buyingCap = getActiveSpec().buyingSLCap;
+      const expiryCap = isMonthlyExpiry ? buyingCap * 0.85 : buyingCap * 0.7;
+      slPoints = Math.min(isExpiryDay ? expiryCap : buyingCap, slPoints);
       targetPoints = slPoints * riskRewardRatio;
       
       // Ensure target is at least 0.7% of Spot for Momentum to catch real moves
@@ -123,8 +127,8 @@ class IntelligenceEngine {
       if (isExpiryDay && totalMin >= 810) {
         const maxPain = marketEngine.getMaxPain();
         const distToMaxPain = Math.abs(entrySpot - maxPain);
-        if (distToMaxPain < 40) {
-           slPoints *= 0.85; 
+        if (distToMaxPain < 40 * ptScale) {
+           slPoints *= 0.85;
         }
       }
 
@@ -157,7 +161,7 @@ class IntelligenceEngine {
       vixFactor: Number(vixFactor.toFixed(2)),
       pop: Math.round(pop),
       maxProfit: strategyMode === 'MOMENTUM_SNIPER' ? undefined : 2500, 
-      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * 75 : 5500
+      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * config.LOT_SIZE : 5500
     };
   }
 

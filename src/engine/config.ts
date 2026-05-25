@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { DEFAULT_SYMBOL, getSpec, isValidSymbol, type SymbolKey } from './symbols.ts';
 
 export const ConfigSchema = z.object({
   KITE_API_KEY: z.string().optional(),
@@ -13,8 +14,10 @@ export const ConfigSchema = z.object({
   DATA_SOURCE: z.enum(['MOCK', 'LIVE']).default('MOCK'),
   EXECUTION_MODE: z.enum(['PAPER', 'LIVE']).default('PAPER'),
   AUTO_MODE: z.boolean().default(false),
+  ACTIVE_SYMBOL: z.enum(['NIFTY', 'SENSEX']).default('NIFTY'),
   TRADING_SYMBOL: z.string().default('NIFTY'),
-  LOT_SIZE: z.number().default(65), // Updated for Nifty current standard lot size
+  LOT_SIZE: z.number().default(75),
+  STRIKE_STEP: z.number().default(50),
   SL_RUPEES: z.number().default(2000),
   TARGET_RUPEES: z.number().default(4000),
   MAX_ROLLS: z.number().default(5),
@@ -55,8 +58,10 @@ export const config: Config = {
   DATA_SOURCE: 'MOCK',
   EXECUTION_MODE: 'PAPER',
   AUTO_MODE: true,
+  ACTIVE_SYMBOL: DEFAULT_SYMBOL,
   TRADING_SYMBOL: 'NIFTY',
-  LOT_SIZE: 65,
+  LOT_SIZE: 75,
+  STRIKE_STEP: 50,
   SL_RUPEES: 2000,
   TARGET_RUPEES: 4000,
   MAX_ROLLS: 5,
@@ -93,6 +98,20 @@ export const setExecutionMode = (mode: 'PAPER' | 'LIVE') => {
 export const setAutoMode = (mode: boolean) => {
   config.AUTO_MODE = mode;
 };
+
+// Switch the active index. Pulls lot size / strike step / display name from the
+// symbol registry so the rest of the codebase only needs to read `config.LOT_SIZE`
+// / `config.STRIKE_STEP` (no per-symbol branching outside this module).
+export const setActiveSymbol = (key: SymbolKey) => {
+  if (!isValidSymbol(key)) return;
+  const spec = getSpec(key);
+  config.ACTIVE_SYMBOL = key;
+  config.TRADING_SYMBOL = spec.key;
+  config.LOT_SIZE = spec.lotSize;
+  config.STRIKE_STEP = spec.strikeStep;
+};
+
+export const getActiveSpec = () => getSpec(config.ACTIVE_SYMBOL);
 
 export const updateConfig = (newConfig: Partial<Config>) => {
   Object.assign(config, newConfig);

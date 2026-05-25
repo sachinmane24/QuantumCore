@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config } from './config.ts';
+import { config, getActiveSpec } from './config.ts';
 import { marketEngine } from './market.ts';
 import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
@@ -58,14 +58,17 @@ class ExecutionEngine {
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
   private isProcessing: boolean = false;
 
-  // Wing width for credit spreads, scaled by volatility regime.
-  // Wider wings in high IV = more credit, more breathing room.
+  // Wing width for credit spreads — scales by both IV regime and active symbol's
+  // strike step (so SENSEX wings are 2× NIFTY's in absolute points, matching its
+  // larger spot scale).
   private dynamicWingWidth(): number {
+    const step = config.STRIKE_STEP;
     const ivRank = marketEngine.getIVRank();
-    if (ivRank === null) return 100;
-    if (ivRank > 70) return 150;
-    if (ivRank < 30) return 75;
-    return 100;
+    // Multiples of strike step: low/normal/high IV → 1.5 / 2 / 3 steps.
+    if (ivRank === null) return 2 * step;
+    if (ivRank > 70) return 3 * step;
+    if (ivRank < 30) return Math.max(step, Math.round(1.5 * step));
+    return 2 * step;
   }
 
   // Classify the open book into a human-readable structure name.
@@ -204,7 +207,7 @@ class ExecutionEngine {
       return;
     }
 
-    const atmStrike = Math.round(spot / 50) * 50;
+    const atmStrike = Math.round(spot / config.STRIKE_STEP) * config.STRIKE_STEP;
     
     // Derive Dynamic SL/Target first
     const derivation = intelligenceEngine.deriveParams(
@@ -263,7 +266,7 @@ class ExecutionEngine {
 
     const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE', minPremium: number = 0) => {
       const chain = marketEngine.getOptionChain();
-      if (chain.length === 0) return Math.round(spot / 50) * 50;
+      if (chain.length === 0) return Math.round(spot / config.STRIKE_STEP) * config.STRIKE_STEP;
       
       // Filter by min premium if selling (heuristic)
       const validOptions = minPremium > 0 
@@ -324,7 +327,7 @@ class ExecutionEngine {
 
       case 'BULL_CALL_SPREAD': {
         const buyStrike = atmStrike;
-        const sellStrike = atmStrike + 150;
+        const sellStrike = atmStrike + 3 * config.STRIKE_STEP;
         const sellPrice = getLTP(sellStrike, 'CE');
         newPositions.push(
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' },
@@ -335,7 +338,7 @@ class ExecutionEngine {
 
       case 'BEAR_PUT_SPREAD': {
         const buyStrike = atmStrike;
-        const sellStrike = atmStrike - 150;
+        const sellStrike = atmStrike - 3 * config.STRIKE_STEP;
         const sellPrice = getLTP(sellStrike, 'PE');
         newPositions.push(
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
@@ -348,7 +351,7 @@ class ExecutionEngine {
         // Short leg at ~0.18 delta (institutional credit-spread default for ~80% POP).
         // Constrain to be at or below structural Support so we get the OI floor as backup.
         const deltaStrike = getStrikeByDelta(0.18, 'PE', config.MIN_CREDIT_PREMIUM);
-        const supportFloor = Math.round(support / 50) * 50;
+        const supportFloor = Math.round(support / config.STRIKE_STEP) * config.STRIKE_STEP;
         const sellStrike = Math.min(deltaStrike, supportFloor);
         const buyStrike = sellStrike - this.dynamicWingWidth();
         newPositions.push(
@@ -360,7 +363,7 @@ class ExecutionEngine {
 
       case 'BEAR_CALL_SPREAD': {
         const deltaStrike = getStrikeByDelta(0.18, 'CE', config.MIN_CREDIT_PREMIUM);
-        const resistanceCeil = Math.round(resistance / 50) * 50;
+        const resistanceCeil = Math.round(resistance / config.STRIKE_STEP) * config.STRIKE_STEP;
         const sellStrike = Math.max(deltaStrike, resistanceCeil);
         const buyStrike = sellStrike + this.dynamicWingWidth();
         newPositions.push(
@@ -376,8 +379,8 @@ class ExecutionEngine {
         const wing = this.dynamicWingWidth();
         const peDeltaStrike = getStrikeByDelta(0.15, 'PE', config.MIN_CREDIT_PREMIUM);
         const ceDeltaStrike = getStrikeByDelta(0.15, 'CE', config.MIN_CREDIT_PREMIUM);
-        const sellPE = Math.min(peDeltaStrike, Math.round(support / 50) * 50);
-        const sellCE = Math.max(ceDeltaStrike, Math.round(resistance / 50) * 50);
+        const sellPE = Math.min(peDeltaStrike, Math.round(support / config.STRIKE_STEP) * config.STRIKE_STEP);
+        const sellCE = Math.max(ceDeltaStrike, Math.round(resistance / config.STRIKE_STEP) * config.STRIKE_STEP);
         const buyPE = sellPE - wing;
         const buyCE = sellCE + wing;
         newPositions.push(
@@ -415,7 +418,7 @@ class ExecutionEngine {
       case 'RATIO_SPREAD': {
         if (bias === 'BULLISH') {
           const buyStrike = atmStrike;
-          const sellStrike = atmStrike + 200;
+          const sellStrike = atmStrike + 4 * config.STRIKE_STEP;
           const sellPrice = getLTP(sellStrike, 'CE');
           if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
             const reason = `CE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
@@ -429,7 +432,7 @@ class ExecutionEngine {
           );
         } else {
           const buyStrike = atmStrike;
-          const sellStrike = atmStrike - 200;
+          const sellStrike = atmStrike - 4 * config.STRIKE_STEP;
           const sellPrice = getLTP(sellStrike, 'PE');
           if (sellPrice < config.MIN_CREDIT_PREMIUM && !isManual) {
             const reason = `PE Ratio Premium too low (₹${sellPrice.toFixed(1)})`;
@@ -853,7 +856,7 @@ class ExecutionEngine {
     // -delta excess → BUY ATM CE (CE delta ≈ +0.5).
     // Buying limits risk to the premium paid and never adds short gamma.
     const spot = marketEngine.getSpotPrice();
-    const atmStrike = Math.round(spot / 50) * 50;
+    const atmStrike = Math.round(spot / config.STRIKE_STEP) * config.STRIKE_STEP;
     const chain = marketEngine.getOptionChain();
     const atmOpt = chain.find(o => o.strike === atmStrike);
 
