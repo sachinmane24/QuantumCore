@@ -1023,6 +1023,7 @@ class ExecutionEngine {
       peakPnL: Math.round(this.peakPnL),
       params: this.currentTradeParams,
       activeSL: this.currentActiveSL,
+      entryTime: this.currentEntryTime || null,
       rollsToday: this.rollsToday,
       capitalDeployed: Math.round(this.capitalDeployed),
       netPremium: Math.round(this.netPremium),

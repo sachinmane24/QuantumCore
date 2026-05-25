@@ -73,6 +73,8 @@ export default function App() {
     color: 'emerald' | 'rose' | 'blue';
   } | null>(null);
   const prevPositionsRef = React.useRef<any[] | null>(null);
+  const [showFlattenConfirm, setShowFlattenConfirm] = useState(false);
+  const [isFlattening, setIsFlattening] = useState(false);
   
   // Stock Intel State
   const [selectedStock, setSelectedStock] = useState<string>('RELIANCE');
@@ -227,6 +229,24 @@ export default function App() {
     const id = setInterval(() => setUiClock(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Global keyboard shortcut: K = open Flatten-All confirm (only when positions are open
+  // and we're not typing in an input). Escape closes the confirm modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const inEditable = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable;
+      if (inEditable) return;
+      if (e.key === 'Escape' && showFlattenConfirm) { setShowFlattenConfirm(false); return; }
+      if ((e.key === 'k' || e.key === 'K') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if ((execution?.positions?.length ?? 0) > 0) {
+          setShowFlattenConfirm(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [execution?.positions?.length, showFlattenConfirm]);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
   
@@ -740,6 +760,20 @@ export default function App() {
 
   const handleExit = async () => {
     await fetch('/api/exit', { method: 'POST' });
+  };
+
+  const handleFlattenAll = async () => {
+    setIsFlattening(true);
+    try {
+      await fetch('/api/exit', { method: 'POST' });
+      // Force an immediate refresh so the user sees positions cleared right away.
+      await fetchData('fast');
+    } catch (e) {
+      console.error("[FLATTEN] failed:", e);
+    } finally {
+      setIsFlattening(false);
+      setShowFlattenConfirm(false);
+    }
   };
 
   const handleToggleDataMode = async (targetMode?: 'MOCK' | 'LIVE') => {
@@ -1591,10 +1625,45 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500">IV Rank / Percentile</span>
-              <span className="text-purple-400">42 / 68%</span>
-            </div>
+            {(() => {
+              const ivRank = strategy?.score?.ivRank;
+              const ivPct = strategy?.score?.ivPercentile;
+              const rankColor = ivRank === null || ivRank === undefined
+                ? "text-slate-500"
+                : ivRank > 70 ? "text-rose-400"
+                : ivRank < 30 ? "text-emerald-400"
+                : "text-purple-400";
+              const rankLabel = ivRank === null || ivRank === undefined
+                ? "WARMING"
+                : ivRank > 70 ? "RICH"
+                : ivRank < 30 ? "CHEAP"
+                : "NORMAL";
+              return (
+                <div className="flex items-center gap-2" title="IV Rank: position of current IV in trailing min-max band. RICH = sell premium, CHEAP = buy premium.">
+                  <span className="text-slate-500">IV RANK / %ILE</span>
+                  <span className={cn("font-bold", rankColor)}>
+                    {ivRank !== null && ivRank !== undefined ? Math.round(ivRank) : '--'}
+                    <span className="text-slate-500 mx-1">/</span>
+                    {ivPct !== null && ivPct !== undefined ? `${Math.round(ivPct)}%` : '--'}
+                  </span>
+                  <span className={cn("text-[7px] px-1.5 py-0.5 rounded border", rankColor, "border-current/30 bg-current/10")}>{rankLabel}</span>
+                </div>
+              );
+            })()}
+            {execution && execution.positions && execution.positions.length > 0 && (
+              <div className="flex items-center gap-3" title="Portfolio Greeks (live).">
+                <span className="text-slate-500">Greeks</span>
+                <span className="text-slate-300 font-mono text-[9px]">
+                  <span className={cn(Math.abs(execution.netDelta || 0) > 1.5 ? "text-amber-400" : "text-blue-400")}>Δ {(execution.netDelta || 0).toFixed(2)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className="text-purple-400">Γ {(execution.netGamma || 0).toFixed(3)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className={cn((execution.netTheta || 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>Θ {(execution.netTheta || 0).toFixed(1)}</span>
+                  <span className="text-slate-600 mx-1.5">·</span>
+                  <span className="text-amber-400">ν {(execution.netVega || 0).toFixed(1)}</span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1773,13 +1842,23 @@ export default function App() {
               {execution?.autoMode ? 'AUTO' : 'MANUAL'}
             </button>
             <div className="w-px h-4 bg-white/5" />
-            <button 
+            <button
               onClick={handleResetEngine}
               className="px-3 py-1.5 rounded text-[9px] font-bold tracking-[0.1em] transition-all bg-zinc-850 hover:bg-zinc-800 text-slate-200 border border-white/5"
             >
               RESET ENGINE
             </button>
           </div>
+          {(execution?.positions?.length ?? 0) > 0 && (
+            <button
+              onClick={() => setShowFlattenConfirm(true)}
+              title="Emergency square-off all open legs (K)"
+              className="px-4 py-2 rounded text-[10px] font-black tracking-[0.15em] uppercase bg-rose-600 hover:bg-rose-500 text-white shadow-[0_0_18px_rgba(225,29,72,0.5)] border border-rose-400/40 transition-all animate-pulse-slow flex items-center gap-2"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Flatten All
+            </button>
+          )}
           <div className="flex items-center space-x-3 px-4 border-l border-white/5">
             <div className="text-right">
               <div className="text-[10px] font-bold text-white leading-none">ADMIN</div>
@@ -4686,6 +4765,150 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Sticky Position Blotter — visible from every tab while positions are open */}
+      {(execution?.positions?.length ?? 0) > 0 && (
+        <div className="fixed bottom-0 left-20 right-0 z-30 bg-black/85 backdrop-blur-xl border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]">
+          <div className="px-6 py-2 flex items-center gap-4 overflow-x-auto custom-scrollbar">
+            {/* Header chip with aggregate PnL + time-in-trade */}
+            <div className="shrink-0 flex items-center gap-3 pr-4 border-r border-white/10">
+              <div className="flex items-center gap-1.5">
+                <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse",
+                  (execution?.pnl ?? 0) >= 0 ? "bg-emerald-500" : "bg-rose-500")} />
+                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">Open Book</span>
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className={cn("text-sm font-black font-mono tabular-nums",
+                  (execution?.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                  {(execution?.pnl ?? 0) >= 0 ? '+' : ''}₹{Math.abs(execution?.pnl ?? 0).toLocaleString('en-IN')}
+                </span>
+                <span className="text-[7px] text-slate-500 font-bold uppercase tracking-widest">
+                  {execution?.entryTime
+                    ? `${Math.floor((uiClock - execution.entryTime) / 60000)}m ${Math.floor(((uiClock - execution.entryTime) % 60000) / 1000)}s`
+                    : 'live'}
+                  {execution?.params?.targetRupees ? ` · ${Math.round(((execution.pnl || 0) / execution.params.targetRupees) * 100)}% of tgt` : ''}
+                </span>
+              </div>
+            </div>
+            {/* Per-leg blotter rows */}
+            {(execution?.positions || []).map((p: any, idx: number) => {
+              const atm = market?.chain?.find(c => c.strike === p.strike);
+              const ltp = p.type === 'FUT'
+                ? (market?.spot ?? p.entryPrice)
+                : (atm ? (p.type === 'CE' ? atm.ce_price : atm.pe_price) : p.entryPrice);
+              const legPnl = (p.side === 'BUY' ? (ltp - p.entryPrice) : (p.entryPrice - ltp)) * p.qty;
+              const sideColor = p.side === 'BUY' ? 'text-emerald-400' : 'text-rose-400';
+              const sideBg = p.side === 'BUY' ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20';
+              const symbol = p.type === 'FUT' ? 'FUT' : `${p.strike}${p.type}`;
+              return (
+                <div key={`blotter-${idx}-${p.strike}-${p.type}-${p.side}`}
+                  className={cn("shrink-0 flex items-center gap-3 px-3 py-1.5 rounded-md border", sideBg,
+                    p.isHedge && "ring-1 ring-amber-500/40")}>
+                  <div className="flex flex-col leading-tight">
+                    <span className="text-[7px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1">
+                      {p.isHedge && <span className="text-amber-400">HEDGE</span>}
+                      <span className={sideColor}>{p.side}</span>
+                      <span className="text-slate-600">·</span>
+                      <span>{Math.round(p.qty / (appConfig?.LOT_SIZE || 75))}L</span>
+                    </span>
+                    <span className="text-[11px] font-black text-white font-mono leading-tight">{symbol}</span>
+                  </div>
+                  <div className="flex flex-col leading-tight text-right">
+                    <span className="text-[7px] font-bold uppercase tracking-widest text-slate-500">LTP / Avg</span>
+                    <span className="text-[10px] font-mono text-slate-200 tabular-nums">
+                      ₹{ltp.toFixed(1)}
+                      <span className="text-slate-600 mx-1">·</span>
+                      <span className="text-slate-500">₹{p.entryPrice.toFixed(1)}</span>
+                    </span>
+                  </div>
+                  <div className="flex flex-col leading-tight text-right pl-2 border-l border-white/10">
+                    <span className="text-[7px] font-bold uppercase tracking-widest text-slate-500">P/L</span>
+                    <span className={cn("text-[11px] font-black font-mono tabular-nums",
+                      legPnl >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                      {legPnl >= 0 ? '+' : ''}₹{Math.round(legPnl).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Flatten All Confirm Modal */}
+      {showFlattenConfirm && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => !isFlattening && setShowFlattenConfirm(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-[#0b0f19] border border-rose-500/40 rounded-2xl w-full max-w-md shadow-[0_0_60px_rgba(225,29,72,0.3)] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-rose-500/10 border-b border-rose-500/30 px-6 py-4 flex items-center gap-3">
+              <ShieldAlert className="w-5 h-5 text-rose-400" />
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-rose-300">Emergency Square-Off</h3>
+                <p className="text-[9px] text-rose-300/60 font-bold uppercase tracking-widest mt-0.5">All open legs will be exited at market</p>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-black/40 border border-white/5 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Legs to close</span>
+                  <span className="text-white font-black font-mono">{execution?.positions?.length ?? 0}</span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Current PnL</span>
+                  <span className={cn("font-black font-mono",
+                    (execution?.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                    {(execution?.pnl ?? 0) >= 0 ? '+' : ''}₹{(execution?.pnl ?? 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-slate-500 font-bold uppercase tracking-widest">Mode</span>
+                  <span className={cn("font-black font-mono",
+                    execution?.executionMode === 'LIVE' ? "text-rose-400" : "text-blue-400")}>
+                    {execution?.executionMode === 'LIVE' ? 'LIVE — REAL MONEY' : 'PAPER'}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                This action exits every open position immediately and cannot be undone.
+                {execution?.executionMode === 'LIVE' && <span className="block mt-1 text-rose-400 font-bold">Live orders will be submitted to the broker.</span>}
+              </p>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setShowFlattenConfirm(false)}
+                  disabled={isFlattening}
+                  className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 text-[10px] font-black uppercase tracking-[0.15em] text-slate-300 hover:bg-white/5 transition disabled:opacity-50"
+                >
+                  Cancel <span className="text-slate-600 ml-1">(Esc)</span>
+                </button>
+                <button
+                  onClick={handleFlattenAll}
+                  disabled={isFlattening}
+                  className="flex-1 px-4 py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black uppercase tracking-[0.15em] shadow-[0_0_18px_rgba(225,29,72,0.5)] transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isFlattening ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      Exiting...
+                    </>
+                  ) : (
+                    <>
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Confirm Flatten
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       {/* Floating Live Quantum Terminal Notification Toast */}
       {toast && (
