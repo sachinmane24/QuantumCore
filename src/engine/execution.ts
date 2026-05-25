@@ -68,6 +68,81 @@ class ExecutionEngine {
     return 100;
   }
 
+  // Classify the open book into a human-readable structure name.
+  // Hedges are ignored for the core structure and noted as a suffix.
+  // Returns null when there are no positions.
+  private classifyStructure(): string | null {
+    if (this.activePositions.length === 0) return null;
+    const hedges = this.activePositions.filter(p => p.isHedge);
+    const core = this.activePositions.filter(p => !p.isHedge);
+    if (core.length === 0) return `Hedge-only (${hedges.length})`;
+
+    const buys = core.filter(p => p.side === 'BUY');
+    const sells = core.filter(p => p.side === 'SELL');
+    const ces = core.filter(p => p.type === 'CE');
+    const pes = core.filter(p => p.type === 'PE');
+    const futs = core.filter(p => p.type === 'FUT');
+
+    let label = '';
+
+    if (core.length === 1) {
+      const p = core[0];
+      label = `${p.side === 'BUY' ? 'Long' : 'Short'} ${p.type} ${p.strike}`;
+    } else if (core.length === 2) {
+      if (futs.length > 0) {
+        label = 'Futures Hedge';
+      } else if (buys.length === 2 && ces.length === 1 && pes.length === 1 && buys[0].strike === buys[1].strike) {
+        label = 'Long Straddle';
+      } else if (buys.length === 2 && ces.length === 1 && pes.length === 1) {
+        label = 'Long Strangle';
+      } else if (ces.length === 2 && buys.length === 1 && sells.length === 1) {
+        const buyStrike = buys[0].strike, sellStrike = sells[0].strike;
+        label = buyStrike < sellStrike ? 'Bull Call Spread' : 'Bear Call Spread';
+      } else if (pes.length === 2 && buys.length === 1 && sells.length === 1) {
+        const buyStrike = buys[0].strike, sellStrike = sells[0].strike;
+        label = buyStrike < sellStrike ? 'Bull Put Spread' : 'Bear Put Spread';
+      } else {
+        label = '2-leg Custom';
+      }
+    } else if (core.length === 3) {
+      // Butterfly: 1 buy + 2 sell + 1 buy of the same type at three strikes (middle has 2× qty)
+      if ((ces.length === 3 || pes.length === 3)) {
+        const sellsAtCenter = sells.reduce((s, p) => s + p.qty, 0);
+        const buysTotal = buys.reduce((s, p) => s + p.qty, 0);
+        if (Math.abs(sellsAtCenter - 2 * (buysTotal / Math.max(buys.length, 1))) < 1) {
+          label = ces.length === 3 ? 'Long Call Butterfly' : 'Long Put Butterfly';
+        } else {
+          label = ces.length === 3 ? '3-leg Call Spread' : '3-leg Put Spread';
+        }
+      } else if (buys.length === 1 && sells.length === 1 && (ces.length === 2 || pes.length === 2)) {
+        const isCE = ces.length === 2;
+        label = `${isCE ? 'CE' : 'PE'} Ratio Spread`;
+      } else {
+        label = '3-leg Custom';
+      }
+    } else if (core.length === 4) {
+      const ceSells = ces.filter(p => p.side === 'SELL');
+      const peSells = pes.filter(p => p.side === 'SELL');
+      const ceBuys = ces.filter(p => p.side === 'BUY');
+      const peBuys = pes.filter(p => p.side === 'BUY');
+      if (ces.length === 2 && pes.length === 2 && ceSells.length === 1 && peSells.length === 1) {
+        // Iron Fly: short legs at the same strike. Iron Condor: short legs at different strikes.
+        if (ceSells[0].strike === peSells[0].strike) {
+          label = 'Iron Fly';
+        } else {
+          label = 'Iron Condor';
+        }
+      } else {
+        label = '4-leg Custom';
+      }
+    } else {
+      label = `${core.length}-leg Custom`;
+    }
+
+    if (hedges.length > 0) label += ` + Hedge`;
+    return label;
+  }
+
   private async withLock<T>(fn: () => Promise<T>): Promise<T | null> {
     if (this.isProcessing) {
       return null;
@@ -315,8 +390,11 @@ class ExecutionEngine {
       }
 
       case 'IRON_FLY': {
-        const buyPE = atmStrike - 250;
-        const buyCE = atmStrike + 250;
+        // Wings scale with IV regime. Iron Fly wings are wider than butterflies because
+        // they define max-loss on a credit structure.
+        const wing = this.dynamicWingWidth() * 2; // 150–300 pts
+        const buyPE = atmStrike - wing;
+        const buyCE = atmStrike + wing;
         newPositions.push(
           { strike: atmStrike, type: 'PE', entryPrice: getLTP(atmStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: atmStrike, type: 'CE', entryPrice: getLTP(atmStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -368,8 +446,9 @@ class ExecutionEngine {
       }
 
       case 'BUTTERFLY': {
+        // Wings scale with IV regime so the profit cone matches realized volatility.
         const center = atmStrike;
-        const wingSize = 100;
+        const wingSize = this.dynamicWingWidth();
         const type = bias === 'BULLISH' ? 'CE' : 'PE';
         newPositions.push(
           { strike: center - wingSize, type, entryPrice: getLTP(center - wingSize, type), qty: config.LOT_SIZE, side: 'BUY' },
@@ -587,6 +666,17 @@ class ExecutionEngine {
           await this.exitAllInternal("Weekly Expiry 2:45 PM Protective Exit");
           return;
         }
+      }
+
+      // Defined-risk take-profit: butterflies, ICs, and Iron Flys should bank a fixed
+      // fraction of their *structural* max reward, not chase the rupee-target intended
+      // for naked buys. Without this, defined-risk plays expire worthless after sitting
+      // through extra theta risk for marginal extra profit.
+      const structureLabel = this.classifyStructure() || '';
+      const isDefinedRisk = /Butterfly|Iron Fly|Iron Condor/i.test(structureLabel);
+      if (isDefinedRisk && this.maxReward > 0 && this.pnl >= this.maxReward * 0.60) {
+        await this.exitAllInternal(`Defined-risk TP (60% of max reward ₹${Math.round(this.maxReward)})`);
+        return;
       }
 
       if (this.currentTradeParams) {
@@ -1024,6 +1114,9 @@ class ExecutionEngine {
       params: this.currentTradeParams,
       activeSL: this.currentActiveSL,
       entryTime: this.currentEntryTime || null,
+      actualStructure: this.classifyStructure(),
+      entryBias: this.currentTradeBias,
+      entryStrategyType: this.lastTradeScore?.strategyType || null,
       rollsToday: this.rollsToday,
       capitalDeployed: Math.round(this.capitalDeployed),
       netPremium: Math.round(this.netPremium),

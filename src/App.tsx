@@ -1963,29 +1963,65 @@ export default function App() {
                           {execution?.positions && execution.positions.length > 0 ? (
                             <>
                               <span className="text-emerald-400">●</span>
-                              <span>{strategy?.score?.strategyType?.replace(/_/g, ' ') || 'QUANT SETUP'}</span>
+                              {/* Show the structure of the *open book*, not the current recommendation. */}
+                              <span>
+                                {execution.actualStructure
+                                  ?? execution.entryStrategyType?.replace(/_/g, ' ')
+                                  ?? 'OPEN BOOK'}
+                              </span>
                             </>
                           ) : (
                             <span className="text-slate-500 font-bold uppercase text-xs tracking-widest">STANDBY (IDLE)</span>
                           )}
                         </div>
+                        {execution?.positions && execution.positions.length > 0
+                          && strategy?.score?.strategyType
+                          && execution.entryStrategyType
+                          && strategy.score.strategyType !== execution.entryStrategyType && (
+                          <div className="mt-1 text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                            Engine now favors:
+                            <span className="text-amber-400 ml-1">{strategy.score.strategyType.replace(/_/g, ' ')}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    {execution?.positions && execution.positions.length > 0 && (
-                      <div className="mt-4 flex gap-2">
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider",
-                          strategy?.score?.bias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
-                          strategy?.score?.bias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
-                          "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        )}>
-                          BIAS: {strategy?.score?.bias || "NEUTRAL"}
-                        </span>
-                        <span className="px-2 py-0.5 rounded text-[8px] font-black bg-white/5 border border-white/5 text-slate-300 uppercase tracking-wider">
-                          SCORE: {strategy?.score?.score || 0}
-                        </span>
-                      </div>
-                    )}
+                    {execution?.positions && execution.positions.length > 0 && (() => {
+                      const entryBias = execution.entryBias || 'NEUTRAL';
+                      const liveBias = strategy?.score?.bias || 'NEUTRAL';
+                      const biasConflict = entryBias !== liveBias;
+                      return (
+                        <div className="mt-4 flex gap-2 items-center flex-wrap">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider",
+                            entryBias === 'BULLISH' ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                            entryBias === 'BEARISH' ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
+                            "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                          )}>
+                            ENTRY BIAS: {entryBias}
+                          </span>
+                          {biasConflict && (
+                            <span className="px-2 py-0.5 rounded text-[8px] font-black bg-amber-500/15 border border-amber-500/40 text-amber-300 uppercase tracking-wider animate-pulse flex items-center gap-1" title="Live system bias has flipped vs. the bias at entry. Trade is fighting the current signal.">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              CONFLICT → LIVE: {liveBias}
+                            </span>
+                          )}
+                          <span className="px-2 py-0.5 rounded text-[8px] font-black bg-white/5 border border-white/5 text-slate-300 uppercase tracking-wider">
+                            SCORE: {strategy?.score?.score ?? strategy?.score?.total ?? 0}
+                          </span>
+                          {strategy?.score?.pinAlignment && strategy.score.pinAlignment !== 'NONE' && strategy.score.pinStrike && (
+                            <span className={cn(
+                              "px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border flex items-center gap-1",
+                              strategy.score.pinAlignment === 'STRONG'
+                                ? "bg-purple-500/15 border-purple-500/40 text-purple-300"
+                                : "bg-purple-500/10 border-purple-500/20 text-purple-400"
+                            )} title={`Max-OI CE and PE walls aligned ${strategy.score.pinDistance === 0 ? 'on the same strike' : `${strategy.score.pinDistance} pts apart`} — pin magnet at ${strategy.score.pinStrike}.`}>
+                              <Target className="w-2.5 h-2.5" />
+                              PIN {strategy.score.pinStrike} ({strategy.score.pinAlignment})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Middle: Active Leg Breakdown */}
@@ -4770,12 +4806,14 @@ export default function App() {
       {(execution?.positions?.length ?? 0) > 0 && (
         <div className="fixed bottom-0 left-20 right-0 z-30 bg-black/85 backdrop-blur-xl border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]">
           <div className="px-6 py-2 flex items-center gap-4 overflow-x-auto custom-scrollbar">
-            {/* Header chip with aggregate PnL + time-in-trade */}
+            {/* Header chip with aggregate PnL + time-in-trade + structure */}
             <div className="shrink-0 flex items-center gap-3 pr-4 border-r border-white/10">
               <div className="flex items-center gap-1.5">
                 <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse",
                   (execution?.pnl ?? 0) >= 0 ? "bg-emerald-500" : "bg-rose-500")} />
-                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">Open Book</span>
+                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400">
+                  {execution?.actualStructure || 'Open Book'}
+                </span>
               </div>
               <div className="flex flex-col leading-tight">
                 <span className={cn("text-sm font-black font-mono tabular-nums",
@@ -4789,6 +4827,21 @@ export default function App() {
                   {execution?.params?.targetRupees ? ` · ${Math.round(((execution.pnl || 0) / execution.params.targetRupees) * 100)}% of tgt` : ''}
                 </span>
               </div>
+              {/* Bias-conflict badge: warns when live system bias has flipped vs entry bias */}
+              {execution?.entryBias && strategy?.score?.bias && execution.entryBias !== strategy.score.bias && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 animate-pulse"
+                  title={`Trade entered ${execution.entryBias} but live bias is ${strategy.score.bias}. Position may be fighting the current signal.`}
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                    Bias Conflict
+                    <span className="block text-[7px] font-bold opacity-80 mt-0.5">
+                      {execution.entryBias} → {strategy.score.bias}
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
             {/* Per-leg blotter rows */}
             {(execution?.positions || []).map((p: any, idx: number) => {
