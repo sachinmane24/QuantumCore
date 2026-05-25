@@ -58,6 +58,16 @@ class ExecutionEngine {
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
   private isProcessing: boolean = false;
 
+  // Wing width for credit spreads, scaled by volatility regime.
+  // Wider wings in high IV = more credit, more breathing room.
+  private dynamicWingWidth(): number {
+    const ivRank = marketEngine.getIVRank();
+    if (ivRank === null) return 100;
+    if (ivRank > 70) return 150;
+    if (ivRank < 30) return 75;
+    return 100;
+  }
+
   private async withLock<T>(fn: () => Promise<T>): Promise<T | null> {
     if (this.isProcessing) {
       return null;
@@ -260,9 +270,12 @@ class ExecutionEngine {
       }
 
       case 'BULL_PUT_SPREAD': {
-        // Position short leg exactly at or below structural Support
-        const sellStrike = Math.round(support / 50) * 50;
-        const buyStrike = sellStrike - 100;
+        // Short leg at ~0.18 delta (institutional credit-spread default for ~80% POP).
+        // Constrain to be at or below structural Support so we get the OI floor as backup.
+        const deltaStrike = getStrikeByDelta(0.18, 'PE', config.MIN_CREDIT_PREMIUM);
+        const supportFloor = Math.round(support / 50) * 50;
+        const sellStrike = Math.min(deltaStrike, supportFloor);
+        const buyStrike = sellStrike - this.dynamicWingWidth();
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'PE', entryPrice: getLTP(buyStrike, 'PE'), qty: config.LOT_SIZE, side: 'BUY' }
@@ -271,9 +284,10 @@ class ExecutionEngine {
       }
 
       case 'BEAR_CALL_SPREAD': {
-        // Position short leg exactly at or above structural Resistance
-        const sellStrike = Math.round(resistance / 50) * 50;
-        const buyStrike = sellStrike + 100;
+        const deltaStrike = getStrikeByDelta(0.18, 'CE', config.MIN_CREDIT_PREMIUM);
+        const resistanceCeil = Math.round(resistance / 50) * 50;
+        const sellStrike = Math.max(deltaStrike, resistanceCeil);
+        const buyStrike = sellStrike + this.dynamicWingWidth();
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyStrike, type: 'CE', entryPrice: getLTP(buyStrike, 'CE'), qty: config.LOT_SIZE, side: 'BUY' }
@@ -282,11 +296,15 @@ class ExecutionEngine {
       }
 
       case 'IRON_CONDOR': {
-        // Anchored tightly above structural boundaries
-        const sellPE = Math.round(support / 50) * 50;
-        const buyPE = sellPE - 100;
-        const sellCE = Math.round(resistance / 50) * 50;
-        const buyCE = sellCE + 100;
+        // Each short leg at ~0.15 delta — textbook IC win-rate spot.
+        // Use structural S/R as a cap so we never sell *inside* a heavy OI wall.
+        const wing = this.dynamicWingWidth();
+        const peDeltaStrike = getStrikeByDelta(0.15, 'PE', config.MIN_CREDIT_PREMIUM);
+        const ceDeltaStrike = getStrikeByDelta(0.15, 'CE', config.MIN_CREDIT_PREMIUM);
+        const sellPE = Math.min(peDeltaStrike, Math.round(support / 50) * 50);
+        const sellCE = Math.max(ceDeltaStrike, Math.round(resistance / 50) * 50);
+        const buyPE = sellPE - wing;
+        const buyCE = sellCE + wing;
         newPositions.push(
           { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
           { strike: buyPE, type: 'PE', entryPrice: getLTP(buyPE, 'PE'), qty: config.LOT_SIZE, side: 'BUY' },
@@ -493,14 +511,19 @@ class ExecutionEngine {
       
       let currentPnL = 0;
 
+      const spotNow = marketEngine.getSpotPrice();
       this.activePositions.forEach(pos => {
-        const option = chain.find(o => o.strike === pos.strike);
-        // If option is missing from the limited mock generator chain, we don't purge it!
-        // We just assume the price hasn't updated or derive it from intrinsic if necessary.
-        const currentPrice = option ? (pos.type === 'CE' ? option.ce_price : option.pe_price) : pos.entryPrice;
-        
-        const diff = pos.side === 'BUY' 
-          ? (currentPrice - pos.entryPrice) 
+        let currentPrice: number;
+        if (pos.type === 'FUT') {
+          // Futures mark to spot (intraday futures track underlying within bps).
+          currentPrice = spotNow;
+        } else {
+          const option = chain.find(o => o.strike === pos.strike);
+          currentPrice = option ? (pos.type === 'CE' ? option.ce_price : option.pe_price) : pos.entryPrice;
+        }
+
+        const diff = pos.side === 'BUY'
+          ? (currentPrice - pos.entryPrice)
           : (pos.entryPrice - currentPrice);
         currentPnL += diff * pos.qty;
       });
@@ -727,77 +750,65 @@ class ExecutionEngine {
 
   private async checkGammaScalp() {
     if (this.activePositions.length === 0) return;
-    
+
     const now = Date.now();
     const timeSinceLastHedge = (now - this.lastHedgeTime) / 1000;
-    
-    // Cooldown: Don't hedge more than once every 5 minutes unless delta is extreme (> 1.5)
-    // This allows the trade to breathe and follow path dependency.
-    if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) {
-       return;
-    }
 
-    // If net delta exceeds tolerance, we need to scalp/hedge
-    if (Math.abs(this.netDelta) > config.DELTA_TOLERANCE) {
-      const spot = marketEngine.getSpotPrice();
-      // Use a slight OTM strike for hedging to avoid direct conflict with core ATM positions
-      const hedgeBias = this.netDelta > 0 ? 50 : -50;
-      const hedgeStrike = Math.round((spot + hedgeBias) / 50) * 50;
-      
-      const hedgeType = this.netDelta > 0 ? 'CE' : 'PE'; 
-      // Use floor to under-hedge slightly, maintaining directional edge
-      const hedgeQty = Math.max(1, Math.floor(Math.abs(this.netDelta) / 0.5)) * config.LOT_SIZE;
-      
-      if (hedgeQty > 0) {
-        console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} exceeds tolerance (${config.DELTA_TOLERANCE}). Hedging ${hedgeQty} ${hedgeType} at ${hedgeStrike}...`);
-        
-        const chain = marketEngine.getOptionChain();
-        const opt = chain.find(o => o.strike === hedgeStrike);
-        const price = opt ? (hedgeType === 'CE' ? opt.ce_price : opt.pe_price) : 100;
+    // Cooldown: hedge at most once per 5 minutes unless delta is extreme.
+    if (timeSinceLastHedge < 300 && Math.abs(this.netDelta) < 1.5) return;
+    if (Math.abs(this.netDelta) <= config.DELTA_TOLERANCE) return;
 
-        // Update state
-        this.lastHedgeTime = now;
+    // Hedge with NIFTY futures, not by selling more options.
+    // A futures lot is ~1.0 delta per unit; we want to neutralize approximately
+    // the *excess* delta beyond tolerance, leaving a small directional edge.
+    const spot = marketEngine.getSpotPrice();
+    const excessDelta = this.netDelta - Math.sign(this.netDelta) * config.DELTA_TOLERANCE;
+    // One FUT lot ≈ 1.0 delta-units (i.e. 1.0 × LOT_SIZE shares of exposure).
+    // Under-hedge by using floor so we keep a sliver of bias.
+    const lotsNeeded = Math.max(1, Math.floor(Math.abs(excessDelta)));
+    const hedgeQty = lotsNeeded * config.LOT_SIZE;
+    // To remove +delta we SELL futures; to remove -delta we BUY futures.
+    const hedgeSide: 'BUY' | 'SELL' = this.netDelta > 0 ? 'SELL' : 'BUY';
 
-        // Check if we already have a position at this strike to net it out
-        const existingIdx = this.activePositions.findIndex(p => p.strike === hedgeStrike && p.type === hedgeType);
-        
-        if (existingIdx !== -1) {
-          const existing = this.activePositions[existingIdx];
-          // If we are selling a hedge but are already long, subtract qty
-          if (existing.side === 'BUY') {
-            if (existing.qty > hedgeQty) {
-              existing.qty -= hedgeQty;
-            } else if (existing.qty === hedgeQty) {
-              this.activePositions.splice(existingIdx, 1);
-            } else {
-              const remaining = hedgeQty - existing.qty;
-              existing.qty = remaining;
-              existing.side = 'SELL';
-              existing.entryPrice = price; 
-            }
-          } else {
-            // Both are SELL sides, just add qty
-            existing.qty += hedgeQty;
-          }
+    console.log(`[GAMMA SCALP] Net Delta ${this.netDelta.toFixed(2)} > tolerance (${config.DELTA_TOLERANCE}). ${hedgeSide} ${lotsNeeded} NIFTY FUT lot(s) @ ~${spot.toFixed(1)}`);
+
+    this.lastHedgeTime = now;
+
+    // Net out existing FUT hedge if any.
+    const existingIdx = this.activePositions.findIndex(p => p.type === 'FUT' && p.isHedge);
+    if (existingIdx !== -1) {
+      const existing = this.activePositions[existingIdx];
+      if (existing.side === hedgeSide) {
+        // Same direction — just add qty.
+        existing.qty += hedgeQty;
+      } else {
+        // Opposite — net it.
+        if (existing.qty > hedgeQty) {
+          existing.qty -= hedgeQty;
+        } else if (existing.qty === hedgeQty) {
+          this.activePositions.splice(existingIdx, 1);
         } else {
-          // No existing position at this strike, add new hedge leg
-          this.activePositions.push({
-            strike: hedgeStrike,
-            type: hedgeType,
-            entryPrice: price,
-            qty: hedgeQty,
-            side: 'SELL',
-            isHedge: true
-          });
+          const remaining = hedgeQty - existing.qty;
+          existing.qty = remaining;
+          existing.side = hedgeSide;
+          existing.entryPrice = spot;
         }
-
-        this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Delta threshold crossed (${this.netDelta.toFixed(2)}). Hedged with ${hedgeQty} qty ${hedgeType}.`);
-        if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
-        
-        // Recalculate after hedge
-        this.calculatePortfolioGreeks();
       }
+    } else {
+      this.activePositions.push({
+        strike: 0,
+        type: 'FUT',
+        entryPrice: spot,
+        qty: hedgeQty,
+        side: hedgeSide,
+        isHedge: true
+      });
     }
+
+    this.hedgeLogs.unshift(`[${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}] Δ ${this.netDelta.toFixed(2)} → ${hedgeSide} ${lotsNeeded} FUT lot @ ${spot.toFixed(1)}`);
+    if (this.hedgeLogs.length > 10) this.hedgeLogs.pop();
+
+    this.calculatePortfolioGreeks();
   }
 
   async exitAll(reason: string) {

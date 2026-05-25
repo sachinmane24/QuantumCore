@@ -83,6 +83,8 @@ export interface StrategyScore {
   gammaScore: number;
   timeFilterScore: number;
   oiChangeBias: number;
+  ivRank: number | null;
+  ivPercentile: number | null;
 }
 
 class StrategyEngine {
@@ -261,8 +263,11 @@ class StrategyEngine {
       const isStrongScore = total > 75; // Lowered from 80 for better reactivity
       const isOrbConfirmed = orbTrigger !== 0 && total > 65; // Lowered from 70
       const isSideways = Math.abs(oiChangeBias) < 80000 && Math.abs(diff) < 8;
-      const isHighVol = vix > 18;
-      const isLowVol = vix < 12;
+      // IV-rank-aware vol regime: prefer rank when we have enough samples,
+      // otherwise fall back to absolute VIX thresholds for warm-up.
+      const ivRank = marketEngine.getIVRank();
+      const isHighVol = ivRank !== null ? ivRank > 70 : vix > 18;
+      const isLowVol = ivRank !== null ? ivRank < 30 : vix < 12;
 
       // 1. Determine Trend Candidate Bias with high sensitivity
       let candidateBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
@@ -438,14 +443,18 @@ class StrategyEngine {
           mode = 'INST_SPREAD';
         }
       } else {
-        // Neutral Strategies
+        // Neutral Strategies — sell premium when IV-rank is rich, buy when cheap.
         mode = 'INST_SPREAD';
         if (isHighVol) {
-          strategyType = total > 50 ? 'STRADDLE' : 'IRON_FLY';
-          recommendation = total > 50 ? "LONG STRADDLE (VOL EXPANSION)" : "IRON FLY / STRADDLE (IV CRUSH)";
+          // High IV rank → SELL premium (collect inflated theta). Iron fly for ATM neutrality.
+          strategyType = 'IRON_FLY';
+          recommendation = `IRON FLY (SELL RICH IV${ivRank !== null ? ` — RANK ${Math.round(ivRank)}` : ''})`;
         } else if (isLowVol) {
-          strategyType = 'CALENDAR';
-          recommendation = "CALENDAR SPREAD (TIME DECAY)";
+          // Low IV rank → BUY premium (vol expansion play). Long straddle/calendar.
+          strategyType = total > 50 ? 'STRADDLE' : 'CALENDAR';
+          recommendation = total > 50
+            ? `LONG STRADDLE (CHEAP IV${ivRank !== null ? ` — RANK ${Math.round(ivRank)}` : ''})`
+            : `CALENDAR SPREAD (TIME DECAY)`;
         } else {
           strategyType = total < 40 ? 'IRON_CONDOR' : 'BUTTERFLY';
           recommendation = total < 40 ? "IRON CONDOR (THETA DECAY)" : "BUTTERFLY (RANGE BOUND)";
@@ -476,7 +485,9 @@ class StrategyEngine {
       oiBiasScore: Math.round(oiBiasScore),
       gammaScore: Math.round(gammaScore),
       timeFilterScore: Math.round(timeFilterScore),
-      oiChangeBias: Math.round(oiChangeBias)
+      oiChangeBias: Math.round(oiChangeBias),
+      ivRank: marketEngine.getIVRank(),
+      ivPercentile: marketEngine.getIVPercentile()
     };
   }
 }

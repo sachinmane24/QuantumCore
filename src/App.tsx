@@ -221,6 +221,12 @@ export default function App() {
   }, [isLoggedIn]);
 
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  // Independent 1s heartbeat so the staleness badge keeps ticking even when polling stalls.
+  const [uiClock, setUiClock] = useState<number>(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setUiClock(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
   const [loginData, setLoginData] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
   
@@ -464,7 +470,29 @@ export default function App() {
 
   const strategyRef = React.useRef<StrategyData | null>(null);
 
-  // Data Fetching
+  // Data Fetching — per-request timeout + allSettled so one slow endpoint
+  // doesn't freeze the whole polling chain.
+  const fetchWithTimeout = useCallback(async (url: string, timeoutMs: number) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) return null;
+      return await res.json();
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        console.error(`Network error fetching ${url}:`, e);
+      } else {
+        console.warn(`[POLL] Timeout (${timeoutMs}ms) fetching ${url}`);
+      }
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }, []);
+
   const fetchData = useCallback(async (type: 'fast' | 'slow' = 'fast') => {
     if (!isLoggedIn) return;
     try {
@@ -479,21 +507,10 @@ export default function App() {
       ];
 
       const endpoints = type === 'fast' ? fastEndpoints : slowEndpoints;
+      const timeoutMs = type === 'fast' ? 6000 : 12000;
 
-      const results = await Promise.all(endpoints.map(async (url) => {
-        try {
-          const res = await fetch(url);
-          if (res.ok) {
-            const contentType = res.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-              return await res.json();
-            }
-          }
-        } catch (e) {
-          console.error(`Network error fetching ${url}:`, e);
-        }
-        return null;
-      }));
+      const settled = await Promise.allSettled(endpoints.map(url => fetchWithTimeout(url, timeoutMs)));
+      const results = settled.map(s => s.status === 'fulfilled' ? s.value : null);
       
       if (type === 'fast') {
         const [marketData, executionData, strategyData] = results;
@@ -530,17 +547,20 @@ export default function App() {
         if (marketInfoData) setMarketInfo(marketInfoData);
       }
 
-      // Fetch config once
-      if (!appConfig) {
-        fetch('/api/config').then(r => r.json()).then(setAppConfig);
-      }
-      
-      setLastSync(new Date());
+      // Mark sync only when at least one endpoint returned data this cycle
+      const anyOk = results.some(r => r !== null);
+      if (anyOk) setLastSync(new Date());
       setLoading(false);
     } catch (err) {
       console.error("Fetch Data Critical Error:", err);
     }
-  }, [isLoggedIn, appConfig]);
+  }, [isLoggedIn, fetchWithTimeout]);
+
+  // Config — fetched once, independent of polling so it doesn't recreate fetchData
+  useEffect(() => {
+    if (!isLoggedIn || appConfig) return;
+    fetchWithTimeout('/api/config', 6000).then(cfg => { if (cfg) setAppConfig(cfg); });
+  }, [isLoggedIn, appConfig, fetchWithTimeout]);
 
   // Native Terminal Chime Synthesizer via Web Audio API
   const playSynthSound = useCallback((type: 'ENTRY' | 'EXIT' | 'ROLL') => {
@@ -679,17 +699,23 @@ export default function App() {
 
     const pollFast = async () => {
       if (!isActive) return;
-      await fetchData('fast');
-      if (isActive) {
-        fastTimer = setTimeout(pollFast, 1500);
+      try {
+        await fetchData('fast');
+      } catch (e) {
+        console.error('[POLL] fast cycle threw, will retry:', e);
+      } finally {
+        if (isActive) fastTimer = setTimeout(pollFast, 1500);
       }
     };
 
     const pollSlow = async () => {
       if (!isActive) return;
-      await fetchData('slow');
-      if (isActive) {
-        slowTimer = setTimeout(pollSlow, 15000);
+      try {
+        await fetchData('slow');
+      } catch (e) {
+        console.error('[POLL] slow cycle threw, will retry:', e);
+      } finally {
+        if (isActive) slowTimer = setTimeout(pollSlow, 15000);
       }
     };
 
@@ -1518,23 +1544,37 @@ export default function App() {
             <div className="flex items-center gap-metric">
               <div className="flex items-center gap-2">
                  <span className="text-slate-500">SYNC</span>
-                 <div className="flex items-center gap-1 group bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
-                    <motion.div 
-                      key={lastSync?.getTime()}
-                      initial={{ scale: 2, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      className={cn(
-                        "w-1.5 h-1.5 rounded-full transition-all duration-300",
-                        loading ? "bg-slate-700" : "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]"
-                      )} 
-                    />
-                    <span className={cn(
-                      "text-[8px] font-mono transition-colors",
-                      lastSync && (new Date().getTime() - lastSync.getTime() < 3000) ? "text-emerald-400" : "text-amber-400/50"
-                    )}>
-                      {market?.error ? 'FAIL' : (lastSync ? `${Math.floor((new Date().getTime() - lastSync.getTime()) / 1000)}s` : 'OFFLINE')}
-                    </span>
-                 </div>
+                 {(() => {
+                    const ageMs = lastSync ? uiClock - lastSync.getTime() : Infinity;
+                    const fresh = ageMs < 3000;
+                    const stale = ageMs >= 3000 && ageMs < 8000;
+                    const frozen = ageMs >= 8000;
+                    return (
+                      <div className={cn(
+                        "flex items-center gap-1 group px-2 py-0.5 rounded-full border",
+                        frozen ? "bg-rose-500/20 border-rose-500/40 animate-pulse" : "bg-white/5 border-white/5"
+                      )}>
+                        <motion.div
+                          key={lastSync?.getTime()}
+                          initial={{ scale: 2, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className={cn(
+                            "w-1.5 h-1.5 rounded-full transition-all duration-300",
+                            loading ? "bg-slate-700" :
+                              fresh ? "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" :
+                              stale ? "bg-amber-400" :
+                              "bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]"
+                          )}
+                        />
+                        <span className={cn(
+                          "text-[8px] font-mono transition-colors",
+                          fresh ? "text-emerald-400" : stale ? "text-amber-400" : "text-rose-400 font-bold"
+                        )}>
+                          {market?.error ? 'FAIL' : !lastSync ? 'OFFLINE' : frozen ? `FROZEN ${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 1000)}s`}
+                        </span>
+                      </div>
+                    );
+                 })()}
               </div>
               <div className="hidden md:flex gap-10">
                  <div className="flex items-center gap-2">
