@@ -42,7 +42,7 @@ export class NotificationService {
       return;
     }
 
-    if (this.isMarketClosed()) {
+    if (config.DATA_SOURCE === 'LIVE' && this.isMarketClosed()) {
       console.log('[NOTIFY] Telegram message blocked because market is closed (weekend, holiday, or off-market hours):', message.replace(/<[^>]*>/g, '').substring(0, 100) + '...');
       return;
     }
@@ -109,7 +109,7 @@ export class NotificationService {
       ? `1:${(1 / trade.params.riskRewardRatio).toFixed(1)}` 
       : "Dynamic";
     const popStr = trade.params?.pop 
-      ? `${(trade.params.pop * 100).toFixed(1)}%` 
+      ? `${(trade.params.pop).toFixed(1)}%` 
       : "Dynamic";
 
     const message = `🚀 <b>TRADE INITIATED</b>\n` +

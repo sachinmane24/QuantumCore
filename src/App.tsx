@@ -1854,21 +1854,28 @@ export default function App() {
                   </div>
 
                   {/* Middle: Active Leg Breakdown */}
-                  <div className="flex-1 flex flex-col justify-center">
+                  <div className="flex-1 flex flex-col justify-center gap-3">
                     {execution?.positions && execution.positions.length > 0 ? (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left font-mono">
-                          <thead>
-                            <tr className="border-b border-white/5 text-[7px] font-bold text-slate-500 uppercase tracking-widest">
-                              <th className="py-1">LEG</th>
-                              <th className="py-1">STRIKE</th>
-                              <th className="py-1 text-center font-bold">QTY</th>
-                              <th className="py-1 text-right">ENTRY</th>
-                              <th className="py-1 text-right">LTP</th>
-                              <th className="py-1 text-right">REAL-TIME P&L</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-white/[0.02]">
+                      <>
+                        {execution?.lastTradeScore?.biasReason && (
+                          <div className="text-[10px] text-emerald-400/80 bg-emerald-950/20 p-2 rounded border border-emerald-500/10 font-mono tracking-tight">
+                            <span className="font-bold text-emerald-500 uppercase mr-2 tracking-widest text-[9px]">Decision Rationale:</span> 
+                            {execution.lastTradeScore.biasReason}
+                          </div>
+                        )}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left font-mono">
+                            <thead>
+                              <tr className="border-b border-white/5 text-[7px] font-bold text-slate-500 uppercase tracking-widest">
+                                <th className="py-1">LEG</th>
+                                <th className="py-1">STRIKE</th>
+                                <th className="py-1 text-center font-bold">QTY</th>
+                                <th className="py-1 text-right">ENTRY</th>
+                                <th className="py-1 text-right">LTP</th>
+                                <th className="py-1 text-right">REAL-TIME P&L</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/[0.02]">
                             {execution.positions.map((pos: any, idx: number) => {
                               const ltp = market?.chain?.find((c: any) => c.strike === pos.strike)?.[pos.type === 'CE' ? 'ce_price' : 'pe_price'] ?? pos.entryPrice;
                               const legPnl = (pos.side === 'BUY' ? (ltp - pos.entryPrice) : (pos.entryPrice - ltp)) * pos.qty;
@@ -1900,6 +1907,7 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
+                      </>
                     ) : (
                       <div className="flex flex-col items-center justify-center py-3 text-center">
                         <div className="text-[11px] font-black tracking-widest text-slate-500 uppercase flex items-center gap-2">

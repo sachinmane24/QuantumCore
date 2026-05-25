@@ -480,83 +480,51 @@ class ExecutionEngine {
   }
 
   async updatePnL() {
-    // Pure PnL update does not need lock as it just reads and updates primitive state
-    // But management actions inside it DO need protection.
-    if (this.activePositions.length === 0) {
-      riskEngine.updatePnL(0, []);
-      return;
-    }
-    
-    const chain = marketEngine.getOptionChain();
-    if (chain.length > 0) {
-      const validPositions: Position[] = [];
-      let hadGhostPurge = false;
+    // We must shield the entire PnL calculation loop to prevent race conditions 
+    // where concurrent ticks overwrite this.pnl while an exit evaluation is yielding asynchronously.
+    await this.withLock(async () => {
+      if (this.activePositions.length === 0) {
+        riskEngine.updatePnL(0, []);
+        return;
+      }
+      
+      const chain = marketEngine.getOptionChain();
+      if (chain.length === 0) return; // Wait for valid chain tick
+      
+      let currentPnL = 0;
+
       this.activePositions.forEach(pos => {
         const option = chain.find(o => o.strike === pos.strike);
-        if (option) {
-          validPositions.push(pos);
-        } else {
-          console.warn(`[EXECUTION] Ghost option position NIFTY ${pos.strike} ${pos.type} not in active chain. Purging.`);
-          hadGhostPurge = true;
-        }
-      });
-      if (hadGhostPurge) {
-        this.activePositions = validPositions;
-        await this.saveState();
-        if (this.activePositions.length === 0) {
-          this.pnl = 0;
-          this.peakPnL = 0;
-          this.currentTradeParams = null;
-          this.currentActiveSL = 0;
-          this.rollsToday = 0;
-          this.currentTradeBias = null;
-          this.currentEntryTime = 0;
-          this.currentSpotAtEntry = 0;
-          this.currentStrikeAtEntry = 0;
-          this.currentVixAtEntry = 0;
-          this.calculatePortfolioGreeks();
-          this.calculateCapitalDeployed();
-          riskEngine.updatePnL(0, []);
-          return;
-        }
-      }
-    }
-    
-    let currentPnL = 0;
-
-    this.activePositions.forEach(pos => {
-      const option = chain.find(o => o.strike === pos.strike);
-      if (option) {
-        const currentPrice = pos.type === 'CE' ? option.ce_price : option.pe_price;
+        // If option is missing from the limited mock generator chain, we don't purge it!
+        // We just assume the price hasn't updated or derive it from intrinsic if necessary.
+        const currentPrice = option ? (pos.type === 'CE' ? option.ce_price : option.pe_price) : pos.entryPrice;
+        
         const diff = pos.side === 'BUY' 
           ? (currentPrice - pos.entryPrice) 
           : (pos.entryPrice - currentPrice);
         currentPnL += diff * pos.qty;
+      });
+
+      this.pnl = Math.round(currentPnL);
+      this.peakPnL = Math.max(this.peakPnL, this.pnl);
+
+      // Update Intelligence for Trailing SL
+      if (this.currentTradeParams) {
+        this.currentActiveSL = intelligenceEngine.calculateTrailingSL(
+          this.pnl,
+          this.peakPnL,
+          this.currentTradeParams
+        );
       }
-    });
 
-    this.pnl = Math.round(currentPnL);
-    this.peakPnL = Math.max(this.peakPnL, this.pnl);
+      // Update Risk Engine
+      riskEngine.updatePnL(this.pnl, this.activePositions);
 
-    // Update Intelligence for Trailing SL
-    if (this.currentTradeParams) {
-      this.currentActiveSL = intelligenceEngine.calculateTrailingSL(
-        this.pnl,
-        this.peakPnL,
-        this.currentTradeParams
-      );
-    }
+      // Calculate Portfolio Greeks
+      this.calculatePortfolioGreeks();
+      
+      this.calculateCapitalDeployed();
 
-    // Update Risk Engine
-    riskEngine.updatePnL(this.pnl, this.activePositions);
-
-    // Calculate Portfolio Greeks
-    this.calculatePortfolioGreeks();
-    
-    this.calculateCapitalDeployed();
-
-    // Shield management logic with lock
-    await this.withLock(async () => {
       // Check Rolling 
       await this.checkRolling();
 
@@ -843,6 +811,8 @@ class ExecutionEngine {
       const now = Date.now();
       const durationSeconds = Math.round((now - this.currentEntryTime) / 1000);
       
+      const finalPnl = this.pnl;
+
       // Determine market phase
       const hours = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
       let phase = 'MID-SESSION';
@@ -869,7 +839,7 @@ class ExecutionEngine {
       }
 
       // Record trade result in Risk Engine
-      riskEngine.recordTradeResult(this.pnl);
+      riskEngine.recordTradeResult(finalPnl);
 
       try {
         await tradeLogger.logTrade({
@@ -880,8 +850,8 @@ class ExecutionEngine {
           gamma: this.lastTradeScore?.gamma || 0,
           oi_bias: this.lastTradeScore?.oiBias || 0,
           trap: this.lastTradeScore?.trap === 0,
-          pnl: Math.round(this.pnl),
-          win: this.pnl > 0,
+          pnl: Math.round(finalPnl),
+          win: finalPnl > 0,
           bias: this.currentTradeBias || undefined,
           vix: this.currentVixAtEntry || 14,
           spot: this.currentSpotAtEntry || 0,
@@ -930,7 +900,7 @@ class ExecutionEngine {
       entrySpot: this.currentSpotAtEntry,
       strategyType: this.lastTradeScore?.strategyType || "N/A",
       params: this.currentTradeParams
-    }, reason);
+    }, reason).catch(err => console.error("Notify failed:", err));
 
     this.activePositions = [];
     this.lastTradeEndTime = Date.now();
@@ -1043,7 +1013,9 @@ class ExecutionEngine {
       netVega: Number(this.netVega.toFixed(2)),
       hedgeLogs: this.hedgeLogs,
       risk: riskEngine.getStats(),
-      lastRiskValidation: this.lastRiskValidation
+      lastRiskValidation: this.lastRiskValidation,
+      lastTradeScore: this.lastTradeScore,
+      currentTradeBias: this.currentTradeBias
     };
   }
 }
