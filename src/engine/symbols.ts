@@ -36,6 +36,11 @@ export interface SymbolSpec {
   buyingSLCap: number;
   // Mock baseline (only used in MOCK data mode for warm-up).
   mockBaseline: number;
+  // Weekly expiry weekday (0=Sun … 6=Sat). Reference value only — the engine reads
+  // the actual expiry date from Kite's instruments dump; this is used for UI labels
+  // and as a sanity check.
+  weeklyExpiryDay: number;
+  weeklyExpiryDayLabel: string;
 }
 
 export const SYMBOL_SPECS: Record<SymbolKey, SymbolSpec> = {
@@ -54,6 +59,8 @@ export const SYMBOL_SPECS: Record<SymbolKey, SymbolSpec> = {
     pointScale: 1.0,
     buyingSLCap: 65,
     mockBaseline: 24000,
+    weeklyExpiryDay: 2, // Tuesday — current NSE NIFTY weekly per SEBI directive
+    weeklyExpiryDayLabel: 'Tuesday',
   },
   SENSEX: {
     key: 'SENSEX',
@@ -73,6 +80,8 @@ export const SYMBOL_SPECS: Record<SymbolKey, SymbolSpec> = {
     pointScale: 4.0,
     buyingSLCap: 250,
     mockBaseline: 78000,
+    weeklyExpiryDay: 4, // Thursday — BSE Sensex weekly expiry
+    weeklyExpiryDayLabel: 'Thursday',
   },
 };
 

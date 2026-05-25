@@ -1889,7 +1889,7 @@ export default function App() {
                     >
                       <span>{sym}</span>
                       <span className="text-[8px] text-slate-500">
-                        {sym === 'NIFTY' ? 'NSE · lot 75 · step 50' : 'BSE · lot 20 · step 100'}
+                        {sym === 'NIFTY' ? 'NSE · lot 75 · step 50 · Tue expiry' : 'BSE · lot 20 · step 100 · Thu expiry'}
                       </span>
                     </button>
                   );
