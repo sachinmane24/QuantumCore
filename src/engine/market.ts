@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config, getActiveSpec } from './config.ts';
+import { config } from './config.ts';
 import type { OptionChainData } from './types.ts';
 
 export interface Tick {
@@ -34,17 +34,8 @@ class MarketEngine {
   private vwap: number = 0;
   private todayOpen: number = 0;
   private vixDelta: number = 0;
-  private priceHistory: number[] = []; // raw tick history (used as fallback)
+  private priceHistory: number[] = [];
   private readonly MAX_HISTORY = 100;
-  // 1-minute candle closes — primary series for RSI/MACD/Bollinger.
-  // ~390 bars covers a full Indian equities session.
-  private minuteCandles: number[] = [];
-  private currentMinuteKey: number = -1;
-  private currentMinuteClose: number = 0;
-  private readonly MAX_CANDLES = 390;
-  // Rolling IV samples (one per minute) for IV rank / percentile.
-  private ivSamples: number[] = [];
-  private readonly MAX_IV_SAMPLES = 1560; // ~4 sessions worth, for trailing rank
   private expiryInfo: { weekly: string | null, monthly: string | null } = { weekly: null, monthly: null };
   private mockInterval: NodeJS.Timeout | null = null;
   private initialized: boolean = false;
@@ -102,14 +93,11 @@ class MarketEngine {
   }
 
   public getTechnicalIndicators() {
-    // Prefer 1-minute candles (clean signal) when we have enough bars; fall back to
-    // raw tick history during warm-up so the UI isn't flat-50 for the first session.
-    const useCandles = this.minuteCandles.length >= 35;
-    if (!useCandles && this.priceHistory.length < 30) {
+    if (this.priceHistory.length < 30) {
       return { rsi: 50, macd: { macd: 0, signal: 0, histogram: 0 }, bollinger: { upper: this.spotPrice, lower: this.spotPrice, middle: this.spotPrice } };
     }
 
-    const prices = useCandles ? this.minuteCandles : this.priceHistory;
+    const prices = this.priceHistory;
     
     // RSI (14)
     const computeRSI = (data: number[], period: number = 14) => {
@@ -146,44 +134,14 @@ class MarketEngine {
       return { upper: sma + stdDev * sd, middle: sma, lower: sma - stdDev * sd };
     };
 
-    // MACD (12, 26, 9) — build a rolling MACD-line series, then EMA(9) it for signal.
-    // Need at least 26 + 9 = 35 bars for a meaningful signal line; otherwise return raw line.
-    const macdLineAt = (idxFromEnd: number) => {
-      // Compute EMA(period) over data[0 .. data.length - 1 - idxFromEnd]
-      const slice = prices.slice(0, prices.length - idxFromEnd);
-      if (slice.length < 26) return 0;
-      const ema = (period: number) => {
-        const k = 2 / (period + 1);
-        let e = slice[slice.length - period];
-        for (let i = slice.length - period + 1; i < slice.length; i++) {
-          e = (slice[i] * k) + (e * (1 - k));
-        }
-        return e;
-      };
-      return ema(12) - ema(26);
-    };
-
-    const macdValue = macdLineAt(0);
-    let signal = macdValue;
-    let histogram = 0;
-
-    if (prices.length >= 35) {
-      const signalWindow = 9;
-      const macdSeries: number[] = [];
-      for (let i = signalWindow - 1; i >= 0; i--) {
-        macdSeries.push(macdLineAt(i));
-      }
-      const k = 2 / (signalWindow + 1);
-      signal = macdSeries[0];
-      for (let i = 1; i < macdSeries.length; i++) {
-        signal = (macdSeries[i] * k) + (signal * (1 - k));
-      }
-      histogram = macdValue - signal;
-    }
-
+    // MACD (12, 26, 9)
+    const ema12 = computeEMA(prices, 12);
+    const ema26 = computeEMA(prices, 26);
+    const macdValue = ema12 - ema26;
+    
     return {
       rsi: computeRSI(prices),
-      macd: { macd: macdValue, signal, histogram },
+      macd: { macd: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
       bollinger: computeBBands(prices)
     };
   }
@@ -317,10 +275,10 @@ class MarketEngine {
   }
 
   private generateChain(spot: number): OptionChainData[] {
-    const atmStrike = Math.round(spot / config.STRIKE_STEP) * config.STRIKE_STEP;
+    const atmStrike = Math.round(spot / 50) * 50;
     const chain: OptionChainData[] = [];
     for (let i = -5; i <= 5; i++) {
-      const strike = atmStrike + (i * config.STRIKE_STEP);
+      const strike = atmStrike + (i * 50);
       const ce_iv = 12 + Math.random() * 4;
       const pe_iv = 13 + Math.random() * 4;
       chain.push({
@@ -348,10 +306,8 @@ class MarketEngine {
 
   private startMockData() {
     // Initial Gap for testing
-    // Baseline derived from the active symbol so SENSEX mock starts at ~78k, not 24k.
-    const baseline = getActiveSpec().mockBaseline;
-    this.yesterdayClose = baseline;
-    this.todayOpen = baseline + Math.round(baseline * 0.002 / config.STRIKE_STEP) * config.STRIKE_STEP; // ~0.2% gap, snapped to step
+    this.yesterdayClose = 24300;
+    this.todayOpen = 24350; // +50 pts gap (~0.2%)
     this.spotPrice = this.todayOpen;
     this.vwap = this.spotPrice;
 
@@ -359,7 +315,7 @@ class MarketEngine {
     this.priceHistory = [];
     let simPrice = this.yesterdayClose;
     for (let i = 0; i < 80; i++) {
-      simPrice += (Math.random() - 0.49) * 4 * getActiveSpec().pointScale; // micro-oscillations, scaled by index
+      simPrice += (Math.random() - 0.49) * 4; // micro-oscillations
       this.priceHistory.push(simPrice);
     }
     // Set current price history endpoint
@@ -376,7 +332,7 @@ class MarketEngine {
       }
 
       // Mock spot price movement with slight momentum/drift
-      const change = (Math.random() - 0.495) * 6 * getActiveSpec().pointScale;
+      const change = (Math.random() - 0.495) * 6;
       this.spotPrice += change;
       
       // Update VWAP (simple moving weighted average mock)
@@ -388,7 +344,7 @@ class MarketEngine {
       const mockTick: Tick = {
         tradable: true,
         mode: 'full',
-        instrument_token: getActiveSpec().spotToken,
+        instrument_token: 256265, // NIFTY
         last_price: this.spotPrice,
         last_quantity: Math.floor(Math.random() * 500),
         average_price: this.spotPrice - 2,
@@ -409,11 +365,8 @@ class MarketEngine {
     }, 1000);
   }
 
-  // Default to the active symbol's spot token so callers don't need to know
-  // which index is current.
-  getLatestTick(token?: number): Tick | undefined {
-    const t = token ?? getActiveSpec().spotToken;
-    return this.ticks.get(t);
+  getLatestTick(token: number = 256265): Tick | undefined {
+    return this.ticks.get(token);
   }
 
   getSpotPrice(): number {
@@ -421,9 +374,7 @@ class MarketEngine {
   }
 
   getVix(): number {
-    const vt = getActiveSpec().vixToken;
-    if (vt === null) return 12.42;
-    return this.ticks.get(vt)?.last_price || 12.42;
+    return this.ticks.get(264969)?.last_price || 12.42; // Token for INDIA VIX is 264969
   }
 
   getPCR(): number {
@@ -476,47 +427,9 @@ class MarketEngine {
     return { ce: maxCe, pe: maxPe };
   }
 
-  // ATM average IV — used as the live IV reading. Falls back to VIX if chain has no IV.
-  public getAtmIV(): number {
-    if (this.optionChain.length === 0 || this.spotPrice === 0) return this.getVix();
-    const atmStrike = Math.round(this.spotPrice / 50) * 50;
-    const atm = this.optionChain.find(c => c.strike === atmStrike);
-    if (!atm) return this.getVix();
-    const ce = atm.ce_iv || 0;
-    const pe = atm.pe_iv || 0;
-    if (ce > 0 && pe > 0) return (ce + pe) / 2;
-    if (ce > 0) return ce;
-    if (pe > 0) return pe;
-    return this.getVix();
-  }
-
-  // IV Rank — where current IV sits between historical min and max (0–100).
-  // Returns null until we have at least a session's worth of samples (~30 bars).
-  public getIVRank(): number | null {
-    if (this.ivSamples.length < 30) return null;
-    const current = this.getAtmIV();
-    let min = Infinity, max = -Infinity;
-    for (const v of this.ivSamples) { if (v < min) min = v; if (v > max) max = v; }
-    if (max - min < 0.01) return 50;
-    return Math.max(0, Math.min(100, ((current - min) / (max - min)) * 100));
-  }
-
-  // IV Percentile — % of historical samples below the current reading.
-  public getIVPercentile(): number | null {
-    if (this.ivSamples.length < 30) return null;
-    const current = this.getAtmIV();
-    let below = 0;
-    for (const v of this.ivSamples) if (v < current) below++;
-    return (below / this.ivSamples.length) * 100;
-  }
-
-  public getMinuteCandles(): number[] {
-    return this.minuteCandles;
-  }
-
   updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number, vwap?: number) {
     this.spotPrice = spotPrice;
-
+    
     // Update price history
     if (spotPrice > 0) {
       if (this.priceHistory.length === 0 || this.priceHistory[this.priceHistory.length - 1] !== spotPrice) {
@@ -525,25 +438,6 @@ class MarketEngine {
           this.priceHistory.shift();
         }
       }
-
-      // 1-minute candle bucketing — anchor on UTC minute (timezone-agnostic, monotonic).
-      const minuteKey = Math.floor(Date.now() / 60000);
-      if (this.currentMinuteKey === -1) {
-        this.currentMinuteKey = minuteKey;
-        this.currentMinuteClose = spotPrice;
-      } else if (minuteKey !== this.currentMinuteKey) {
-        // Minute rolled over — commit the previous minute's last tick as its close.
-        this.minuteCandles.push(this.currentMinuteClose);
-        if (this.minuteCandles.length > this.MAX_CANDLES) this.minuteCandles.shift();
-        // Sample IV (ATM avg) once per minute for rank/percentile.
-        const atmIv = this.getAtmIV();
-        if (atmIv > 0) {
-          this.ivSamples.push(atmIv);
-          if (this.ivSamples.length > this.MAX_IV_SAMPLES) this.ivSamples.shift();
-        }
-        this.currentMinuteKey = minuteKey;
-      }
-      this.currentMinuteClose = spotPrice;
     }
 
     if (chain && chain.length > 0) {
@@ -592,22 +486,20 @@ class MarketEngine {
       }
     }
     
-    // Update VIX tick if provided (token from the active symbol's spec — INDIA VIX
-    // for all currently-supported indices since neither SENSEX nor BANKNIFTY has its
-    // own VIX index).
-    const spec = getActiveSpec();
-    if (vix && spec.vixToken !== null) {
-      const vxToken = spec.vixToken;
-      if (this.ticks.get(vxToken)) {
-        const prevVix = this.ticks.get(vxToken)!.last_price;
+    // Update VIX tick if provided
+    if (vix) {
+      if (this.ticks.get(264969)) {
+        const prevVix = this.ticks.get(264969)!.last_price;
         if (prevVix > 0) {
+           // We can calculate a session delta if we want, but usually VIX % change is from prev close.
+           // However, if we don't have prev close, we just show 0 or calculate from first tick.
            this.vixDelta = ((vix - prevVix) / prevVix) * 100;
         }
       }
       const vixTick: Tick = {
         tradable: true,
         mode: 'full',
-        instrument_token: vxToken,
+        instrument_token: 264969,
         last_price: vix,
         last_quantity: 0,
         average_price: vix,
@@ -621,14 +513,14 @@ class MarketEngine {
         oi_day_low: 0,
         timestamp: new Date()
       };
-      this.ticks.set(vxToken, vixTick);
+      this.ticks.set(264969, vixTick);
     }
-
-    // Spot tick for the active symbol.
+    
+    // Also update NIFTY tick
     const tick: Tick = {
       tradable: true,
       mode: 'full',
-      instrument_token: spec.spotToken,
+      instrument_token: 256265,
       last_price: spotPrice,
       last_quantity: 0,
       average_price: spotPrice,
@@ -642,7 +534,7 @@ class MarketEngine {
       oi_day_low: 0,
       timestamp: new Date()
     };
-    this.ticks.set(spec.spotToken, tick);
+    this.ticks.set(256265, tick);
   }
 }
 

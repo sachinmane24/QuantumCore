@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { config, getActiveSpec } from './config.ts';
+import { config } from './config.ts';
 import { marketEngine } from './market.ts';
 
 export interface TradeParams {
@@ -56,9 +56,8 @@ class IntelligenceEngine {
     // Stop Loss Hunting Protection: 
     // We check the recent swing high/low and put our SL at least X points beyond it 
     // to avoid getting hunted in a liquidity sweep.
-    const swings = marketEngine.getSwingLevels(30);
-    const ptScale = getActiveSpec().pointScale;
-    const huntingBuffer = Math.max(8 * ptScale, atr * 0.2); // SL-hunt buffer, scaled per symbol
+    const swings = marketEngine.getSwingLevels(30); 
+    const huntingBuffer = Math.max(8, atr * 0.2); // Slightly increased buffer for Nifty
     
     let slPoints = 0;
     let targetPoints = 0;
@@ -90,13 +89,10 @@ class IntelligenceEngine {
       // Afternoon Gamma Blast (Post 1:45 PM IST = 825 mins)
       if (isExpiryDay && totalMin >= 825) {
         riskRewardRatio = 5.5; 
-        slPoints = Math.max(18 * ptScale, slPoints * 0.85);
+        slPoints = Math.max(18, slPoints * 0.85); // Adjusted for better stability
       }
 
-      // SL caps scaled per symbol (NIFTY 65 → SENSEX 260 on normal day).
-      const buyingCap = getActiveSpec().buyingSLCap;
-      const expiryCap = isMonthlyExpiry ? buyingCap * 0.85 : buyingCap * 0.7;
-      slPoints = Math.min(isExpiryDay ? expiryCap : buyingCap, slPoints);
+      slPoints = Math.min(isExpiryDay ? (isMonthlyExpiry ? 55 : 45) : 65, slPoints); // Slightly wider caps
       targetPoints = slPoints * riskRewardRatio;
       
       // Ensure target is at least 0.7% of Spot for Momentum to catch real moves
@@ -127,8 +123,8 @@ class IntelligenceEngine {
       if (isExpiryDay && totalMin >= 810) {
         const maxPain = marketEngine.getMaxPain();
         const distToMaxPain = Math.abs(entrySpot - maxPain);
-        if (distToMaxPain < 40 * ptScale) {
-           slPoints *= 0.85;
+        if (distToMaxPain < 40) {
+           slPoints *= 0.85; 
         }
       }
 
@@ -161,7 +157,7 @@ class IntelligenceEngine {
       vixFactor: Number(vixFactor.toFixed(2)),
       pop: Math.round(pop),
       maxProfit: strategyMode === 'MOMENTUM_SNIPER' ? undefined : 2500, 
-      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * config.LOT_SIZE : 5500
+      maxLoss: strategyMode === 'MOMENTUM_SNIPER' ? slPoints * 75 : 5500
     };
   }
 
@@ -190,22 +186,21 @@ class IntelligenceEngine {
     peakPnL: number,
     params: TradeParams
   ): number {
-    // Use peakPnL to ladder up — never give back a locked level even if PnL retraces.
-    const reference = Math.max(currentPnL, peakPnL);
-
-    // Stage 3: Lock 70% once 90% of target was touched
-    if (reference >= params.targetRupees * 0.90) {
-      return params.targetRupees * 0.70;
+    // Stage 1: Move to Break-even once 30% target reached
+    if (currentPnL >= params.targetRupees * 0.30) {
+      // Lock at least 15% of target once 30% hit
+      const floor = params.targetRupees * 0.15;
+      return Math.max(-params.stopLossRupees, floor);
     }
 
-    // Stage 2: Lock 40% once 60% of target was touched
-    if (reference >= params.targetRupees * 0.60) {
+    // Stage 2: Move to 40% lock once 60% target reached
+    if (currentPnL >= params.targetRupees * 0.60) {
       return params.targetRupees * 0.40;
     }
 
-    // Stage 1: Lock 15% (above break-even) once 30% of target was touched
-    if (reference >= params.targetRupees * 0.30) {
-      return params.targetRupees * 0.15;
+    // Stage 3: Move to 70% lock once 90% target reached
+    if (currentPnL >= params.targetRupees * 0.90) {
+        return params.targetRupees * 0.70;
     }
 
     return -params.stopLossRupees;

@@ -15,8 +15,7 @@ import { strategyEngine } from "./src/engine/strategy.ts";
 import { executionEngine } from "./src/engine/execution.ts";
 import { riskEngine } from "./src/engine/risk.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
-import { config, setDataMode, setExecutionMode, setAutoMode, setActiveSymbol, getActiveSpec, updateConfig } from "./src/engine/config.ts";
-import { SYMBOL_SPECS, isValidSymbol, type SymbolKey } from "./src/engine/symbols.ts";
+import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
 import { savePersistentData, loadPersistentData } from "./src/engine/persistence.ts";
 import { NotificationService } from "./src/engine/notifications.ts";
@@ -960,9 +959,7 @@ async function startServer() {
       ...executionEngine.getState(),
       dataSource: config.DATA_SOURCE,
       executionMode: config.EXECUTION_MODE,
-      autoMode: config.AUTO_MODE,
-      activeSymbol: config.ACTIVE_SYMBOL,
-      activeSpec: getActiveSpec()
+      autoMode: config.AUTO_MODE
     });
   });
 
@@ -1091,50 +1088,6 @@ async function startServer() {
     setAutoMode(mode);
     await saveRiskConfig(config);
     res.json({ status: "success", autoMode: config.AUTO_MODE });
-  });
-
-  // List supported symbols + their specs so the UI can render the picker without
-  // duplicating the registry on the client.
-  apiRouter.get("/symbols", (req, res) => {
-    res.json({
-      active: config.ACTIVE_SYMBOL,
-      symbols: SYMBOL_SPECS,
-    });
-  });
-
-  // Switch the active index. Blocks the switch while positions are open so we
-  // never leave a NIFTY trade running under a SENSEX configuration.
-  apiRouter.post("/active-symbol", async (req, res) => {
-    const { symbol } = req.body as { symbol?: string };
-    if (!symbol || !isValidSymbol(symbol)) {
-      return res.status(400).json({ status: "error", reason: `Unknown symbol: ${symbol}` });
-    }
-    const openPositions = executionEngine.getState().positions || [];
-    if (openPositions.length > 0) {
-      return res.status(409).json({
-        status: "error",
-        reason: `Cannot switch symbol while ${openPositions.length} position(s) are open. Flatten first.`,
-      });
-    }
-    // BFO (BSE F&O) live data wiring is not in this iteration. MOCK works end-to-end
-    // for SENSEX; in LIVE, only NIFTY is currently supported.
-    const incomingSpec = SYMBOL_SPECS[symbol as SymbolKey];
-    if (config.DATA_SOURCE === 'LIVE' && incomingSpec.optionExchange !== 'NFO') {
-      return res.status(400).json({
-        status: "error",
-        reason: `${incomingSpec.displayName} live data (${incomingSpec.optionExchange}) is not yet wired. Switch DATA to MOCK to test ${incomingSpec.displayName}, or stay on NIFTY for LIVE.`,
-      });
-    }
-    setActiveSymbol(symbol as SymbolKey);
-    // Refresh mock generator (baseline/strike step) for the new symbol.
-    marketEngine.syncMode();
-    await saveRiskConfig(config);
-    console.log(`[SYMBOL] Active symbol switched → ${config.ACTIVE_SYMBOL} (lot ${config.LOT_SIZE}, step ${config.STRIKE_STEP})`);
-    res.json({
-      status: "success",
-      activeSymbol: config.ACTIVE_SYMBOL,
-      spec: getActiveSpec(),
-    });
   });
 
   let marketInfoCache: any = null;

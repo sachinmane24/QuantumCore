@@ -4,7 +4,6 @@
  */
 
 import { marketEngine } from './market.ts';
-import { config, getActiveSpec } from './config.ts';
 import type { OptionChainData } from './types.ts';
 
 export type StrategyMode = 'INST_SPREAD' | 'MOMENTUM_SNIPER';
@@ -84,11 +83,6 @@ export interface StrategyScore {
   gammaScore: number;
   timeFilterScore: number;
   oiChangeBias: number;
-  ivRank: number | null;
-  ivPercentile: number | null;
-  pinStrike: number | null;
-  pinDistance: number;       // |max-OI-CE strike − max-OI-PE strike|
-  pinAlignment: 'STRONG' | 'WEAK' | 'NONE';
 }
 
 class StrategyEngine {
@@ -97,22 +91,17 @@ class StrategyEngine {
     const chain = marketEngine.getOptionChain();
     const vix = marketEngine.getVix();
 
-    // 1. Trend Sensitivity — scaled to the active symbol's strike step
-    const spec = getActiveSpec();
-    const atmStrike = Math.round(spot / spec.strikeStep) * spec.strikeStep;
+    // 1. Trend Sensitivity for Nifty - 25 points
+    const atmStrike = Math.round(spot / 50) * 50;
     const diff = spot - atmStrike;
-    // Per-symbol scales: SENSEX moves ~4× the absolute points; OI volumes are ~0.3×.
-    const ptScale = spec.pointScale;
-    const oiScale = spec.oiScale;
     let trendScore = 12.5;
     let trendDirection = 1; 
     
     // Nifty moves are significant even at 10-20 points
-    // Point thresholds scaled per symbol (20/10 pts for NIFTY → 80/40 pts for SENSEX).
-    if (Math.abs(diff) > 20 * ptScale) {
-      trendScore = 25;
+    if (Math.abs(diff) > 20) {
+      trendScore = 25; 
       trendDirection = diff > 0 ? 1 : -1;
-    } else if (Math.abs(diff) > 10 * ptScale) {
+    } else if (Math.abs(diff) > 10) {
       trendScore = 20;
       trendDirection = diff > 0 ? 1 : -1;
     } else if (Math.abs(diff) > 0) {
@@ -138,17 +127,16 @@ class StrategyEngine {
     
     let oiBiasScore = 10;
 
-    // OI thresholds scaled per symbol — SENSEX has ~0.3× the per-strike OI volume of NIFTY.
-    if (pcr > 1.2 || oiChangeBias > 250000 * oiScale) oiBiasScore = 20;
-    else if (pcr > 1.05 || oiChangeBias > 80000 * oiScale) oiBiasScore = 15;
-    else if (pcr < 0.8 || oiChangeBias < -250000 * oiScale) oiBiasScore = 20;
-    else if (pcr < 0.95 || oiChangeBias < -80000 * oiScale) oiBiasScore = 15;
+    if (pcr > 1.2 || Math.abs(oiChangeBias) > 250000) oiBiasScore = 20;
+    else if (pcr > 1.05 || Math.abs(oiChangeBias) > 80000) oiBiasScore = 15;
+    else if (pcr < 0.8 || Math.abs(oiChangeBias) < -250000) oiBiasScore = 20;
+    else if (pcr < 0.95 || Math.abs(oiChangeBias) < -80000) oiBiasScore = 15;
 
     // 3. Gamma Condition (VIX based) - 15 points
     const gammaScore = Math.min(15, Math.max(0, 25 - vix));
 
     // 4. Trap Presence (OI Change Concentration) - 20 points
-    const trapScore = (Math.abs(oiChangeBias) > 2000000 * oiScale) ? 5 : 20;
+    const trapScore = (Math.abs(oiChangeBias) > 2000000) ? 5 : 20;
 
     // Robust IST Date Calculation Helper
     const getISTDate = () => {
@@ -247,28 +235,14 @@ class StrategyEngine {
     const distToSupport = spot - support;
     const distToResistance = resistance - spot;
 
-    const isNearSupport = distToSupport <= 30 * ptScale && distToSupport >= -10 * ptScale;
-    const isNearResistance = distToResistance <= 30 * ptScale && distToResistance >= -10 * ptScale;
-
-    // Pin alignment — when max-OI CE and PE sit on the same strike (or one apart),
-    // expiry-week price action gets magnetized to that level. Strongest case for
-    // butterflies / iron flies; reduces edge of naked directional buys.
-    const pinDistance = Math.abs(maxCeOiStrike - maxPeOiStrike);
-    const pinAlignment: 'STRONG' | 'WEAK' | 'NONE' =
-      pinDistance === 0 ? 'STRONG' :
-      pinDistance <= spec.strikeStep ? 'WEAK' : 'NONE';
-    const pinStrike: number | null =
-      pinAlignment === 'STRONG' ? maxCeOiStrike :
-      pinAlignment === 'WEAK' ? Math.round(((maxCeOiStrike + maxPeOiStrike) / 2) / spec.strikeStep) * spec.strikeStep :
-      null;
-    const pinScore = pinAlignment === 'STRONG' ? 15 : pinAlignment === 'WEAK' ? 8 : 0;
+    const isNearSupport = distToSupport <= 30 && distToSupport >= -10;
+    const isNearResistance = distToResistance <= 30 && distToResistance >= -10;
 
     let total = trendScore + oiBiasScore + gammaScore + trapScore + timeFilterScore + techIndicatorScore;
-
+    
     if (orbTrigger !== 0) total += 15;
     if (trapDetected) total -= 30;
     if (isNearSupport || isNearResistance) total += 15; // Score premium for trading near core ranges
-    total += pinScore;
     
     if (isExpiryDay) {
       if (isGammaBlastWindow && orbTrigger !== 0) total += 20; 
@@ -286,12 +260,9 @@ class StrategyEngine {
     if (!isObservationPeriod || total >= 55) {
       const isStrongScore = total > 75; // Lowered from 80 for better reactivity
       const isOrbConfirmed = orbTrigger !== 0 && total > 65; // Lowered from 70
-      const isSideways = Math.abs(oiChangeBias) < 80000 * oiScale && Math.abs(diff) < 8 * ptScale;
-      // IV-rank-aware vol regime: prefer rank when we have enough samples,
-      // otherwise fall back to absolute VIX thresholds for warm-up.
-      const ivRank = marketEngine.getIVRank();
-      const isHighVol = ivRank !== null ? ivRank > 70 : vix > 18;
-      const isLowVol = ivRank !== null ? ivRank < 30 : vix < 12;
+      const isSideways = Math.abs(oiChangeBias) < 80000 && Math.abs(diff) < 8;
+      const isHighVol = vix > 18;
+      const isLowVol = vix < 12;
 
       // 1. Determine Trend Candidate Bias with high sensitivity
       let candidateBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
@@ -315,13 +286,13 @@ class StrategyEngine {
           candidateReason = "ORB Breakdown Low confirmed by VWAP";
         } else {
           // Trend + OI Confirmation
-          if (oiChangeBias > 75000 * oiScale) {
+          if (oiChangeBias > 75000) {
              candidateBias = 'BULLISH';
              candidateReason = "Strong Put Writing (+OI Change)";
-          } else if (oiChangeBias < -75000 * oiScale) {
+          } else if (oiChangeBias < -75000) {
              candidateBias = 'BEARISH';
              candidateReason = "Strong Call Writing (-OI Change)";
-          } else if (Math.abs(diff) > 8 * ptScale || (Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.18)) {
+          } else if (Math.abs(diff) > 8 || (Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.18)) {
              // Pure Price Push / Significant Day Change if OI is lagging or neutral
              const priceChange = (marketEngine.getLatestTick()?.change || 0);
              const momentumFactor = Math.abs(diff) / 4; 
@@ -366,7 +337,7 @@ class StrategyEngine {
       const isSlightBearishSlope = spot < prevSpot || spot < prevSpot2;
 
       if (candidateBias === 'BULLISH') {
-        const chaseThreshold = 18 * ptScale; // scaled per symbol (18 pts NIFTY → 72 pts SENSEX)
+        const chaseThreshold = 18; // Trigger point where we consider price has flown too far from baseline EMA/VWAP
         const isFarAbove = spot > vwap + chaseThreshold && spot > ema20 + chaseThreshold;
         const isBollingerExhausted = spot > indicators.bollinger.upper;
 
@@ -376,8 +347,8 @@ class StrategyEngine {
           biasReason = `Suppress Chasing: Spot (₹${spot.toFixed(1)}) is far from EMA20/VWAP (₹${ema20.toFixed(1)}/₹${vwap.toFixed(1)}). Awaiting Pullback.`;
         } else {
           // Check if spot has compressed down into the active confluence zone
-          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 * ptScale || Math.abs(spot - vwap) <= 15 * ptScale || (spot >= Math.min(ema20, vwap) - 10 * ptScale && spot <= Math.max(ema20, vwap) + 12 * ptScale);
-          const isNearLowerBollinger = spot <= indicators.bollinger.lower + 12 * ptScale;
+          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 || Math.abs(spot - vwap) <= 15 || (spot >= Math.min(ema20, vwap) - 10 && spot <= Math.max(ema20, vwap) + 12);
+          const isNearLowerBollinger = spot <= indicators.bollinger.lower + 12;
 
           if (isNearEmaOrVwap || isNearLowerBollinger) {
             if (isSlightBullishSlope) {
@@ -400,7 +371,7 @@ class StrategyEngine {
           }
         }
       } else if (candidateBias === 'BEARISH') {
-        const chaseThreshold = 18 * ptScale;
+        const chaseThreshold = 18;
         const isFarBelow = spot < vwap - chaseThreshold && spot < ema20 - chaseThreshold;
         const isBollingerExhausted = spot < indicators.bollinger.lower;
 
@@ -408,8 +379,8 @@ class StrategyEngine {
           bias = 'NEUTRAL';
           biasReason = `Suppress Chasing: Spot (₹${spot.toFixed(1)}) is far from EMA20/VWAP (₹${ema20.toFixed(1)}/₹${vwap.toFixed(1)}). Awaiting Pullback.`;
         } else {
-          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 * ptScale || Math.abs(spot - vwap) <= 15 * ptScale || (spot >= Math.min(ema20, vwap) - 12 * ptScale && spot <= Math.max(ema20, vwap) + 10 * ptScale);
-          const isNearUpperBollinger = spot >= indicators.bollinger.upper - 12 * ptScale;
+          const isNearEmaOrVwap = Math.abs(spot - ema20) <= 15 || Math.abs(spot - vwap) <= 15 || (spot >= Math.min(ema20, vwap) - 12 && spot <= Math.max(ema20, vwap) + 10);
+          const isNearUpperBollinger = spot >= indicators.bollinger.upper - 12;
 
           if (isNearEmaOrVwap || isNearUpperBollinger) {
             if (isSlightBearishSlope) {
@@ -436,18 +407,8 @@ class StrategyEngine {
       }
 
       // Selection Matrix
-      // When the OI pin is firm and spot is camped inside its magnet (within ~60 pts),
-      // even directional setups should defer to a butterfly — the pin will fight the move
-      // and naked buys decay. Only override if the directional score is overwhelming.
-      const spotInsidePin = pinStrike !== null && Math.abs(spot - pinStrike) <= 60;
-      const pinOverridesDirectional = pinAlignment === 'STRONG' && spotInsidePin && !isStrongScore;
-
       if (bias === 'BULLISH') {
-        if (pinOverridesDirectional) {
-          strategyType = 'BUTTERFLY';
-          recommendation = `LONG CALL BUTTERFLY @ ${pinStrike} (PIN MAGNET OVERRIDE)`;
-          mode = 'INST_SPREAD';
-        } else if (isStrongScore || isOrbConfirmed) {
+        if (isStrongScore || isOrbConfirmed) {
           if (isHighVol) {
              strategyType = 'RATIO_SPREAD';
              recommendation = "BULLISH RATIO SPREAD (SELL FAR OTM)";
@@ -462,11 +423,7 @@ class StrategyEngine {
           mode = 'INST_SPREAD';
         }
       } else if (bias === 'BEARISH') {
-        if (pinOverridesDirectional) {
-          strategyType = 'BUTTERFLY';
-          recommendation = `LONG PUT BUTTERFLY @ ${pinStrike} (PIN MAGNET OVERRIDE)`;
-          mode = 'INST_SPREAD';
-        } else if (isStrongScore || isOrbConfirmed) {
+        if (isStrongScore || isOrbConfirmed) {
           if (isHighVol) {
              strategyType = 'RATIO_SPREAD';
              recommendation = "BEARISH RATIO SPREAD (SELL FAR OTM)";
@@ -481,31 +438,17 @@ class StrategyEngine {
           mode = 'INST_SPREAD';
         }
       } else {
-        // Neutral Strategies — sell premium when IV-rank is rich, buy when cheap.
+        // Neutral Strategies
         mode = 'INST_SPREAD';
         if (isHighVol) {
-          // High IV rank → SELL premium (collect inflated theta). Iron fly for ATM neutrality.
-          strategyType = 'IRON_FLY';
-          recommendation = `IRON FLY (SELL RICH IV${ivRank !== null ? ` — RANK ${Math.round(ivRank)}` : ''})`;
+          strategyType = total > 50 ? 'STRADDLE' : 'IRON_FLY';
+          recommendation = total > 50 ? "LONG STRADDLE (VOL EXPANSION)" : "IRON FLY / STRADDLE (IV CRUSH)";
         } else if (isLowVol) {
-          // Low IV rank → BUY premium (vol expansion play). Long straddle/calendar.
-          strategyType = total > 50 ? 'STRADDLE' : 'CALENDAR';
-          recommendation = total > 50
-            ? `LONG STRADDLE (CHEAP IV${ivRank !== null ? ` — RANK ${Math.round(ivRank)}` : ''})`
-            : `CALENDAR SPREAD (TIME DECAY)`;
+          strategyType = 'CALENDAR';
+          recommendation = "CALENDAR SPREAD (TIME DECAY)";
         } else {
-          // Pin-aligned + neutral = butterfly is the cleaner geometry (tight cone of profit
-          // at the magnet). Without pin alignment, Iron Condor is safer (wider profit cone).
-          if (pinAlignment === 'STRONG' && spotInsidePin) {
-            strategyType = 'BUTTERFLY';
-            recommendation = `BUTTERFLY @ ${pinStrike} (STRONG PIN MAGNET)`;
-          } else if (pinAlignment === 'WEAK' && spotInsidePin) {
-            strategyType = 'BUTTERFLY';
-            recommendation = `BUTTERFLY @ ${pinStrike} (PIN ALIGNED)`;
-          } else {
-            strategyType = total < 40 ? 'IRON_CONDOR' : 'BUTTERFLY';
-            recommendation = total < 40 ? "IRON CONDOR (THETA DECAY)" : "BUTTERFLY (RANGE BOUND)";
-          }
+          strategyType = total < 40 ? 'IRON_CONDOR' : 'BUTTERFLY';
+          recommendation = total < 40 ? "IRON CONDOR (THETA DECAY)" : "BUTTERFLY (RANGE BOUND)";
         }
       }
 
@@ -514,7 +457,7 @@ class StrategyEngine {
       }
     }
 
-    const oiBiasDirection = oiChangeBias > 75000 * oiScale ? 1 : (oiChangeBias < -75000 * oiScale ? -1 : 0);
+    const oiBiasDirection = oiChangeBias > 75000 ? 1 : (oiChangeBias < -75000 ? -1 : 0);
 
     return {
       total: Math.round(total),
@@ -533,12 +476,7 @@ class StrategyEngine {
       oiBiasScore: Math.round(oiBiasScore),
       gammaScore: Math.round(gammaScore),
       timeFilterScore: Math.round(timeFilterScore),
-      oiChangeBias: Math.round(oiChangeBias),
-      ivRank: marketEngine.getIVRank(),
-      ivPercentile: marketEngine.getIVPercentile(),
-      pinStrike,
-      pinDistance,
-      pinAlignment
+      oiChangeBias: Math.round(oiChangeBias)
     };
   }
 }
