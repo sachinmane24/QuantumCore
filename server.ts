@@ -1228,6 +1228,20 @@ async function startServer() {
     }
   });
 
+  apiRouter.delete("/trade-logs/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      await tradeLogger.deleteLog(id);
+      // Invalidate cache
+      tradeLogsCache = null;
+      lastTradeLogsFetch = 0;
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Delete trade log error:", err);
+      res.status(500).json({ error: "Failed to delete trade log" });
+    }
+  });
+
   apiRouter.get("/audit-logs", async (req, res) => {
     try {
       const logs = await tradeLogger.getAuditLogs();

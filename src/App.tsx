@@ -256,6 +256,20 @@ export default function App() {
     message?: string | null;
   }>({ loading: false, success: null });
 
+  const [selectedTradeLog, setSelectedTradeLog] = useState<any | null>(null);
+
+  const handleDeleteTradeLog = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this trade?")) return;
+    try {
+      const res = await fetch(`/api/trade-logs/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchData('slow');
+      }
+    } catch (e) {
+      console.error("Failed to delete log", e);
+    }
+  };
+
   useEffect(() => {
     if (appConfig) {
       if (appConfig.TELEGRAM_BOT_TOKEN) setTelegramToken(appConfig.TELEGRAM_BOT_TOKEN);
@@ -1439,6 +1453,7 @@ export default function App() {
         <nav className="flex flex-col gap-6">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Intel' },
+            { id: 'chain', icon: Layers, label: 'Chain' },
             { id: 'risk', icon: ShieldAlert, label: 'Risk' },
             { id: 'analytics', icon: TrendingUp, label: 'Analytics' },
             { id: 'backtest', icon: BarChart3, label: 'Backtest' },
@@ -2236,6 +2251,22 @@ export default function App() {
                 </section>
               )}
 
+            </div>
+          </motion.main>
+        ) : activeTab === 'chain' ? (
+          <motion.main
+            key="chain"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="flex-1 p-6 overflow-y-auto flex flex-col gap-6"
+          >
+            <div className="flex justify-between items-end">
+               <div>
+                  <h2 className="text-2xl font-black text-white tracking-tight uppercase">Option Chain Intelligence</h2>
+                  <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">Institutional Order Flow Matrix</p>
+               </div>
+            </div>
               {/* Enhanced Full-Width Options Matrix */}
               <section className="terminal-card bg-slate-900/40 p-5 flex flex-col gap-4 border border-white/5">
                 <div className="flex justify-between items-center border-b border-white/5 pb-2.5">
@@ -2557,7 +2588,6 @@ export default function App() {
                     </table>
                  </div>
                </section>
-            </div>
           </motion.main>
         ) : activeTab === 'stock-alpha' ? (
           <motion.main 
@@ -3673,6 +3703,7 @@ export default function App() {
                            <th className="p-5 border-b border-terminal-line text-right">Investment</th>
                            <th className="p-5 border-b border-terminal-line text-right">Profit/Loss</th>
                            <th className="p-5 border-b border-terminal-line text-right">Duration</th>
+                           <th className="p-5 border-b border-terminal-line text-center">Actions</th>
                         </tr>
                      </thead>
                      <tbody className="divide-y divide-white/[0.03]">
@@ -3759,6 +3790,29 @@ export default function App() {
                               </td>
                               <td className="p-5 text-right terminal-value text-[11px] text-slate-500">
                                  {log.duration ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s` : '--'}
+                              </td>
+                              <td className="p-5 text-center">
+                                 <div className="flex items-center justify-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button 
+                                       onClick={() => setSelectedTradeLog(log)}
+                                       className="text-slate-400 hover:text-white transition-colors"
+                                       title="View Details"
+                                    >
+                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                       </svg>
+                                    </button>
+                                    <button 
+                                       onClick={() => log.id && handleDeleteTradeLog(log.id)}
+                                       className="text-rose-500/50 hover:text-rose-400 transition-colors"
+                                       title="Delete Trade"
+                                    >
+                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                       </svg>
+                                    </button>
+                                 </div>
                               </td>
                            </tr>
                         ))}
@@ -4674,6 +4728,106 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Trade Details Modal */}
+      {selectedTradeLog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[#0B101E] border border-slate-700/50 rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/[0.02]">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center border border-blue-500/20">
+                  <span className="text-blue-400 font-black text-sm">₹</span>
+                </div>
+                <div>
+                  <h3 className="text-white font-bold tracking-wide">Trade Intelligence Report</h3>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest">{new Date(selectedTradeLog.timestamp).toLocaleString()}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedTradeLog(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-slate-400 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto max-h-[70vh] custom-scroll">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-white/[0.02] border border-white/5 p-3 rounded-lg flex flex-col">
+                  <span className="text-[8px] text-slate-500 uppercase font-black tracking-widest mb-1">Outcome</span>
+                  <span className={cn("text-lg font-black", selectedTradeLog.win ? "text-emerald-400" : "text-rose-400")}>
+                    {selectedTradeLog.win ? "WIN" : "LOSS"}
+                  </span>
+                </div>
+                <div className="bg-white/[0.02] border border-white/5 p-3 rounded-lg flex flex-col">
+                  <span className="text-[8px] text-slate-500 uppercase font-black tracking-widest mb-1">Net PnL</span>
+                  <span className={cn("text-lg font-black font-mono", selectedTradeLog.pnl >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                    {selectedTradeLog.pnl >= 0 ? '+' : '-'}₹{Math.abs(selectedTradeLog.pnl)}
+                  </span>
+                </div>
+                <div className="bg-white/[0.02] border border-white/5 p-3 rounded-lg flex flex-col">
+                  <span className="text-[8px] text-slate-500 uppercase font-black tracking-widest mb-1">System Bias</span>
+                  <span className={cn("text-lg font-black", selectedTradeLog.bias === "BULLISH" ? "text-emerald-400" : selectedTradeLog.bias === "BEARISH" ? "text-rose-400" : "text-blue-400")}>
+                    {selectedTradeLog.bias || "NEUTRAL"}
+                  </span>
+                </div>
+                <div className="bg-white/[0.02] border border-white/5 p-3 rounded-lg flex flex-col">
+                  <span className="text-[8px] text-slate-500 uppercase font-black tracking-widest mb-1">Mode</span>
+                  <span className="text-sm font-black text-white">{selectedTradeLog.mode?.replace('_', ' ') || "INST SPREAD"}</span>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 border-b border-white/5 pb-1">Market State at Entry</h4>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-slate-400 uppercase">Spot Price</span>
+                      <span className="text-sm font-mono text-white">{selectedTradeLog.spot || "---"}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-slate-400 uppercase">India VIX</span>
+                      <span className="text-sm font-mono text-white">{selectedTradeLog.vix?.toFixed(2) || "---"}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[9px] text-slate-400 uppercase">Signal Score</span>
+                      <span className="text-sm font-mono text-blue-400">{selectedTradeLog.score || "---"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 border-b border-white/5 pb-1">Execution Intelligence</h4>
+                  <div className="bg-black/30 rounded-lg p-3 font-mono text-[10px] text-slate-300 whitespace-pre-wrap overflow-x-auto border border-white/5">
+                    {JSON.stringify(selectedTradeLog.intelligence || {}, null, 2)}
+                  </div>
+                </div>
+
+                {selectedTradeLog.positions && selectedTradeLog.positions.length > 0 && (
+                  <div>
+                    <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 border-b border-white/5 pb-1">Options Executed</h4>
+                    <div className="space-y-2">
+                       {selectedTradeLog.positions.map((pos: any, idx: number) => (
+                         <div key={idx} className="flex justify-between items-center bg-white/[0.02] border border-white/5 px-3 py-2 rounded">
+                           <div className="flex flex-col">
+                             <span className="text-xs font-bold text-white">{pos.strike} {pos.type}</span>
+                             <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest">
+                               {pos.side} • QTY: {pos.qty}
+                             </span>
+                           </div>
+                           <div className="flex flex-col items-end">
+                             <span className="text-[10px] font-mono text-slate-300">Net Delta: {pos.delta || '---'}</span>
+                           </div>
+                         </div>
+                       ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Live Quantum Terminal Notification Toast */}
       {toast && (

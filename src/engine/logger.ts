@@ -136,6 +136,30 @@ class TradeLogger {
 
     return logs;
   }
+
+  async deleteLog(id: string) {
+    if (firestoreEnabled) {
+      try {
+        await tradesCollection.doc(id).delete();
+        console.log(`[LOGGER] Deleted trade log ${id} from Firestore.`);
+      } catch (err) {
+        console.error(`[LOGGER] Failed to delete trade log ${id} from Firestore:`, err);
+      }
+    }
+    // Also try to delete from fallback if present
+    try {
+      const fallbackPath = path.join(process.cwd(), 'trades_fallback.json');
+      if (await fs.pathExists(fallbackPath)) {
+        let fallbackLogs: any[] = await fs.readJson(fallbackPath);
+        const initialLength = fallbackLogs.length;
+        fallbackLogs = fallbackLogs.filter(log => log.id !== id);
+        if (fallbackLogs.length !== initialLength) {
+           await fs.writeJson(fallbackPath, fallbackLogs);
+           console.log(`[LOGGER] Deleted trade log ${id} from local fallback.`);
+        }
+      }
+    } catch (e) {}
+  }
 }
 
 export const tradeLogger = new TradeLogger();
