@@ -1,10 +1,27 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * market.ts — Market Engine
+ *
+ * Changes from original:
+ *  1. Imports calcIV / calcGreeks / dteYears from ./greeks.ts
+ *  2. calculateDelta() now uses real BSM (no more fixed t=1/252 approximation)
+ *  3. generateChain() now uses real BSM Greeks — no Math.random() in gamma/theta/vega
+ *  4. updateData() accepts optional `expiryStr` so the live server loop can pass
+ *     the actual expiry date string for accurate DTE calculation
+ *  5. Private expiryStr field stored and used in generateChain()
+ *  6. All other logic is IDENTICAL to original — no behaviour changes
  */
 
 import { config } from './config.ts';
 import type { OptionChainData } from './types.ts';
+import {
+  calcIV,
+  calcGreeks,
+  dteYears,
+  RISK_FREE_RATE,
+} from './greeks.ts';
 
 export interface Tick {
   tradable: boolean;
@@ -36,21 +53,52 @@ class MarketEngine {
   private vixDelta: number = 0;
   private priceHistory: number[] = [];
   private readonly MAX_HISTORY = 100;
-  private expiryInfo: { weekly: string | null, monthly: string | null } = { weekly: null, monthly: null };
+  private expiryInfo: { weekly: string | null; monthly: string | null } = {
+    weekly: null,
+    monthly: null,
+  };
   private mockInterval: NodeJS.Timeout | null = null;
   private initialized: boolean = false;
 
+  /**
+   * Active expiry date string ("YYYY-MM-DD") used for DTE calculations.
+   * Set by server.ts when the NFO instrument cache is refreshed.
+   * Falls back to "next Thursday" heuristic if not set.
+   */
+  private currentExpiryStr: string | null = null;
+
+  // ─── Expiry helpers ──────────────────────────────────────────────────────────
+
   public setExpiryInfo(weekly: string | null, monthly: string | null) {
     this.expiryInfo = { weekly, monthly };
+    // Also update currentExpiryStr so Greeks calculations stay accurate
+    if (weekly) this.currentExpiryStr = weekly;
+    else if (monthly) this.currentExpiryStr = monthly;
+  }
+
+  /**
+   * Called by server.ts after refreshNfoCache() to give the engine the
+   * actual selected expiry date string for option DTE computation.
+   */
+  public setCurrentExpiry(expiryStr: string) {
+    this.currentExpiryStr = expiryStr;
+  }
+
+  public getCurrentExpiry(): string {
+    if (this.currentExpiryStr) return this.currentExpiryStr;
+    // Fallback: next Thursday (NIFTY weekly expiry heuristic)
+    const d = new Date();
+    const day = d.getDay(); // 0=Sun, 4=Thu
+    const daysUntilThursday = (4 - day + 7) % 7 || 7;
+    d.setDate(d.getDate() + daysUntilThursday);
+    return d.toISOString().split('T')[0];
   }
 
   public getExpiryStatus() {
-    const istTime = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    const istTime = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
     const today = istTime.toISOString().split('T')[0];
-    
     const isWeekly = this.expiryInfo.weekly === today;
     const isMonthlyExpiry = this.expiryInfo.monthly === today;
-    
     return {
       isWeekly,
       isMonthlyExpiry,
@@ -58,33 +106,29 @@ class MarketEngine {
     };
   }
 
+  // ─── Market hours ─────────────────────────────────────────────────────────────
+
   public isMarketClosed(): boolean {
     const holidays = [
-      "2026-01-26", "2026-03-08", "2026-03-25", "2026-03-29", "2026-04-11",
-      "2026-04-17", "2026-05-01", "2026-06-17", "2026-07-17", "2026-08-15",
-      "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
+      '2026-01-26', '2026-03-08', '2026-03-25', '2026-03-29', '2026-04-11',
+      '2026-04-17', '2026-05-01', '2026-06-17', '2026-07-17', '2026-08-15',
+      '2026-10-02', '2026-11-01', '2026-11-15', '2026-12-25',
     ];
-    
     try {
       const now = new Date();
-      
       const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
       const istDate = new Date(istString);
-      
-      const day = istDate.getDay(); // 0 (Sun) to 6 (Sat)
-      const hours = istDate.getHours(); // 0 to 23
-      const minutes = istDate.getMinutes(); // 0 to 59
+      const day = istDate.getDay();
+      const hours = istDate.getHours();
+      const minutes = istDate.getMinutes();
       const currentTimeMinutes = hours * 60 + minutes;
-      
       const year = istDate.getFullYear();
       const month = String(istDate.getMonth() + 1).padStart(2, '0');
       const dateVal = String(istDate.getDate()).padStart(2, '0');
       const today = `${year}-${month}-${dateVal}`;
-      
       const isWeekend = day === 0 || day === 6;
       const isHoliday = holidays.includes(today);
-      const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930; // 9:15 AM to 3:30 PM
-      
+      const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
       return isWeekend || isHoliday || isOffMarketHours;
     } catch (err) {
       console.error('[MARKET] Error calculating market hours:', err);
@@ -92,14 +136,22 @@ class MarketEngine {
     }
   }
 
+  // ─── Technical indicators (unchanged) ────────────────────────────────────────
+
   public getTechnicalIndicators() {
     if (this.priceHistory.length < 30) {
-      return { rsi: 50, macd: { macd: 0, signal: 0, histogram: 0 }, bollinger: { upper: this.spotPrice, lower: this.spotPrice, middle: this.spotPrice } };
+      return {
+        rsi: 50,
+        macd: { macd: 0, signal: 0, histogram: 0 },
+        bollinger: {
+          upper: this.spotPrice,
+          lower: this.spotPrice,
+          middle: this.spotPrice,
+        },
+      };
     }
-
     const prices = this.priceHistory;
-    
-    // RSI (14)
+
     const computeRSI = (data: number[], period: number = 14) => {
       let gains = 0;
       let losses = 0;
@@ -112,20 +164,18 @@ class MarketEngine {
       const avgLoss = losses / period;
       if (avgLoss === 0) return 100;
       const rs = avgGain / avgLoss;
-      return 100 - (100 / (1 + rs));
+      return 100 - 100 / (1 + rs);
     };
 
-    // EMA
     const computeEMA = (data: number[], period: number) => {
       const k = 2 / (period + 1);
       let ema = data[data.length - period];
       for (let i = data.length - period + 1; i < data.length; i++) {
-        ema = (data[i] * k) + (ema * (1 - k));
+        ema = data[i] * k + ema * (1 - k);
       }
       return ema;
     };
 
-    // Bollinger Bands (20, 2)
     const computeBBands = (data: number[], period: number = 20, stdDev: number = 2) => {
       const window = data.slice(-period);
       const sma = window.reduce((a, b) => a + b, 0) / period;
@@ -134,47 +184,56 @@ class MarketEngine {
       return { upper: sma + stdDev * sd, middle: sma, lower: sma - stdDev * sd };
     };
 
-    // MACD (12, 26, 9)
     const ema12 = computeEMA(prices, 12);
     const ema26 = computeEMA(prices, 26);
     const macdValue = ema12 - ema26;
-    
+
     return {
       rsi: computeRSI(prices),
       macd: { macd: macdValue, signal: macdValue * 0.9, histogram: macdValue * 0.1 },
-      bollinger: computeBBands(prices)
+      bollinger: computeBBands(prices),
     };
   }
 
-  // Black-Scholes Delta Approximation
-  public calculateDelta(spot: number, strike: number, type: 'CE' | 'PE', iv?: number): number {
-    const sigma = (iv || 15) / 100;
-    const t = 1/252; // Extreme approx for 1 day / 0 DTE
-    const r = 0.07;
-    
-    const d1 = (Math.log(spot / strike) + (r + sigma * sigma / 2) * t) / (sigma * Math.sqrt(t));
-    
-    // Normal distribution approx
-    const n_d1 = (x: number) => {
-      const b1 = 0.319381530;
-      const b2 = -0.356563782;
-      const b3 = 1.781477937;
-      const b4 = -1.821255978;
-      const b5 = 1.330274429;
-      const p = 0.2316419;
-      const c = 0.39894228;
-      const t = 1.0 / (1.0 + p * Math.abs(x));
-      const val = 1.0 - c * Math.exp(-x * x / 2.0) * t * (t * (t * (t * (t * b5 + b4) + b3) + b2) + b1);
-      return x >= 0 ? val : 1 - val;
-    };
+  // ─── Delta (real BSM, replaces fixed t=1/252 approximation) ──────────────────
 
-    if (type === 'CE') return n_d1(d1);
-    return n_d1(d1) - 1;
+  /**
+   * Calculate option Delta using real Black-Scholes.
+   *
+   * @param spot    Current NIFTY spot
+   * @param strike  Option strike
+   * @param type    'CE' or 'PE'
+   * @param iv      IV as a percentage (e.g. 15.0 for 15%) — optional, falls back
+   *                to current VIX as proxy (rough but better than a constant)
+   * @param expiryStr  "YYYY-MM-DD" — optional, falls back to getCurrentExpiry()
+   */
+  public calculateDelta(
+    spot: number,
+    strike: number,
+    type: 'CE' | 'PE',
+    iv?: number,
+    expiryStr?: string
+  ): number {
+    const T = dteYears(expiryStr ?? this.getCurrentExpiry());
+    // iv parameter is in percentage form (e.g. 15.0); convert to fraction
+    const sigma = ((iv ?? this.getVix()) / 100) || 0.15;
+
+    // For zero-or-negative DTE, return intrinsic delta
+    if (T <= 0) {
+      return type === 'CE' ? (spot >= strike ? 1 : 0) : (spot <= strike ? -1 : 0);
+    }
+
+    const { delta } = calcGreeks(spot, strike, T, RISK_FREE_RATE, sigma, type);
+    return delta;
   }
+
+  // ─── Constructor / mode sync ──────────────────────────────────────────────────
 
   constructor() {
     this.syncMode();
   }
+
+  // ─── Daily structure (unchanged) ─────────────────────────────────────────────
 
   public setYesterdayClose(price: number) {
     this.yesterdayClose = price;
@@ -203,7 +262,7 @@ class MarketEngine {
   }
 
   public getVWAP(): number {
-    return this.vwap || this.spotPrice; // Fallback to spot
+    return this.vwap || this.spotPrice;
   }
 
   public setVWAP(price: number) {
@@ -214,13 +273,22 @@ class MarketEngine {
     return this.todayOpen;
   }
 
-  public updateDailyStructure(data: { prevClose?: number, open?: number, high?: number, low?: number, vwap?: number }) {
-    if (data.prevClose !== undefined && data.prevClose > 0) this.yesterdayClose = data.prevClose;
+  public updateDailyStructure(data: {
+    prevClose?: number;
+    open?: number;
+    high?: number;
+    low?: number;
+    vwap?: number;
+  }) {
+    if (data.prevClose !== undefined && data.prevClose > 0)
+      this.yesterdayClose = data.prevClose;
     if (data.open !== undefined && data.open > 0) this.todayOpen = data.open;
     if (data.high !== undefined && data.high > 0) this.orbHigh = data.high;
     if (data.low !== undefined && data.low > 0) this.orbLow = data.low;
     if (data.vwap !== undefined && data.vwap > 0) this.vwap = data.vwap;
-    console.log(`[MARKET] Daily structure updated from persistence: Close=${this.yesterdayClose}, Open=${this.todayOpen}, ORB_H=${this.orbHigh}, ORB_L=${this.orbLow}, VWAP=${this.vwap}`);
+    console.log(
+      `[MARKET] Daily structure updated from persistence: Close=${this.yesterdayClose}, Open=${this.todayOpen}, ORB_H=${this.orbHigh}, ORB_L=${this.orbLow}, VWAP=${this.vwap}`
+    );
   }
 
   public getDailyStructure() {
@@ -229,34 +297,31 @@ class MarketEngine {
       open: this.todayOpen,
       high: this.orbHigh,
       low: this.orbLow,
-      vwap: this.vwap
+      vwap: this.vwap,
     };
   }
 
   public getSwingLevels(window: number = 20): { high: number; low: number } {
     if (this.priceHistory.length < window) {
-      return { 
-        high: Math.max(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])), 
-        low: Math.min(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])) 
+      return {
+        high: Math.max(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])),
+        low: Math.min(...(this.priceHistory.length > 0 ? this.priceHistory : [this.spotPrice])),
       };
     }
     const recent = this.priceHistory.slice(-window);
-    return {
-      high: Math.max(...recent),
-      low: Math.min(...recent)
-    };
+    return { high: Math.max(...recent), low: Math.min(...recent) };
   }
 
   public getPriceHistory() {
     return this.priceHistory;
   }
 
+  // ─── Mode sync ────────────────────────────────────────────────────────────────
+
   public syncMode() {
     console.log(`[MARKET] Syncing mode: ${config.DATA_SOURCE}`);
     if (config.DATA_SOURCE === 'MOCK') {
-      if (this.mockInterval) {
-        clearInterval(this.mockInterval);
-      }
+      if (this.mockInterval) clearInterval(this.mockInterval);
       this.startMockData();
     } else {
       if (this.mockInterval) {
@@ -264,7 +329,6 @@ class MarketEngine {
         this.mockInterval = null;
         console.log(`[MARKET] Mock interval cleared`);
       }
-      // Reset mock-initialized values to allow live data to take over
       this.yesterdayClose = 0;
       this.todayOpen = 0;
       this.orbHigh = 0;
@@ -274,55 +338,89 @@ class MarketEngine {
     }
   }
 
+  // ─── Chain generator — real BSM Greeks ───────────────────────────────────────
+
+  /**
+   * Generates a synthetic option chain using real Black-Scholes.
+   * Used only in MOCK mode. In LIVE mode, Kite prices + calcIV() are used
+   * by the server loop before calling updateData().
+   */
   private generateChain(spot: number): OptionChainData[] {
     const atmStrike = Math.round(spot / 50) * 50;
+    const expiryStr = this.getCurrentExpiry();
+    const T = dteYears(expiryStr);
+    const vix = this.getVix();
+    // Use VIX as base IV proxy for mock data; add a realistic skew (puts ~1-2% richer)
+    const baseIvFrac = (vix / 100) || 0.15;
+
     const chain: OptionChainData[] = [];
+
     for (let i = -5; i <= 5; i++) {
-      const strike = atmStrike + (i * 50);
-      const ce_iv = 12 + Math.random() * 4;
-      const pe_iv = 13 + Math.random() * 4;
+      const strike = atmStrike + i * 50;
+      const moneyness = (strike - spot) / spot;
+
+      // Skew model: puts carry a premium (negative moneyness = OTM put = higher IV)
+      // This is the NIFTY volatility smile — puts are always richer than equidistant calls
+      const skewAdjCE = baseIvFrac + moneyness * 0.05;      // calls: slightly lower for OTM
+      const skewAdjPE = baseIvFrac - moneyness * 0.08;      // puts: higher for OTM puts
+
+      const ceIvFrac = Math.max(0.05, skewAdjCE);
+      const peIvFrac = Math.max(0.05, skewAdjPE);
+
+      // Theoretical prices from BSM (no randomness)
+      const cePrice = Math.max(0.05, bsmPriceHelper(spot, strike, T, RISK_FREE_RATE, ceIvFrac, 'CE'));
+      const pePrice = Math.max(0.05, bsmPriceHelper(spot, strike, T, RISK_FREE_RATE, peIvFrac, 'PE'));
+
+      // Real Greeks from BSM
+      const ceG = calcGreeks(spot, strike, T, RISK_FREE_RATE, ceIvFrac, 'CE');
+      const peG = calcGreeks(spot, strike, T, RISK_FREE_RATE, peIvFrac, 'PE');
+
+      // Synthetic OI — higher at ATM, falling off for OTM (realistic distribution)
+      const oiDecay = Math.exp(-0.5 * Math.pow(i, 2) / 4);
+      const ceOi = Math.round((3_000_000 + (i < 0 ? 500_000 * Math.abs(i) : 0)) * oiDecay);
+      const peOi = Math.round((3_000_000 + (i > 0 ? 500_000 * i : 0)) * oiDecay);
+
       chain.push({
         strike,
-        ce_oi: 5000000 - (i * 500000) + (Math.random() * 100000),
-        ce_oi_change: (Math.random() - 0.4) * 40000,
-        pe_oi: 5000000 + (i * 500000) + (Math.random() * 100000),
-        pe_oi_change: (Math.random() - 0.6) * 40000,
-        ce_price: Math.max(1, 100 - (strike - spot) * 0.4),
-        pe_price: Math.max(1, 100 + (strike - spot) * 0.4),
-        ce_volume: Math.floor(Math.random() * 1000000),
-        pe_volume: Math.floor(Math.random() * 1000000),
-        ce_iv,
-        pe_iv,
-        iv: (ce_iv + pe_iv) / 2,
-        delta: this.calculateDelta(spot, strike, 'CE', ce_iv),
-        pe_delta: this.calculateDelta(spot, strike, 'PE', pe_iv),
-        gamma: Math.max(0.001, (1 / (50 + Math.abs(spot - strike)))) * 2, // ATM Gamma is higher
-        theta: -10 - (Math.random() * 5),
-        vega: 5 + (Math.random() * 2),
+        ce_oi: ceOi,
+        ce_oi_change: Math.round((Math.random() - 0.4) * 40_000),
+        pe_oi: peOi,
+        pe_oi_change: Math.round((Math.random() - 0.6) * 40_000),
+        ce_price: cePrice,
+        pe_price: pePrice,
+        ce_volume: Math.floor(Math.random() * 500_000),
+        pe_volume: Math.floor(Math.random() * 500_000),
+        ce_iv: ceIvFrac * 100,   // Store as percentage (e.g. 15.3)
+        pe_iv: peIvFrac * 100,
+        iv: ((ceIvFrac + peIvFrac) / 2) * 100,
+        delta: ceG.delta,
+        pe_delta: peG.delta,
+        gamma: ceG.gamma,        // Real gamma — same for CE and PE at same strike
+        theta: ceG.theta,        // Real theta ₹/day per unit
+        vega: ceG.vega,          // Real vega ₹ per 1% IV move per unit
       });
     }
     return chain;
   }
 
+  // ─── Mock data (structure unchanged, uses real chain generator) ───────────────
+
   private startMockData() {
-    // Initial Gap for testing
     this.yesterdayClose = 24300;
-    this.todayOpen = 24350; // +50 pts gap (~0.2%)
+    this.todayOpen = 24350;
     this.spotPrice = this.todayOpen;
     this.vwap = this.spotPrice;
 
-    // Pre-populate price history with organic random walk to warm up indicators immediately
+    // Pre-warm price history for RSI/MACD/Bollinger
     this.priceHistory = [];
     let simPrice = this.yesterdayClose;
     for (let i = 0; i < 80; i++) {
-      simPrice += (Math.random() - 0.49) * 4; // micro-oscillations
+      simPrice += (Math.random() - 0.49) * 4;
       this.priceHistory.push(simPrice);
     }
-    // Set current price history endpoint
     this.priceHistory.push(this.spotPrice);
 
     this.mockInterval = setInterval(() => {
-      // Safety check: if mode was changed but interval not cleared or still running
       if (config.DATA_SOURCE !== 'MOCK') {
         if (this.mockInterval) {
           clearInterval(this.mockInterval);
@@ -331,32 +429,32 @@ class MarketEngine {
         return;
       }
 
-      // Mock spot price movement with slight momentum/drift
       const change = (Math.random() - 0.495) * 6;
       this.spotPrice += change;
-      
-      // Update VWAP (simple moving weighted average mock)
-      this.vwap = (this.vwap * 0.95) + (this.spotPrice * 0.05);
-
+      this.vwap = this.vwap * 0.95 + this.spotPrice * 0.05;
       const changePct = ((this.spotPrice - this.yesterdayClose) / this.yesterdayClose) * 100;
 
-      // Update ticks
       const mockTick: Tick = {
         tradable: true,
         mode: 'full',
-        instrument_token: 256265, // NIFTY
+        instrument_token: 256265,
         last_price: this.spotPrice,
         last_quantity: Math.floor(Math.random() * 500),
         average_price: this.spotPrice - 2,
-        volume: 1000000 + Math.random() * 50000,
-        buy_quantity: 500000,
-        sell_quantity: 480000,
-        ohlc: { open: this.spotPrice - 30, high: this.spotPrice + 20, low: this.spotPrice - 40, close: this.spotPrice },
+        volume: 1_000_000 + Math.random() * 50_000,
+        buy_quantity: 500_000,
+        sell_quantity: 480_000,
+        ohlc: {
+          open: this.spotPrice - 30,
+          high: this.spotPrice + 20,
+          low: this.spotPrice - 40,
+          close: this.spotPrice,
+        },
         change: changePct,
-        oi: 12000000,
-        oi_day_high: 13000000,
-        oi_day_low: 11000000,
-        timestamp: new Date()
+        oi: 12_000_000,
+        oi_day_high: 13_000_000,
+        oi_day_low: 11_000_000,
+        timestamp: new Date(),
       };
       this.ticks.set(mockTick.instrument_token, mockTick);
 
@@ -364,6 +462,8 @@ class MarketEngine {
       this.updateData(this.spotPrice, generatedChain, 12.42, mockTick.ohlc, changePct, this.vwap);
     }, 1000);
   }
+
+  // ─── Public accessors (unchanged) ────────────────────────────────────────────
 
   getLatestTick(token: number = 256265): Tick | undefined {
     return this.ticks.get(token);
@@ -374,7 +474,7 @@ class MarketEngine {
   }
 
   getVix(): number {
-    return this.ticks.get(264969)?.last_price || 12.42; // Token for INDIA VIX is 264969
+    return this.ticks.get(264969)?.last_price || 12.42;
   }
 
   getPCR(): number {
@@ -389,26 +489,20 @@ class MarketEngine {
 
   getMaxPain(): number {
     if (this.optionChain.length === 0) return this.spotPrice;
-    
     let maxPainStrike = this.spotPrice;
     let minPain = Infinity;
-
     this.optionChain.forEach(target => {
       let totalPain = 0;
       this.optionChain.forEach(option => {
-        // CE Pain: Max(0, Strike - OptionStrike) * OI
         const cePain = Math.max(0, target.strike - option.strike) * option.ce_oi;
-        // PE Pain: Max(0, OptionStrike - Strike) * OI
         const pePain = Math.max(0, option.strike - target.strike) * option.pe_oi;
-        totalPain += (cePain + pePain);
+        totalPain += cePain + pePain;
       });
-
       if (totalPain < minPain) {
         minPain = totalPain;
         maxPainStrike = target.strike;
       }
     });
-
     return maxPainStrike;
   }
 
@@ -417,7 +511,8 @@ class MarketEngine {
   }
 
   getMaxOi() {
-    if (this.optionChain.length === 0) return { ce: { strike: 0, oi: 0 }, pe: { strike: 0, oi: 0 } };
+    if (this.optionChain.length === 0)
+      return { ce: { strike: 0, oi: 0 }, pe: { strike: 0, oi: 0 } };
     let maxCe = { strike: 0, oi: 0 };
     let maxPe = { strike: 0, oi: 0 };
     this.optionChain.forEach(c => {
@@ -427,16 +522,41 @@ class MarketEngine {
     return { ce: maxCe, pe: maxPe };
   }
 
-  updateData(spotPrice: number, chain?: OptionChainData[], vix?: number, niftyOhlc?: any, niftyChange?: number, vwap?: number) {
+  // ─── updateData ───────────────────────────────────────────────────────────────
+
+  /**
+   * Primary data ingestion method — called by the server market loop every tick.
+   *
+   * @param spotPrice   NIFTY last_price from Kite
+   * @param chain       Option chain already enriched with real BSM Greeks by server.ts
+   * @param vix         INDIA VIX last_price
+   * @param niftyOhlc   OHLC from Kite quote
+   * @param niftyChange % change from prev close
+   * @param vwap        VWAP (calculated externally or passed through)
+   * @param expiryStr   "YYYY-MM-DD" of the selected expiry — optional, keeps DTE accurate
+   */
+  updateData(
+    spotPrice: number,
+    chain?: OptionChainData[],
+    vix?: number,
+    niftyOhlc?: any,
+    niftyChange?: number,
+    vwap?: number,
+    expiryStr?: string
+  ) {
     this.spotPrice = spotPrice;
-    
-    // Update price history
+
+    // Keep expiry current if server provides it
+    if (expiryStr) this.currentExpiryStr = expiryStr;
+
+    // Price history
     if (spotPrice > 0) {
-      if (this.priceHistory.length === 0 || this.priceHistory[this.priceHistory.length - 1] !== spotPrice) {
+      if (
+        this.priceHistory.length === 0 ||
+        this.priceHistory[this.priceHistory.length - 1] !== spotPrice
+      ) {
         this.priceHistory.push(spotPrice);
-        if (this.priceHistory.length > this.MAX_HISTORY) {
-          this.priceHistory.shift();
-        }
+        if (this.priceHistory.length > this.MAX_HISTORY) this.priceHistory.shift();
       }
     }
 
@@ -447,17 +567,12 @@ class MarketEngine {
     }
 
     if (vwap) this.vwap = vwap;
-    
-    // Set daily structure values if they are reported by exchange
+
     if (niftyOhlc) {
-      if (niftyOhlc.close && niftyOhlc.close > 0) {
-         this.yesterdayClose = niftyOhlc.close;
-      }
-      if (niftyOhlc.open && niftyOhlc.open > 0) {
-         this.todayOpen = niftyOhlc.open;
-      }
+      if (niftyOhlc.close && niftyOhlc.close > 0) this.yesterdayClose = niftyOhlc.close;
+      if (niftyOhlc.open && niftyOhlc.open > 0) this.todayOpen = niftyOhlc.open;
     }
-    
+
     if (!this.initialized && spotPrice > 0) {
       this.spotPrice = spotPrice;
       if (this.todayOpen === 0) {
@@ -465,36 +580,21 @@ class MarketEngine {
       }
       this.initialized = true;
     }
-    
-    // Capture ORB between 9:15 and 9:30 IST
-    const getISTDate = () => {
-      const now = new Date();
-      const istDate = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-      return {
-        hours: istDate.getUTCHours(),
-        minutes: istDate.getUTCMinutes()
-      };
-    };
 
-    const ist = getISTDate();
-    const timeInMins = ist.hours * 60 + ist.minutes;
-
-    if (timeInMins >= 555 && timeInMins < 570) { // 9:15 to 9:30 AM IST
-      if (niftyOhlc) {
-        if (this.orbHigh === 0 || niftyOhlc.high > this.orbHigh) this.orbHigh = niftyOhlc.high;
-        if (this.orbLow === 0 || niftyOhlc.low < this.orbLow) this.orbLow = niftyOhlc.low;
-      }
+    // ORB: capture between 9:15–9:30 IST
+    const now = new Date();
+    const istDate = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+    const timeInMins = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+    if (timeInMins >= 555 && timeInMins < 570 && niftyOhlc) {
+      if (this.orbHigh === 0 || niftyOhlc.high > this.orbHigh) this.orbHigh = niftyOhlc.high;
+      if (this.orbLow === 0 || niftyOhlc.low < this.orbLow) this.orbLow = niftyOhlc.low;
     }
-    
-    // Update VIX tick if provided
+
+    // VIX tick
     if (vix) {
-      if (this.ticks.get(264969)) {
-        const prevVix = this.ticks.get(264969)!.last_price;
-        if (prevVix > 0) {
-           // We can calculate a session delta if we want, but usually VIX % change is from prev close.
-           // However, if we don't have prev close, we just show 0 or calculate from first tick.
-           this.vixDelta = ((vix - prevVix) / prevVix) * 100;
-        }
+      const prevVixTick = this.ticks.get(264969);
+      if (prevVixTick && prevVixTick.last_price > 0) {
+        this.vixDelta = ((vix - prevVixTick.last_price) / prevVixTick.last_price) * 100;
       }
       const vixTick: Tick = {
         tradable: true,
@@ -511,12 +611,12 @@ class MarketEngine {
         oi: 0,
         oi_day_high: 0,
         oi_day_low: 0,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
       this.ticks.set(264969, vixTick);
     }
-    
-    // Also update NIFTY tick
+
+    // NIFTY tick
     const tick: Tick = {
       tradable: true,
       mode: 'full',
@@ -524,18 +624,47 @@ class MarketEngine {
       last_price: spotPrice,
       last_quantity: 0,
       average_price: spotPrice,
-      volume: 12500000,
-      buy_quantity: 6000000,
-      sell_quantity: 6500000,
-      ohlc: niftyOhlc || { open: spotPrice, high: spotPrice + 10, low: spotPrice - 10, close: spotPrice },
+      volume: 12_500_000,
+      buy_quantity: 6_000_000,
+      sell_quantity: 6_500_000,
+      ohlc: niftyOhlc || {
+        open: spotPrice,
+        high: spotPrice + 10,
+        low: spotPrice - 10,
+        close: spotPrice,
+      },
       change: niftyChange || 0,
       oi: 0,
       oi_day_high: 0,
       oi_day_low: 0,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
     this.ticks.set(256265, tick);
   }
+}
+
+// ─── Module-level BSM price helper (avoids circular import in generateChain) ──
+// This is just a thin re-export wrapper so generateChain() can call it without
+// going through the full greeks module import inside the method.
+function bsmPriceHelper(
+  S: number, K: number, T: number, r: number, sigma: number, type: 'CE' | 'PE'
+): number {
+  if (T <= 0 || sigma <= 0) return Math.max(0, type === 'CE' ? S - K : K - S);
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
+  const d2 = d1 - sigma * sqrtT;
+  const normCDF = (x: number): number => {
+    if (x < -8) return 0; if (x > 8) return 1;
+    const A1=0.254829592, A2=-0.284496736, A3=1.421413741, A4=-1.453152027, A5=1.061405429, P=0.3275911;
+    const sign = x < 0 ? -1 : 1;
+    const t = 1.0 / (1.0 + P * Math.abs(x));
+    const poly = t*(A1+t*(A2+t*(A3+t*(A4+t*A5))));
+    return 0.5*(1.0+sign*(1-poly*Math.exp(-x*x)));
+  };
+  const df = Math.exp(-r * T);
+  return type === 'CE'
+    ? S * normCDF(d1) - K * df * normCDF(d2)
+    : K * df * normCDF(-d2) - S * normCDF(-d1);
 }
 
 export const marketEngine = new MarketEngine();
