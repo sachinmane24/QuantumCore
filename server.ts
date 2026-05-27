@@ -145,6 +145,14 @@ async function startServer() {
   // OI baseline persistence — saves to Firestore at first capture each day
   let oiBaselineSavedDate = "";
 
+  // Trade log cache — declared here so onTradeExit closure can reference it
+  let tradeLogsCache: any = null;
+  let lastTradeLogsFetch = 0;
+
+  // Market info cache
+  let marketInfoCache: any = null;
+  let lastMarketInfoFetch = 0;
+
   // Kite Ticker and real-time WebSocket state
   let tickerInstance: any = null;
   let tickerConnected = false;
@@ -1180,8 +1188,6 @@ async function startServer() {
     res.json({ status: "success", autoMode: config.AUTO_MODE });
   });
 
-  let marketInfoCache: any = null;
-  let lastMarketInfoFetch = 0;
   apiRouter.get("/market-info", (req, res) => {
     if (marketInfoCache && (Date.now() - lastMarketInfoFetch < 60000)) {
       return res.json(marketInfoCache);
@@ -1283,9 +1289,6 @@ async function startServer() {
     lastMarketInfoFetch = Date.now();
     res.json(result);
   });
-
-  let tradeLogsCache: any = null;
-  let lastTradeLogsFetch = 0;
 
   apiRouter.get("/trade-logs", async (req, res) => {
     try {
