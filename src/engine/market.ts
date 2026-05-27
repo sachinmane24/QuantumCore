@@ -346,7 +346,7 @@ class MarketEngine {
    * by the server loop before calling updateData().
    */
   private generateChain(spot: number): OptionChainData[] {
-    const atmStrike = Math.round(spot / 50) * 50;
+    const atmStrike = Math.round(spot / 50) * 50; // MOCK mode — NIFTY 50-pt step hardcoded intentionally
     const expiryStr = this.getCurrentExpiry();
     const T = dteYears(expiryStr);
     const vix = this.getVix();

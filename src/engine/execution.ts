@@ -243,7 +243,12 @@ class ExecutionEngine {
     if (!isManual) {
       const timeSinceLastTrade = (Date.now() - this.lastTradeEndTime) / 1000;
       if (timeSinceLastTrade < 120) {
-        const reason = `Cooldown active (${Math.round(120 - timeSinceLastTrade)}s left)`;
+        // When lastTradeEndTime is set to a future timestamp (protective exit 30-min block),
+        // timeSinceLastTrade is negative — show actual remaining seconds correctly
+        const remainingSecs = timeSinceLastTrade < 0
+          ? Math.round(-timeSinceLastTrade)          // show seconds until unblock
+          : Math.round(120 - timeSinceLastTrade);    // normal 2-min cooldown
+        const reason = `Cooldown active (${remainingSecs}s left)`;
         if (!this.lastTradeSuppression || this.lastTradeSuppression.reason !== reason) {
           console.log(`[EXECUTION] Entry Suppressed: ${reason}`);
         }
@@ -346,7 +351,7 @@ class ExecutionEngine {
 
     const getStrikeByDelta = (targetDelta: number, type: 'CE' | 'PE', minPremium: number = 0) => {
       const chain = marketEngine.getOptionChain();
-      if (chain.length === 0) return Math.round(spot / 50) * 50;
+      if (chain.length === 0) return Math.round(spot / getStrikeStep()) * getStrikeStep();
       const validOptions =
         minPremium > 0
           ? chain.filter(opt => (type === 'CE' ? opt.ce_price : opt.pe_price) >= minPremium)
@@ -424,7 +429,7 @@ class ExecutionEngine {
         break;
       }
       case 'BULL_PUT_SPREAD': {
-        const sellStrike = Math.round(support / 50) * 50;
+        const sellStrike = Math.round(support / getStrikeStep()) * getStrikeStep();
         const buyStrike = sellStrike - 100;
         newPositions.push(
           { strike: sellStrike, type: 'PE', entryPrice: getLTP(sellStrike, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -433,7 +438,7 @@ class ExecutionEngine {
         break;
       }
       case 'BEAR_CALL_SPREAD': {
-        const sellStrike = Math.round(resistance / 50) * 50;
+        const sellStrike = Math.round(resistance / getStrikeStep()) * getStrikeStep();
         const buyStrike = sellStrike + 100;
         newPositions.push(
           { strike: sellStrike, type: 'CE', entryPrice: getLTP(sellStrike, 'CE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -442,9 +447,9 @@ class ExecutionEngine {
         break;
       }
       case 'IRON_CONDOR': {
-        const sellPE = Math.round(support / 50) * 50;
+        const sellPE = Math.round(support / getStrikeStep()) * getStrikeStep();
         const buyPE = sellPE - 100;
-        const sellCE = Math.round(resistance / 50) * 50;
+        const sellCE = Math.round(resistance / getStrikeStep()) * getStrikeStep();
         const buyCE = sellCE + 100;
         newPositions.push(
           { strike: sellPE, type: 'PE', entryPrice: getLTP(sellPE, 'PE'), qty: config.LOT_SIZE, side: 'SELL' },
@@ -933,7 +938,7 @@ class ExecutionEngine {
 
     const spot = marketEngine.getSpotPrice();
     const hedgeBias = this.netDelta > 0 ? 50 : -50;
-    const hedgeStrike = Math.round((spot + hedgeBias) / 50) * 50;
+    const hedgeStrike = Math.round((spot + hedgeBias) / getStrikeStep()) * getStrikeStep();
     const hedgeType = this.netDelta > 0 ? 'CE' : 'PE';
     const hedgeQty = Math.max(1, Math.floor(Math.abs(this.netDelta) / 0.5)) * config.LOT_SIZE;
 
