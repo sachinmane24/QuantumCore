@@ -1,6 +1,18 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * server.ts — Quantum Core Server v5.5.0
+ *
+ * Changes from v5.4.4:
+ *  1. Import calcIV, calcGreeks, dteYears, RISK_FREE_RATE from greeks.ts
+ *  2. refreshNfoCache() now calls marketEngine.setCurrentExpiry(selectedExpiry)
+ *     so DTE stays accurate everywhere
+ *  3. Chain builder in marketLoop() uses real BSM IV + Greeks — all
+ *     Math.random() gamma/theta/vega removed, fake `vix ± random` IV removed
+ *  4. marketEngine.updateData() receives expiryStr as 7th argument
+ *  5. WebSocket heartbeat guard: forces REST fetch if NIFTY 50 tick is >3s stale
+ *  6. Version bump to 5.5.0
  */
 
 import "dotenv/config";
@@ -19,6 +31,7 @@ import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from
 import { tradeLogger } from "./src/engine/logger.ts";
 import { savePersistentData, loadPersistentData } from "./src/engine/persistence.ts";
 import { NotificationService } from "./src/engine/notifications.ts";
+import { calcIV, calcGreeks, dteYears, RISK_FREE_RATE } from "./src/engine/greeks.ts";
 import fs from "fs-extra";
 
 const KITE_STORE = path.join(process.cwd(), "kite_session.json");
@@ -27,7 +40,8 @@ let apiKey = process.env.KITE_API_KEY || "";
 let apiSecret = process.env.KITE_API_SECRET || "";
 let accessToken: string | null = null;
 
-// Persistence Helpers
+// ─── Persistence Helpers ──────────────────────────────────────────────────────
+
 async function saveKiteSession(data: any) {
   try {
     await savePersistentData("system", "kite_session", data);
@@ -81,7 +95,6 @@ async function loadRiskConfig() {
 async function saveMarketStructure() {
   try {
     const structure = marketEngine.getDailyStructure();
-    // Only save if we have some real data
     if (structure.prevClose > 0 || structure.open > 0) {
       await savePersistentData("system", "market_structure", structure);
     }
@@ -102,16 +115,19 @@ async function loadMarketStructure() {
   }
 }
 
+// ─── Server Bootstrap ─────────────────────────────────────────────────────────
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  console.log("[INIT] Initializing Quantum Core Server...");
+  console.log("[INIT] Initializing Quantum Core Server v5.5.0...");
 
   // Shared state within startServer
   let kiteInstance: any = null;
   let niftyInstruments: any[] = [];
   let allExpiries: string[] = [];
+  let selectedExpiry: string = ""; // Active expiry date string "YYYY-MM-DD"
   let lastRawQuotes: any = null;
   let lastFetchTimestamp: string | null = null;
   let lastFetchError: string | null = null;
@@ -125,6 +141,8 @@ async function startServer() {
   let tickerInstance: any = null;
   let tickerConnected = false;
   const liveTicksCache = new Map<number, any>();
+  // Track last tick timestamp per token for heartbeat guard
+  const liveTickTimestamp = new Map<number, number>();
   const tokenToSymbolMap = new Map<number, string>();
   const symbolToTokenMap = new Map<string, number>();
   let lastSubscribedTokens: number[] = [];
@@ -147,7 +165,6 @@ async function startServer() {
     if (req.url.startsWith('/api')) {
       console.log(`[DIAG] ${new Date().toISOString()} - ${req.method} ${req.url}`);
     } else {
-      // Log non-API requests only if they aren't static assets
       if (!req.url.includes('.') && !req.url.includes('node_modules')) {
         console.log(`[DIAG-VIEW] ${new Date().toISOString()} - ${req.method} ${req.url}`);
       }
@@ -164,42 +181,36 @@ async function startServer() {
   });
 
   // Basic Health Routes
-  app.get("/health", (req, res) => res.json({ status: "OK", version: "5.4.4", uptime: process.uptime() }));
+  app.get("/health", (req, res) => res.json({ status: "OK", version: "5.5.0", uptime: process.uptime() }));
   app.get("/ping", (req, res) => res.send("pong"));
+
+  // ─── Kite Auth Routes ─────────────────────────────────────────────────────────
 
   apiRouter.post("/kite/config", async (req, res) => {
     const { key, secret } = req.body;
     if (key) apiKey = key;
     if (secret) apiSecret = secret;
-    
+
     if (key) {
       kiteInstance = new KiteConnect({ api_key: key });
-      niftyInstruments = []; 
+      niftyInstruments = [];
       allExpiries = [];
+      selectedExpiry = "";
       console.log(`[AUTH] Kite API key updated dynamically: ${key.substring(0, 4)}...`);
     }
-    
+
     await saveKiteSession({ key: apiKey, secret: apiSecret });
-    
-    res.json({ 
-      success: true, 
-      hasConfig: !!(apiKey && apiSecret) 
-    });
+    res.json({ success: true, hasConfig: !!(apiKey && apiSecret) });
   });
 
-  // Kite Auth Routes
   apiRouter.get("/kite/url", (req, res) => {
     if (!apiKey) {
       return res.status(400).json({ error: "KITE_API_KEY not configured" });
     }
-    
-    // AI Studio uses proxies, so we check for forwarded headers first
     const host = req.get("x-forwarded-host") || req.get("host");
     const protocol = req.get("x-forwarded-proto") || (host?.includes("localhost") ? "http" : "https");
-    
     const redirectUrl = process.env.KITE_REDIRECT_URL || `${protocol}://${host}/api/kite/callback`;
     console.log(`[AUTH] Generating login URL with redirect: ${redirectUrl}`);
-    
     const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}`;
     res.json({ url: loginUrl });
   });
@@ -214,7 +225,6 @@ async function startServer() {
       if (!kiteInstance && apiKey) {
         kiteInstance = new KiteConnect({ api_key: apiKey });
       }
-      
       if (!kiteInstance) {
         return res.status(500).send("Kite instance not initialized");
       }
@@ -222,18 +232,13 @@ async function startServer() {
       const response = await kiteInstance.generateSession(request_token.toString(), apiSecret);
       accessToken = response.access_token;
       kiteInstance.setAccessToken(accessToken);
-      
-      // Force LIVE data mode once authenticated
+
       setDataMode('LIVE');
       marketEngine.syncMode();
       console.log(`[AUTH] Session generated for ${response.user_name}. Mode set to LIVE.`);
 
       await saveKiteSession({ key: apiKey, secret: apiSecret, token: accessToken });
-
-      // Trigger background instrument refresh
       refreshNfoCache().catch(e => console.error("Post-auth instrument fetch failed", e));
-
-      // Spawn WebSocket ticker for real-time sub-second updates!
       initKiteTicker();
 
       res.send(`
@@ -265,258 +270,266 @@ async function startServer() {
     }
   });
 
+  // ─── NFO Cache Refresh ────────────────────────────────────────────────────────
+
   async function refreshNfoCache() {
-      if (!kiteInstance || !accessToken) return;
-      try {
-        console.log("[SYSTEM] Refreshing Global NFO cache...");
-        nfoCache = await kiteInstance.getInstruments(["NFO"]);
-        lastNfoRefresh = Date.now();
+    if (!kiteInstance || !accessToken) return;
+    try {
+      console.log("[SYSTEM] Refreshing Global NFO cache...");
+      nfoCache = await kiteInstance.getInstruments(["NFO"]);
+      lastNfoRefresh = Date.now();
 
-        // Save FO stocks list to local cache for robustness
-        try {
-          const stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
-            .filter(name => !!name)
-            .sort();
-          if (stocks.length > 0) {
-            fs.writeJson(path.join(process.cwd(), 'fo_stocks_cache.json'), stocks).catch(() => {});
-            console.log(`[SYSTEM] Initialized FO stock cache with ${stocks.length} symbols`);
-          }
-        } catch (e) {}
-        
-        // Update NIFTY instruments specifically for the main loop
-        const startOfTodayIST = new Date(new Date().getTime() + (5.5 * 60 * 60 * 1000));
-        startOfTodayIST.setHours(0,0,0,0);
-        
-        const niftyAll = nfoCache.filter((ins: any) => {
-          const sym = ins.tradingsymbol || "";
-          if (!sym.startsWith("NIFTY") || sym.startsWith("NIFTYIT") || sym.startsWith("NIFTYP") || sym.startsWith("NIFTYM")) return false;
-          if (ins.segment !== 'NFO-OPT') return false;
-          return !!ins.expiry;
+      // Save FO stocks list to local cache for robustness
+      try {
+        const stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT').map(i => i.name)))
+          .filter(name => !!name)
+          .sort();
+        if (stocks.length > 0) {
+          fs.writeJson(path.join(process.cwd(), 'fo_stocks_cache.json'), stocks).catch(() => {});
+          console.log(`[SYSTEM] Initialized FO stock cache with ${stocks.length} symbols`);
+        }
+      } catch (e) {}
+
+      // Update NIFTY instruments specifically for the main loop
+      const niftyAll = nfoCache.filter((ins: any) => {
+        const sym = ins.tradingsymbol || "";
+        if (!sym.startsWith("NIFTY") || sym.startsWith("NIFTYIT") || sym.startsWith("NIFTYP") || sym.startsWith("NIFTYM")) return false;
+        if (ins.segment !== 'NFO-OPT') return false;
+        return !!ins.expiry;
+      });
+
+      if (niftyAll.length > 0) {
+        const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
+          .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
+
+        allExpiries = expiries as string[];
+        const todayStr = new Date().toISOString().split('T')[0];
+        const futureExpiries = expiries.filter(e => e >= todayStr);
+        selectedExpiry = (futureExpiries[0] || expiries[0]) as string;
+
+        niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
+        console.log(`[SYSTEM] NIFTY Cache Updated: ${niftyInstruments.length} strikes for ${selectedExpiry}`);
+
+        // ── NEW: Sync expiry into market engine for accurate DTE calculations ──
+        marketEngine.setCurrentExpiry(selectedExpiry);
+
+        // Derive monthly expiry for the engine's expiry status tracking
+        const istTime = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+        const currentMonth = istTime.getUTCMonth();
+        const currentYear = istTime.getUTCFullYear();
+        const currentMonthExpiries = allExpiries.filter(e => {
+          const d = new Date(e);
+          return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
         });
+        const monthlyExpiry = currentMonthExpiries.length > 0
+          ? currentMonthExpiries[currentMonthExpiries.length - 1]
+          : selectedExpiry;
+        marketEngine.setExpiryInfo(selectedExpiry, monthlyExpiry);
 
-        if (niftyAll.length > 0) {
-          const expiries = Array.from(new Set(niftyAll.map((i: any) => new Date(i.expiry).toISOString().split('T')[0])))
-            .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime());
-
-          allExpiries = expiries as string[];
-          const todayStr = new Date().toISOString().split('T')[0];
-          const futureExpiries = expiries.filter(e => e >= todayStr);
-          const selectedExpiry = futureExpiries[0] || expiries[0];
-          
-          niftyInstruments = niftyAll.filter(i => new Date(i.expiry).toISOString().split('T')[0] === selectedExpiry);
-          console.log(`[SYSTEM] NIFTY Cache Updated: ${niftyInstruments.length} strikes for ${selectedExpiry}`);
-
-          // Hydrate the WebSocket token maps for options
-          for (const ins of niftyInstruments) {
-            const fullSymbol = `NFO:${ins.tradingsymbol}`;
-            tokenToSymbolMap.set(Number(ins.instrument_token), fullSymbol);
-            symbolToTokenMap.set(fullSymbol, Number(ins.instrument_token));
-          }
-          
-          // Re-subscribe if we have active WebSocket
-          if (tickerConnected) {
-             subscribeToMarketTokens();
-          }
+        // Hydrate the WebSocket token maps for options
+        for (const ins of niftyInstruments) {
+          const fullSymbol = `NFO:${ins.tradingsymbol}`;
+          tokenToSymbolMap.set(Number(ins.instrument_token), fullSymbol);
+          symbolToTokenMap.set(fullSymbol, Number(ins.instrument_token));
         }
-      } catch (e) {
-        console.error("[SYSTEM] NFO cache refresh failed:", e);
+
+        if (tickerConnected) {
+          subscribeToMarketTokens();
+        }
       }
+    } catch (e) {
+      console.error("[SYSTEM] NFO cache refresh failed:", e);
+    }
+  }
+
+  // ─── Stock Options Helper ─────────────────────────────────────────────────────
+
+  async function getStockOptions(symbol: string) {
+    if (!kiteInstance || !accessToken) return [];
+
+    const now = new Date();
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    const startOfTodayIST = new Date(istTime);
+    startOfTodayIST.setHours(0, 0, 0, 0);
+
+    if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
+      console.log(`[STOCK-OPTIONS] Cache empty or stale, refreshing for ${symbol}...`);
+      await refreshNfoCache();
     }
 
-    async function getStockOptions(symbol: string) {
-      if (!kiteInstance || !accessToken) return [];
-      
-      const now = new Date();
-      // Use IST for end-of-day checks
-      const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-      const startOfTodayIST = new Date(istTime);
-      startOfTodayIST.setHours(0, 0, 0, 0);
+    let filtered = nfoCache.filter((ins: any) =>
+      (ins.name === symbol || ins.tradingsymbol?.startsWith(symbol)) &&
+      ins.segment === 'NFO-OPT'
+    );
 
-      if (nfoCache.length === 0 || Date.now() - lastNfoRefresh > 4 * 60 * 60 * 1000) {
-        console.log(`[STOCK-OPTIONS] Cache empty or stale, refreshing for ${symbol}...`);
-        await refreshNfoCache();
-      }
-      
-      // Try exact name match first
-      let filtered = nfoCache.filter((ins: any) => 
-        (ins.name === symbol || ins.tradingsymbol?.startsWith(symbol)) && 
-        ins.segment === 'NFO-OPT'
+    if (filtered.length === 0) {
+      console.log(`[STOCK-OPTIONS] No direct match for ${symbol}, trying loose match...`);
+      filtered = nfoCache.filter((ins: any) =>
+        ins.segment === 'NFO-OPT' &&
+        ins.tradingsymbol?.includes(symbol)
       );
-
-      if (filtered.length === 0) {
-        console.log(`[STOCK-OPTIONS] No direct match for ${symbol}, trying loose match...`);
-        filtered = nfoCache.filter((ins: any) => 
-          ins.segment === 'NFO-OPT' && 
-          ins.tradingsymbol?.includes(symbol)
-        );
-      }
-      
-      const futureOptions = filtered.filter((ins: any) => {
-        const exp = new Date(ins.expiry);
-        return exp >= startOfTodayIST;
-      });
-      
-      if (futureOptions.length === 0 && filtered.length > 0) {
-        console.log(`[STOCK-OPTIONS] Found ${filtered.length} historical options for ${symbol}, but none in future.`);
-        return filtered.sort((a,b) => new Date(b.expiry).getTime() - new Date(a.expiry).getTime());
-      }
-
-      const ceCount = futureOptions.filter(f => f.instrument_type === 'CE').length;
-      const peCount = futureOptions.filter(f => f.instrument_type === 'PE').length;
-
-      console.log(`[STOCK-OPTIONS] Found ${futureOptions.length} instruments for ${symbol} (${ceCount} CE, ${peCount} PE)`);
-
-      return futureOptions;
     }
 
-    // --- START REAL-TIME WEBSOCKET TICKER IMPLEMENTATION ---
-    function getQuoteFromTick(tick: any) {
-      if (!tick) return null;
-      const open = tick.ohlc?.open || 0;
-      const close = tick.ohlc?.close || 0;
-      const lastPrice = tick.last_price || 0;
-      const netChange = tick.change !== undefined ? (lastPrice - close) : (tick.net_change || 0);
+    const futureOptions = filtered.filter((ins: any) => {
+      const exp = new Date(ins.expiry);
+      return exp >= startOfTodayIST;
+    });
 
-      return {
-        instrument_token: tick.instrument_token,
-        last_price: lastPrice,
-        volume: tick.volume_traded !== undefined ? tick.volume_traded : (tick.volume || 0),
-        oi: tick.oi || 0,
-        oi_day_high: tick.oi_day_high || 0,
-        oi_day_low: tick.oi_day_low || 0,
-        ohlc: tick.ohlc || { open, high: tick.ohlc?.high || lastPrice, low: tick.ohlc?.low || lastPrice, close },
-        net_change: netChange,
-        change: tick.change || 0
-      };
+    if (futureOptions.length === 0 && filtered.length > 0) {
+      console.log(`[STOCK-OPTIONS] Found ${filtered.length} historical options for ${symbol}, but none in future.`);
+      return filtered.sort((a, b) => new Date(b.expiry).getTime() - new Date(a.expiry).getTime());
     }
 
-    function subscribeToMarketTokens() {
-      if (!tickerInstance || !tickerConnected) return;
+    const ceCount = futureOptions.filter(f => f.instrument_type === 'CE').length;
+    const peCount = futureOptions.filter(f => f.instrument_type === 'PE').length;
+    console.log(`[STOCK-OPTIONS] Found ${futureOptions.length} instruments for ${symbol} (${ceCount} CE, ${peCount} PE)`);
 
-      const tokens = new Set<number>([256265, 264969]);
+    return futureOptions;
+  }
 
-      if (niftyInstruments && niftyInstruments.length > 0) {
-        const currentSpot = marketEngine.getSpotPrice();
-        const atmStrike = currentSpot > 0 ? Math.round(currentSpot / 50) * 50 : 24300;
-        
-        for (let i = -7; i <= 7; i++) {
-          const strike = atmStrike + (i * 50);
-          const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
-          const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
-          if (ce && ce.instrument_token) tokens.add(Number(ce.instrument_token));
-          if (pe && pe.instrument_token) tokens.add(Number(pe.instrument_token));
+  // ─── WebSocket Ticker ─────────────────────────────────────────────────────────
+
+  function getQuoteFromTick(tick: any) {
+    if (!tick) return null;
+    const open = tick.ohlc?.open || 0;
+    const close = tick.ohlc?.close || 0;
+    const lastPrice = tick.last_price || 0;
+    const netChange = tick.change !== undefined ? (lastPrice - close) : (tick.net_change || 0);
+
+    return {
+      instrument_token: tick.instrument_token,
+      last_price: lastPrice,
+      volume: tick.volume_traded !== undefined ? tick.volume_traded : (tick.volume || 0),
+      oi: tick.oi || 0,
+      oi_day_high: tick.oi_day_high || 0,
+      oi_day_low: tick.oi_day_low || 0,
+      ohlc: tick.ohlc || { open, high: tick.ohlc?.high || lastPrice, low: tick.ohlc?.low || lastPrice, close },
+      net_change: netChange,
+      change: tick.change || 0
+    };
+  }
+
+  function subscribeToMarketTokens() {
+    if (!tickerInstance || !tickerConnected) return;
+
+    const tokens = new Set<number>([256265, 264969]);
+
+    if (niftyInstruments && niftyInstruments.length > 0) {
+      const currentSpot = marketEngine.getSpotPrice();
+      const atmStrike = currentSpot > 0 ? Math.round(currentSpot / 50) * 50 : 24300;
+
+      for (let i = -7; i <= 7; i++) {
+        const strike = atmStrike + (i * 50);
+        const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
+        const pe = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
+        if (ce && ce.instrument_token) tokens.add(Number(ce.instrument_token));
+        if (pe && pe.instrument_token) tokens.add(Number(pe.instrument_token));
+      }
+    }
+
+    const tokenList = Array.from(tokens).filter(token => !isNaN(token) && token > 0).sort((a, b) => a - b);
+
+    const hasChanged = tokenList.length !== lastSubscribedTokens.length ||
+      tokenList.some((t, idx) => t !== lastSubscribedTokens[idx]);
+
+    if (!hasChanged) return;
+
+    try {
+      const unsubscribeList = lastSubscribedTokens.filter(t => !tokens.has(t));
+      if (unsubscribeList.length > 0) {
+        tickerInstance.unsubscribe(unsubscribeList);
+      }
+
+      console.log(`[TICKER] Subscribing to ${tokenList.length} instruments (Full mode)...`);
+      tickerInstance.subscribe(tokenList);
+      tickerInstance.setMode(tickerInstance.modeFull, tokenList);
+      lastSubscribedTokens = tokenList;
+    } catch (err) {
+      console.error("[TICKER] Subscription failed:", err);
+    }
+  }
+
+  function initKiteTicker() {
+    if (!apiKey || !accessToken) {
+      console.log("[TICKER] Cannot initialize Websocket: apiKey or accessToken is missing");
+      return;
+    }
+
+    if (tickerInstance) {
+      console.log("[TICKER] Existing ticker found, disconnecting first.");
+      try { tickerInstance.disconnect(); } catch (e) {}
+      tickerInstance = null;
+    }
+
+    console.log("[TICKER] Spawning real-time Kite Ticker WebSocket connection...");
+    tickerConnected = false;
+
+    tickerInstance = new KiteTicker({ api_key: apiKey, access_token: accessToken });
+    tickerInstance.autoReconnect(true, 20, 5);
+
+    tickerInstance.on("connect", () => {
+      tickerConnected = true;
+      console.log("[TICKER] WebSocket connected successfully! Real-time streaming ACTIVE.");
+      subscribeToMarketTokens();
+    });
+
+    tickerInstance.on("ticks", (ticks: any[]) => {
+      if (ticks && ticks.length > 0) {
+        const now = Date.now();
+        for (const tick of ticks) {
+          liveTicksCache.set(Number(tick.instrument_token), tick);
+          // ── NEW: record arrival timestamp for heartbeat guard ──
+          liveTickTimestamp.set(Number(tick.instrument_token), now);
         }
       }
+    });
 
-      const tokenList = Array.from(tokens).filter(token => !isNaN(token) && token > 0).sort((a,b) => a - b);
-      
-      const hasChanged = tokenList.length !== lastSubscribedTokens.length || 
-                        tokenList.some((t, idx) => t !== lastSubscribedTokens[idx]);
-
-      if (!hasChanged) return;
-
-      try {
-        const unsubscribeList = lastSubscribedTokens.filter(t => !tokens.has(t));
-        if (unsubscribeList.length > 0) {
-          tickerInstance.unsubscribe(unsubscribeList);
-        }
-
-        console.log(`[TICKER] Subscribing to ${tokenList.length} instruments (Full mode)...`);
-        tickerInstance.subscribe(tokenList);
-        tickerInstance.setMode(tickerInstance.modeFull, tokenList);
-        
-        lastSubscribedTokens = tokenList;
-      } catch (err) {
-        console.error("[TICKER] Subscription failed:", err);
-      }
-    }
-
-    function initKiteTicker() {
-      if (!apiKey || !accessToken) {
-        console.log("[TICKER] Cannot initialize Websocket: apiKey or accessToken is missing");
-        return;
-      }
-
-      if (tickerInstance) {
-        console.log("[TICKER] Existing ticker found, disconnecting first.");
-        try {
-          tickerInstance.disconnect();
-        } catch (e) {}
-        tickerInstance = null;
-      }
-
-      console.log("[TICKER] Spawning real-time Kite Ticker WebSocket connection...");
+    tickerInstance.on("disconnect", (error: any) => {
       tickerConnected = false;
+      console.warn("[TICKER] WebSocket disconnected. Reason:", error);
+    });
 
-      tickerInstance = new KiteTicker({
-        api_key: apiKey,
-        access_token: accessToken
-      });
+    tickerInstance.on("reconnecting", (interval: number, times: number) => {
+      console.log(`[TICKER] WebSocket reconnecting (attempt ${times}, interval ${interval}ms)...`);
+    });
 
-      tickerInstance.autoReconnect(true, 20, 5);
+    tickerInstance.on("noreconnect", () => {
+      tickerConnected = false;
+      console.error("[TICKER] WebSocket connection failed permanently. No more automatic reconnect retries.");
+    });
 
-      tickerInstance.on("connect", () => {
-        tickerConnected = true;
-        console.log("[TICKER] WebSocket connected successfully! Real-time streaming ACTIVE.");
-        subscribeToMarketTokens();
-      });
+    tickerInstance.on("error", (err: any) => {
+      console.error("[TICKER] WebSocket error encountered:", err);
+    });
 
-      tickerInstance.on("ticks", (ticks: any[]) => {
-        if (ticks && ticks.length > 0) {
-          for (const tick of ticks) {
-            liveTicksCache.set(Number(tick.instrument_token), tick);
-          }
-        }
-      });
-
-      tickerInstance.on("disconnect", (error: any) => {
-        tickerConnected = false;
-        console.warn("[TICKER] WebSocket disconnected. Reason:", error);
-      });
-
-      tickerInstance.on("reconnecting", (interval: number, times: number) => {
-        console.log(`[TICKER] WebSocket reconnecting (attempt ${times}, interval ${interval}ms)...`);
-      });
-
-      tickerInstance.on("noreconnect", () => {
-        tickerConnected = false;
-        console.error("[TICKER] WebSocket connection failed permanently. No more automatic reconnect retries.");
-      });
-
-      tickerInstance.on("error", (err: any) => {
-        console.error("[TICKER] WebSocket error encountered:", err);
-      });
-
-      try {
-        tickerInstance.connect();
-      } catch (err) {
-        console.error("[TICKER] Execution of WebSockets connection failed:", err);
-      }
+    try {
+      tickerInstance.connect();
+    } catch (err) {
+      console.error("[TICKER] Execution of WebSockets connection failed:", err);
     }
-    // --- END REAL-TIME WEBSOCKET TICKER IMPLEMENTATION ---
+  }
 
-    // Background Trading Loop
-    let isSyncing = false;
-    let liveFailureCount = 0;
-    async function marketLoop() {
-      if (isSyncing) {
-        setTimeout(marketLoop, 500);
-        return;
-      }
-      isSyncing = true;
-      try {
+  // ─── Market Loop ──────────────────────────────────────────────────────────────
+
+  let isSyncing = false;
+  let liveFailureCount = 0;
+
+  async function marketLoop() {
+    if (isSyncing) {
+      setTimeout(marketLoop, 500);
+      return;
+    }
+    isSyncing = true;
+    try {
       const now = new Date();
-      // IST is UTC+5:30
       const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
       const hours = istTime.getUTCHours();
       const minutes = istTime.getUTCMinutes();
       const currentTimeInMinutes = (hours * 60) + minutes;
-      const marketCloseTime = (16 * 60); // 4:00 PM IST
 
-      // 1. Data Sync
       loopCount++;
 
-      // Always try to refresh NFO cache if empty or stale, as long as we are logged in
+      // Refresh NFO cache if empty or stale
       const isStale = nfoCache.length > 0 && (Date.now() - lastNfoRefresh > 6 * 60 * 60 * 1000);
       if (kiteInstance && accessToken && (nfoCache.length === 0 || isStale)) {
         await refreshNfoCache().catch(e => console.error("[LOOP] NFO Refresh background failed:", e));
@@ -525,7 +538,7 @@ async function startServer() {
       if (config.DATA_SOURCE === 'LIVE' && kiteInstance && accessToken) {
         try {
           const symbols = ["NSE:NIFTY 50", "NSE:INDIA VIX"];
-          
+
           if (niftyInstruments.length <= 1) {
             await refreshNfoCache();
           }
@@ -535,7 +548,6 @@ async function startServer() {
           const atmStrike = Math.round(currentSpot / 50) * 50;
 
           if (niftyInstruments.length > 1) {
-            // Pick density of strikes around ATM
             for (let i = -5; i <= 5; i++) {
               const strike = atmStrike + (i * 50);
               const ce = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
@@ -545,7 +557,6 @@ async function startServer() {
             }
           }
 
-          // Re-subscribe when ATM strike moves or new options are tracked
           if (tickerConnected) {
             subscribeToMarketTokens();
           }
@@ -553,15 +564,24 @@ async function startServer() {
           let quotes: any = null;
           let loadedFromWebsocket = false;
 
-          const isWebSocketReady = tickerConnected && liveTicksCache.has(256265);
-          const needsRestFetch = !lastRawQuotes || (loopCount % 15 === 0) || !isWebSocketReady;
+          // ── WebSocket heartbeat guard ──────────────────────────────────────────
+          // If the NIFTY 50 tick hasn't arrived in 3 seconds, treat WebSocket as stale
+          // and force a REST fetch even if tickerConnected is true. This catches the
+          // "silent freeze" failure mode where the socket stays open but stops ticking.
+          const spotLastTick = liveTickTimestamp.get(256265) || 0;
+          const wsTickAge = Date.now() - spotLastTick;
+          const isWebSocketFresh = tickerConnected && liveTicksCache.has(256265) && wsTickAge < 3000;
+
+          if (!isWebSocketFresh && tickerConnected && spotLastTick > 0) {
+            console.warn(`[TICKER] Heartbeat: NIFTY tick is ${(wsTickAge / 1000).toFixed(1)}s old — forcing REST fetch.`);
+          }
+
+          const needsRestFetch = !lastRawQuotes || (loopCount % 15 === 0) || !isWebSocketFresh;
 
           if (needsRestFetch) {
             try {
               const fetchSymbols = [...symbols, ...optionSymbols];
               const restQuotes = await kiteInstance.getQuote(fetchSymbols);
-              
-              // Seed or merge with lastRawQuotes to prevent overwriting other previously fetched strikes
               lastRawQuotes = { ...(lastRawQuotes || {}), ...restQuotes };
               lastFetchTimestamp = new Date().toISOString();
               lastFetchError = null;
@@ -575,7 +595,7 @@ async function startServer() {
           }
 
           if (lastRawQuotes) {
-            // Deep copy existing baseline to avoid unintended reference mutations
+            // Deep copy to avoid unintended reference mutations
             quotes = {};
             for (const key of Object.keys(lastRawQuotes)) {
               if (lastRawQuotes[key]) {
@@ -583,74 +603,68 @@ async function startServer() {
               }
             }
 
-            // Overlay real-time WebSocket ticks if available
-            if (isWebSocketReady) {
+            // Overlay real-time WebSocket ticks if fresh
+            if (isWebSocketFresh) {
               const spotTick = liveTicksCache.get(256265);
-              if (spotTick) {
-                quotes["NSE:NIFTY 50"] = getQuoteFromTick(spotTick);
-              }
+              if (spotTick) quotes["NSE:NIFTY 50"] = getQuoteFromTick(spotTick);
 
               const vixTick = liveTicksCache.get(264969);
-              if (vixTick) {
-                quotes["NSE:INDIA VIX"] = getQuoteFromTick(vixTick);
-              }
+              if (vixTick) quotes["NSE:INDIA VIX"] = getQuoteFromTick(vixTick);
 
               for (const sym of optionSymbols) {
                 const cleanedSym = sym.startsWith("NFO:") ? sym.substring(4) : sym;
                 const ins = niftyInstruments.find(i => i.tradingsymbol === cleanedSym);
                 if (ins && ins.instrument_token) {
                   const tick = liveTicksCache.get(Number(ins.instrument_token));
-                  if (tick) {
-                    quotes[sym] = getQuoteFromTick(tick);
-                  }
+                  if (tick) quotes[sym] = getQuoteFromTick(tick);
                 }
               }
 
-              // Update baseline cache with these real-time values for stability in the next loop
+              // Update baseline cache with real-time values
               for (const key of Object.keys(quotes)) {
-                if (quotes[key]) {
-                  lastRawQuotes[key] = { ...quotes[key] };
-                }
+                if (quotes[key]) lastRawQuotes[key] = { ...quotes[key] };
               }
 
               loadedFromWebsocket = true;
             }
           }
-          
+
           if (quotes && quotes["NSE:NIFTY 50"]) {
             const spotQuote = quotes["NSE:NIFTY 50"];
             const spot = spotQuote.last_price;
             const vix = quotes["NSE:INDIA VIX"]?.last_price || marketEngine.getVix();
-            
-            // Calculate percentage change manually
+
             const prevClose = spotQuote.ohlc.close;
             const netChange = spotQuote.net_change !== undefined ? spotQuote.net_change : (spot - prevClose);
             const changePercent = prevClose > 0 ? (netChange / prevClose) * 100 : 0;
-            
-            let chainData = [];
-            const uniqueStrikes = Array.from(new Set(niftyInstruments.map(ins => ins.strike))).sort((a,b) => a - b);
-            
+
+            // ── Resolve active expiry string for DTE calculations ──────────────
+            // Use server-level selectedExpiry first; fall back to marketEngine's stored value
+            const activeExpiry = selectedExpiry || marketEngine.getCurrentExpiry();
+
+            // Pre-compute DTE once for the whole chain (same expiry for all strikes)
+            const T_dte = dteYears(activeExpiry);
+
+            let chainData: any[] = [];
+            const uniqueStrikes = Array.from(new Set(niftyInstruments.map(ins => ins.strike))).sort((a, b) => a - b);
+
             for (const strike of uniqueStrikes) {
               const ceIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'CE');
               const peIns = niftyInstruments.find(ins => ins.strike === strike && ins.instrument_type === 'PE');
-              
+
               const ceQuote = ceIns ? quotes[`NFO:${ceIns.tradingsymbol}`] : null;
               const peQuote = peIns ? quotes[`NFO:${peIns.tradingsymbol}`] : null;
-              
+
               if (ceQuote || peQuote) {
                 const cePrice = ceQuote?.last_price || 0;
                 const pePrice = peQuote?.last_price || 0;
-                const ceIv = ceQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random());
-                const peIv = peQuote?.iv || (vix ? vix + (Math.random() - 0.5) : 14 + Math.random());
 
-                // Session accurate OI Change Tracking 
+                // ── Session-accurate OI change tracking (unchanged) ────────────
                 const currentCeOi = ceQuote?.oi || 0;
                 let ceOiChange = 0;
                 if (ceIns && currentCeOi > 0) {
                   const symbolKey = ceIns.tradingsymbol;
-                  if (!baselineOIMap.has(symbolKey)) {
-                    baselineOIMap.set(symbolKey, currentCeOi);
-                  }
+                  if (!baselineOIMap.has(symbolKey)) baselineOIMap.set(symbolKey, currentCeOi);
                   ceOiChange = currentCeOi - baselineOIMap.get(symbolKey)!;
                 }
                 if (ceOiChange === 0 && ceQuote?.oi_day_high && ceQuote?.oi_day_low) {
@@ -661,19 +675,32 @@ async function startServer() {
                 let peOiChange = 0;
                 if (peIns && currentPeOi > 0) {
                   const symbolKey = peIns.tradingsymbol;
-                  if (!baselineOIMap.has(symbolKey)) {
-                    baselineOIMap.set(symbolKey, currentPeOi);
-                  }
+                  if (!baselineOIMap.has(symbolKey)) baselineOIMap.set(symbolKey, currentPeOi);
                   peOiChange = currentPeOi - baselineOIMap.get(symbolKey)!;
                 }
                 if (peOiChange === 0 && peQuote?.oi_day_high && peQuote?.oi_day_low) {
                   peOiChange = peQuote.oi_day_high - peQuote.oi_day_low;
                 }
 
-                // Real-time Option Greeks calculations for Live connections
-                const gamma = Math.max(0.001, (1 / (50 + Math.abs(spot - strike)))) * 2;
-                const theta = -10 - (Math.random() * 5) - (cePrice * 0.02);
-                const vega = 5 + (Math.random() * 2) + (cePrice * 0.01);
+                // ── REAL BSM IV from Kite option prices ───────────────────────
+                // calcIV() inverts Black-Scholes using Newton-Raphson.
+                // Returns annualised fraction (e.g. 0.153 = 15.3%).
+                // Falls back to VIX/100 only if price is zero or below intrinsic.
+                const ceIv_raw = (cePrice > 0.5)
+                  ? calcIV(cePrice, spot, strike, T_dte, RISK_FREE_RATE, 'CE')
+                  : (vix / 100);
+
+                const peIv_raw = (pePrice > 0.5)
+                  ? calcIV(pePrice, spot, strike, T_dte, RISK_FREE_RATE, 'PE')
+                  : (vix / 100);
+
+                // ── REAL BSM Greeks from solved IV ────────────────────────────
+                // All values are deterministic — no Math.random() anywhere.
+                const ceGreeks = calcGreeks(spot, strike, T_dte, RISK_FREE_RATE, ceIv_raw, 'CE');
+                const peGreeks = calcGreeks(spot, strike, T_dte, RISK_FREE_RATE, peIv_raw, 'PE');
+
+                // IV skew: negative means puts richer than calls (normal for NIFTY)
+                const ivSkew = (ceIv_raw - peIv_raw) * 100;
 
                 chainData.push({
                   strike,
@@ -685,40 +712,53 @@ async function startServer() {
                   pe_price: pePrice,
                   ce_volume: ceQuote?.volume || ceQuote?.volume_traded || 0,
                   pe_volume: peQuote?.volume || peQuote?.volume_traded || 0,
-                  ce_iv: ceIv,
-                  pe_iv: peIv,
-                  iv: (ceIv + peIv) / 2,
-                  delta: ceQuote?.delta || marketEngine.calculateDelta(spot, strike, 'CE', ceIv),
-                  pe_delta: peQuote?.delta || marketEngine.calculateDelta(spot, strike, 'PE', peIv),
-                  gamma,
-                  theta,
-                  vega
+                  // IV stored as percentage (e.g. 15.3 not 0.153)
+                  ce_iv: ceIv_raw * 100,
+                  pe_iv: peIv_raw * 100,
+                  iv: ((ceIv_raw + peIv_raw) / 2) * 100,
+                  iv_skew: ivSkew,
+                  // Real BSM Greeks
+                  delta: ceGreeks.delta,         // CE: [0, 1]
+                  pe_delta: peGreeks.delta,      // PE: [-1, 0]
+                  gamma: ceGreeks.gamma,         // per ₹1 spot move (same for CE/PE)
+                  theta: ceGreeks.theta,         // ₹/calendar day
+                  vega: ceGreeks.vega,           // ₹ per 1% IV change
+                  // BSM theoretical prices — useful for P&L cross-check
+                  ce_theoretical: ceGreeks.theoreticalPrice,
+                  pe_theoretical: peGreeks.theoreticalPrice,
                 });
               }
             }
 
-            marketEngine.updateData(spot, chainData.length > 0 ? chainData : undefined, vix, spotQuote.ohlc, changePercent);
-            
+            // Pass expiryStr as 7th arg so marketEngine keeps DTE in sync
+            marketEngine.updateData(
+              spot,
+              chainData.length > 0 ? chainData : undefined,
+              vix,
+              spotQuote.ohlc,
+              changePercent,
+              undefined,  // vwap — computed by engine internally
+              activeExpiry
+            );
+
             if (loopCount % 60 === 0) {
-               await saveMarketStructure();
+              await saveMarketStructure();
             }
 
             if (Math.floor(Date.now() / 1000) % 15 === 0) {
-               console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}`);
+              console.log(`[LIVE-SYNC] ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })} -> Spot: ${spot.toFixed(2)} (${changePercent.toFixed(2)}%), VIX: ${vix.toFixed(2)}, WS: ${loadedFromWebsocket ? 'YES' : 'REST'}`);
             }
           }
         } catch (err: any) {
           lastFetchError = err?.message || String(err);
           liveFailureCount++;
           console.error(`[LIVE-SYNC] Failure #${liveFailureCount}:`, lastFetchError);
-          
+
           if (liveFailureCount >= 5 && (lastFetchError?.includes('api_key') || lastFetchError?.includes('token'))) {
-             console.warn("[AUTH] Session appears invalid. Clearing token to allow re-login.");
-             accessToken = null;
-             lastFetchError = "Session Expired or Invalid API Key. Please re-authenticate.";
-             // Safety: Do NOT fall back to MOCK engine automatically to avoid generating phantom trades
-             // Force stop autonomous trading to prevent erratic behavior on stale data
-             config.AUTO_MODE = false;
+            console.warn("[AUTH] Session appears invalid. Clearing token to allow re-login.");
+            accessToken = null;
+            lastFetchError = "Session Expired or Invalid API Key. Please re-authenticate.";
+            config.AUTO_MODE = false;
           }
         }
       }
@@ -751,27 +791,27 @@ async function startServer() {
 
           if (isClosed) {
             if (loopCount % 30 === 0) {
-              console.log("[AUTO] Market is closed (Weekend, Holiday, or Off-Market Hours). Suspended core intelligence analysis and trade execution.");
+              console.log("[AUTO] Market is closed (Weekend, Holiday, or Off-Market Hours). Suspended execution.");
             }
           } else {
             const decision = strategyEngine.calculateScore();
-            
+
             if (decision.bias === 'NEUTRAL' && Math.abs(marketEngine.getLatestTick()?.change || 0) > 0.3) {
               console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick()?.change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
             }
 
             // Simple Auto-Exit if profit target or SL reached
             if (state.pnl >= config.TARGET_RUPEES) {
-               console.log("[AUTO] Target hit. Exiting...");
-               await executionEngine.exitAll("Target Hit");
+              console.log("[AUTO] Target hit. Exiting...");
+              await executionEngine.exitAll("Target Hit");
             } else if (state.pnl <= -config.SL_RUPEES) {
-               console.log("[AUTO] SL hit. Exiting...");
-               await executionEngine.exitAll("SL Hit");
+              console.log("[AUTO] SL hit. Exiting...");
+              await executionEngine.exitAll("SL Hit");
             }
 
-            // Entry Logic (Fires on all valid setups - including Neutral Theta-decay spreads)
+            // Entry Logic
             if (state.positions.length === 0 && state.rollsToday < config.MAX_ROLLS) {
-               await executionEngine.executeTrade(decision.bias);
+              await executionEngine.executeTrade(decision.bias);
             }
           }
         } catch (err) {
@@ -788,21 +828,21 @@ async function startServer() {
 
   // Start the loop
   marketLoop();
+
+  // ─── API Routes ───────────────────────────────────────────────────────────────
+
   apiRouter.get("/fo-stocks", async (req, res) => {
-    // Try cache first
     let stocks = Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT' || i.segment === 'NFO-FUT').map(i => i.name)))
       .filter(name => !!name)
       .sort();
-    
+
     const localPath = path.join(process.cwd(), 'fo_stocks_cache.json');
-    
-    if (stocks.length > 50) { // Ensure we have a decent number of stocks
-      // Update local storage if we have fresh data
+
+    if (stocks.length > 50) {
       await fs.writeJson(localPath, stocks).catch(() => {});
       return res.json(stocks);
     }
 
-    // Fallback to local stored list
     try {
       if (await fs.pathExists(localPath)) {
         const cached = await fs.readJson(localPath);
@@ -812,7 +852,7 @@ async function startServer() {
         }
       }
     } catch (e) {}
-    
+
     // Final fallback to a curated comprehensive list
     res.json([
       "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN",
@@ -837,6 +877,9 @@ async function startServer() {
   });
 
   apiRouter.get("/debug/kite-status", (req, res) => {
+    const spotTickAge = liveTickTimestamp.has(256265)
+      ? ((Date.now() - liveTickTimestamp.get(256265)!) / 1000).toFixed(1) + "s"
+      : "never";
     res.json({
       loggedIn: !!accessToken,
       dataSource: config.DATA_SOURCE,
@@ -846,7 +889,9 @@ async function startServer() {
       nfoCacheSize: nfoCache.length,
       lastNfoRefresh: new Date(lastNfoRefresh).toISOString(),
       niftyInstrumentsCount: niftyInstruments.length,
+      selectedExpiry,
       hasKiteInstance: !!kiteInstance,
+      wsSpotTickAge: spotTickAge,  // NEW: heartbeat diagnostic
       foStocksEndpointPreview: Array.from(new Set(nfoCache.filter(i => i.segment === 'NFO-OPT' || i.segment === 'NFO-FUT').map(i => i.name))).slice(0, 10)
     });
   });
@@ -854,18 +899,18 @@ async function startServer() {
   apiRouter.get("/debug/kite", async (req, res) => {
     let samples = [];
     if (apiKey && accessToken) {
-       try {
-         const allNFO = await kiteInstance.getInstruments(["NFO"]);
-         samples = allNFO.slice(0, 50).map((i: any) => ({ name: i.name, symbol: i.tradingsymbol, expiry: i.expiry }));
-       } catch (e) {}
+      try {
+        const allNFO = await kiteInstance.getInstruments(["NFO"]);
+        samples = allNFO.slice(0, 50).map((i: any) => ({ name: i.name, symbol: i.tradingsymbol, expiry: i.expiry }));
+      } catch (e) {}
     }
-
     res.json({
       timestamp: new Date().toISOString(),
       kiteConfigured: !!apiKey,
       sessionActive: !!accessToken,
       loopCount,
       instrumentsCount: niftyInstruments.length,
+      selectedExpiry,
       expiries: allExpiries.slice(0, 10),
       lastFetchTimestamp,
       lastFetchError,
@@ -879,7 +924,7 @@ async function startServer() {
   });
 
   apiRouter.get("/kite/status", (req, res) => {
-    res.json({ 
+    res.json({
       connected: !!accessToken,
       hasConfig: !!(apiKey && apiSecret),
       tickerConnected: tickerConnected,
@@ -889,35 +934,25 @@ async function startServer() {
 
   apiRouter.get("/backtest/historical", async (req, res) => {
     const { from, to, interval = "minute" } = req.query;
-    
     if (!accessToken || !kiteInstance) {
       return res.status(401).json({ error: "Kite Connect not authorized. Please log in first." });
     }
-    
     try {
-      // Instrument token for NSE:NIFTY 50 is 256265
-      const instrumentToken = 256265; 
+      const instrumentToken = 256265;
       console.log(`[BACKTEST] Fetching historical data from ${from} to ${to}`);
-      
       const candles = await kiteInstance.getHistoricalData(
-        instrumentToken, 
-        interval.toString(), 
-        from?.toString(), 
+        instrumentToken,
+        interval.toString(),
+        from?.toString(),
         to?.toString()
       );
-      
-      res.json({
-        symbol: "NIFTY 50",
-        instrument_token: instrumentToken,
-        candles
-      });
+      res.json({ symbol: "NIFTY 50", instrument_token: instrumentToken, candles });
     } catch (err) {
       console.error("[BACKTEST] Zerodha historical fetch failed:", err);
       res.status(500).json({ error: "Failed to fetch historical data from Zerodha. Ensure you have the 'Historical Data' add-on active." });
     }
   });
 
-  // Data Routes
   apiRouter.get("/market-data", (req, res) => {
     res.json({
       spot: marketEngine.getSpotPrice(),
@@ -937,7 +972,8 @@ async function startServer() {
       yesterdayClose: marketEngine.getYesterdayClose(),
       lastUpdated: lastFetchTimestamp || new Date().toISOString(),
       error: lastFetchError,
-      dataSource: config.DATA_SOURCE
+      dataSource: config.DATA_SOURCE,
+      selectedExpiry,
     });
   });
 
@@ -946,7 +982,7 @@ async function startServer() {
       const score = strategyEngine.calculateScore();
       const aiProb = await aiEngine.predictWinProbability(score, []).catch(e => {
         console.error("[AI] Prediction failed:", e);
-        return 0.5; // Neutral fallback (fractional)
+        return 0.5;
       });
       res.json({ score, aiProb });
     } catch (err) {
@@ -975,7 +1011,6 @@ async function startServer() {
       const currentISTTotalMinutes = hours * 60 + minutes;
       const [endH, endM] = config.END_TIME.split(':').map(Number);
       const endTotalMinutes = endH * 60 + endM;
-
       const expectedSL = 1000;
       const validation = riskEngine.validateEntry(config.LOT_SIZE, expectedSL);
 
@@ -989,10 +1024,15 @@ async function startServer() {
         vix: marketEngine.getVix(),
         optionChainLength: marketEngine.getOptionChain().length,
         timeStr: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`,
-        tradingHoursAllowed: (currentISTTotalMinutes >= (9*60+15) && currentISTTotalMinutes <= endTotalMinutes),
+        tradingHoursAllowed: (currentISTTotalMinutes >= (9 * 60 + 15) && currentISTTotalMinutes <= endTotalMinutes),
         riskValidation: validation,
         lastSuppression: state.lastTradeSuppression,
         pnl: state.pnl,
+        selectedExpiry,
+        // Daily gate status from revised execution engine
+        isDailyLimitHit: state.isDailyLimitHit,
+        isDailyProfitLocked: state.isDailyProfitLocked,
+        dailyRealizedPnL: state.dailyRealizedPnL,
         state
       });
     } catch (e: any) {
@@ -1051,22 +1091,14 @@ async function startServer() {
         });
       }
 
-      res.json({
-        success: true,
-        message: "Test message sent successfully!",
-        response: resJson
-      });
+      res.json({ success: true, message: "Test message sent successfully!", response: resJson });
     } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        error: err.message || "Failed to contact Telegram API"
-      });
+      res.status(500).json({ success: false, error: err.message || "Failed to contact Telegram API" });
     }
   });
 
   apiRouter.post("/toggle-data-mode", async (req, res) => {
     const { mode } = req.body;
-    // Force to LIVE if we have an active session
     if (accessToken) {
       setDataMode('LIVE');
     } else {
@@ -1103,49 +1135,39 @@ async function startServer() {
       "2026-04-17", "2026-05-01", "2026-06-17", "2026-07-17", "2026-08-15",
       "2026-10-02", "2026-11-01", "2026-11-15", "2026-12-25"
     ];
-    
+
     const now = new Date();
-    // IST calculation
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + istOffset);
     const day = istTime.getUTCDay();
     const hours = istTime.getUTCHours();
     const minutes = istTime.getUTCMinutes();
     const currentTimeMinutes = hours * 60 + minutes;
-    
     const today = istTime.toISOString().split('T')[0];
     const isWeekend = day === 0 || day === 6;
     const isHoliday = holidays.includes(today);
-    // Market hours: 9:15 AM (555 mins) to 3:30 PM (930 mins)
     const isOffMarketHours = currentTimeMinutes < 555 || currentTimeMinutes > 930;
     const isMarketClosed = isWeekend || isHoliday || isOffMarketHours;
-
     const nextHoliday = holidays.find(h => h >= today);
-    
-    // Real-time Expiry Calculation
+
     let weeklyExpiryStr = "";
     let monthlyExpiryStr = "";
-    
+
     if (allExpiries.length > 0) {
       const formatExpiry = (dateStr: string) => {
-        try {
-          const d = new Date(dateStr);
-          return d.toISOString().split('T')[0];
-        } catch (e) {
-          return dateStr;
-        }
+        try { return new Date(dateStr).toISOString().split('T')[0]; }
+        catch (e) { return dateStr; }
       };
 
       weeklyExpiryStr = formatExpiry(allExpiries[0]);
-      
+
       const currentMonth = istTime.getUTCMonth();
       const currentYear = istTime.getUTCFullYear();
-      
       const currentMonthExpiries = allExpiries.filter(e => {
         const d = new Date(e);
         return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
       });
-      
+
       if (currentMonthExpiries.length > 0) {
         monthlyExpiryStr = formatExpiry(currentMonthExpiries[currentMonthExpiries.length - 1]);
       } else {
@@ -1158,7 +1180,6 @@ async function startServer() {
         monthlyExpiryStr = formatExpiry(nextMonthExpiries[nextMonthExpiries.length - 1] || allExpiries[0]);
       }
     } else {
-      // Fallback calculation
       const getNextThursday = (d: Date) => {
         const day = d.getDay();
         const diff = (day <= 4) ? (4 - day) : (11 - day);
@@ -1166,14 +1187,12 @@ async function startServer() {
         next.setDate(d.getDate() + diff);
         return next.toISOString().split('T')[0];
       };
-
       const getMonthlyThursday = (d: Date) => {
         const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
         const day = lastDay.getDay();
         const diff = (day >= 4) ? (day - 4) : (day + 3);
         const result = new Date(lastDay);
         result.setDate(lastDay.getDate() - diff);
-        
         if (result.getTime() < d.getTime()) {
           const nextMonthDay = new Date(d.getFullYear(), d.getMonth() + 2, 0);
           const nDay = nextMonthDay.getDay();
@@ -1184,22 +1203,18 @@ async function startServer() {
         }
         return result.toISOString().split('T')[0];
       };
-
       weeklyExpiryStr = getNextThursday(istTime);
       monthlyExpiryStr = getMonthlyThursday(istTime);
     }
 
-    // Sync with Market Engine
     marketEngine.setExpiryInfo(weeklyExpiryStr, monthlyExpiryStr);
 
-    const daysToExpiry = weeklyExpiryStr ? Math.ceil((new Date(weeklyExpiryStr).getTime() - istTime.getTime()) / (1000 * 60 * 60 * 24)) : 0;
-    
+    const daysToExpiry = weeklyExpiryStr
+      ? Math.ceil((new Date(weeklyExpiryStr).getTime() - istTime.getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+
     const result = {
-      expiry: {
-        weekly: weeklyExpiryStr,
-        monthly: monthlyExpiryStr,
-        daysToExpiry
-      },
+      expiry: { weekly: weeklyExpiryStr, monthly: monthlyExpiryStr, daysToExpiry },
       holiday: {
         next: nextHoliday,
         isUpcoming: nextHoliday === today || (nextHoliday && (new Date(nextHoliday).getTime() - now.getTime()) / (1000 * 60 * 60 * 24) < 3)
@@ -1212,9 +1227,9 @@ async function startServer() {
     res.json(result);
   });
 
-  // In-memory caches for rate-limiting Firestore reads
   let tradeLogsCache: any = null;
   let lastTradeLogsFetch = 0;
+
   apiRouter.get("/trade-logs", async (req, res) => {
     try {
       if (tradeLogsCache && (Date.now() - lastTradeLogsFetch < 10000)) {
@@ -1233,7 +1248,6 @@ async function startServer() {
     try {
       const { id } = req.params;
       await tradeLogger.deleteLog(id);
-      // Invalidate cache
       tradeLogsCache = null;
       lastTradeLogsFetch = 0;
       res.json({ success: true });
@@ -1254,10 +1268,7 @@ async function startServer() {
 
   apiRouter.get("/logger-status", async (req, res) => {
     const logs = tradeLogsCache || await tradeLogger.getLogs();
-    res.json({
-      status: "online",
-      logsCount: logs.length
-    });
+    res.json({ status: "online", logsCount: logs.length });
   });
 
   apiRouter.post("/execute", async (req, res) => {
@@ -1286,15 +1297,7 @@ async function startServer() {
     const { spot, vix, pcr, support, supportOi, resistance, resistanceOi, indicators, chainFocus } = req.body;
     try {
       const result = await aiEngine.analyzeOptionChain({
-        spot,
-        vix,
-        pcr,
-        support,
-        supportOi,
-        resistance,
-        resistanceOi,
-        indicators,
-        chainFocus
+        spot, vix, pcr, support, supportOi, resistance, resistanceOi, indicators, chainFocus
       });
       res.json(result);
     } catch (e) {
@@ -1305,7 +1308,7 @@ async function startServer() {
 
   apiRouter.get("/stock-intel/:symbol", async (req, res) => {
     const { symbol } = req.params;
-    
+
     let price = 1500;
     let change = 0;
     let changePercent = 0;
@@ -1320,7 +1323,7 @@ async function startServer() {
       try {
         const fullSymbol = `NSE:${symbol}`;
         const quotes = await kiteInstance.getQuote([fullSymbol]);
-        
+
         if (quotes[fullSymbol]) {
           const q = quotes[fullSymbol];
           price = q.last_price;
@@ -1329,42 +1332,37 @@ async function startServer() {
           changePercent = ohlc.close > 0 ? (change / ohlc.close) * 100 : 0;
           isLive = true;
 
-          // Fetch indicators from historical
           try {
-            const now = new Date();
-            const from = new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 20 days
-            const to = now.toISOString().split('T')[0];
-            const candles = await kiteInstance.getHistoricalData(q.instrument_token, "day", from, to);
+            const fromDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const toDate = new Date().toISOString().split('T')[0];
+            const candles = await kiteInstance.getHistoricalData(q.instrument_token, "day", fromDate, toDate);
             if (candles.length >= 14) {
-               // Simple RSI approximation
-               let gains = 0;
-               let losses = 0;
-               for (let i = candles.length - 14; i < candles.length; i++) {
-                  const diff = candles[i].close - candles[i].open;
-                  if (diff >= 0) gains += diff;
-                  else losses -= diff;
-               }
-               const rs = losses === 0 ? 100 : gains / losses;
-               rsi = 100 - (100 / (1 + rs));
+              let gains = 0;
+              let losses = 0;
+              for (let i = candles.length - 14; i < candles.length; i++) {
+                const diff = candles[i].close - candles[i].open;
+                if (diff >= 0) gains += diff;
+                else losses -= diff;
+              }
+              const rs = losses === 0 ? 100 : gains / losses;
+              rsi = 100 - (100 / (1 + rs));
             }
           } catch (e) {
             console.warn(`[STOCK-INTEL] Historical fetch for ${symbol} failed, using random RSI`);
             rsi = 45 + Math.random() * 15;
           }
 
-          // Fetch Options for this stock
           const stockOptions = await getStockOptions(symbol);
           console.log(`[STOCK-INTEL] Found ${stockOptions.length} total options for ${symbol}`);
 
           if (stockOptions.length > 0) {
             const expiries = Array.from(new Set(stockOptions.map((i: any) => i.expiry)))
               .sort((a: any, b: any) => new Date(a).getTime() - new Date(b).getTime()) as string[];
-            
-            // Find nearest expiry that is today or later
+
             const nearestExpiry = expiries.find(e => {
               const expDate = new Date(e);
               const today = new Date();
-              today.setHours(0,0,0,0);
+              today.setHours(0, 0, 0, 0);
               return expDate >= today;
             }) || expiries[0];
 
@@ -1373,30 +1371,24 @@ async function startServer() {
             stockMetadataCache.set(symbol, { token: q.instrument_token, lotSize });
 
             const allStrikes = Array.from(new Set(currentExpiryOptions.map((i: any) => i.strike))).sort((a: any, b: any) => a - b);
-            
-            // Get 20 strikes around current price (more comprehensive)
             const strikes = [...allStrikes]
               .sort((a, b) => Math.abs(a - price) - Math.abs(b - price))
               .slice(0, 20)
-              .sort((a,b) => a - b);
-            
-            // Smarter ATM finding
+              .sort((a, b) => a - b);
+
             let atmStrike = strikes[0];
             let minDiff = Math.abs(strikes[0] - price);
-            for(const s of strikes) {
+            for (const s of strikes) {
               const diff = Math.abs(s - price);
-              if (diff < minDiff) {
-                minDiff = diff;
-                atmStrike = s;
-              }
+              if (diff < minDiff) { minDiff = diff; atmStrike = s; }
             }
-            
-            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes Active: ${strikes.length}/${allStrikes.length}`);
+
+            console.log(`[STOCK-INTEL] ${symbol} Spot: ${price}, ATM: ${atmStrike}, Expiry: ${nearestExpiry}, Strikes: ${strikes.length}/${allStrikes.length}`);
 
             const optionSymbols = [];
             let totalCE_OI = 0;
             let totalPE_OI = 0;
-            
+
             for (const strike of strikes) {
               const ce = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
               const pe = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
@@ -1405,66 +1397,61 @@ async function startServer() {
             }
 
             if (optionSymbols.length > 0) {
-                try {
-                    const optQuotes = await kiteInstance.getQuote(optionSymbols);
-                    console.log(`[STOCK-INTEL] Fetched ${Object.keys(optQuotes).length} quotes for ${symbol}`);
-                    
-                    for (const strike of strikes) {
-                        const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
-                        const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
-                        
-                        const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
-                        const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
+              try {
+                const optQuotes = await kiteInstance.getQuote(optionSymbols);
+                console.log(`[STOCK-INTEL] Fetched ${Object.keys(optQuotes).length} quotes for ${symbol}`);
 
-                        const ce_oi = ceQ?.oi || 0;
-                        const pe_oi = peQ?.oi || 0;
-                        totalCE_OI += ce_oi;
-                        totalPE_OI += pe_oi;
+                for (const strike of strikes) {
+                  const ceIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'CE');
+                  const peIns = currentExpiryOptions.find((i: any) => i.strike === strike && i.instrument_type === 'PE');
+                  const ceQ = ceIns ? optQuotes[`NFO:${ceIns.tradingsymbol}`] : null;
+                  const peQ = peIns ? optQuotes[`NFO:${peIns.tradingsymbol}`] : null;
 
-                        chain.push({
-                            strike,
-                            ce_oi,
-                            ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
-                            pe_oi,
-                            pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
-                            ce_price: ceQ?.last_price || 0,
-                            pe_price: peQ?.last_price || 0,
-                            iv: ceQ?.iv || 22
-                        });
-                    }
-                } catch (qErr) {
-                    console.error(`[STOCK-INTEL] Quote fetch failed for ${symbol}:`, qErr);
+                  const ce_oi = ceQ?.oi || 0;
+                  const pe_oi = peQ?.oi || 0;
+                  totalCE_OI += ce_oi;
+                  totalPE_OI += pe_oi;
+
+                  chain.push({
+                    strike,
+                    ce_oi,
+                    ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
+                    pe_oi,
+                    pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
+                    ce_price: ceQ?.last_price || 0,
+                    pe_price: peQ?.last_price || 0,
+                    iv: ceQ?.iv || 22
+                  });
                 }
+              } catch (qErr) {
+                console.error(`[STOCK-INTEL] Quote fetch failed for ${symbol}:`, qErr);
+              }
             }
-            
-            // Calculate Option Stats
+
             const pcrVal = totalCE_OI > 0 ? totalPE_OI / totalCE_OI : 1;
-            const maxPainVal = atmStrike; 
-            
             optionsStats = {
-               pcr: Number(pcrVal.toFixed(2)),
-               totalCallOI: totalCE_OI,
-               totalPutOI: totalPE_OI,
-               maxPain: maxPainVal,
-               expiry: nearestExpiry
+              pcr: Number(pcrVal.toFixed(2)),
+              totalCallOI: totalCE_OI,
+              totalPutOI: totalPE_OI,
+              maxPain: atmStrike,
+              expiry: nearestExpiry
             };
           } else {
-             console.warn(`[STOCK-INTEL] No future options data found in cache for ${symbol}, falling back to mock chain.`);
-             // Only mock the chain if live chain fetch failed
-             const mockAtm = Math.round(price / 50) * 50;
-             for (let i = -5; i <= 5; i++) {
-               const strike = mockAtm + (i * 50);
-               chain.push({
-                 strike,
-                 ce_oi: 50000 + Math.random() * 20000,
-                 ce_oi_change: (Math.random() - 0.5) * 5000,
-                 pe_oi: 55000 + Math.random() * 20000,
-                 pe_oi_change: (Math.random() - 0.5) * 5000,
-                 ce_price: Math.max(2, 60 - (strike - price) * 0.4),
-                 pe_price: Math.max(2, 60 + (strike - price) * 0.4),
-                 iv: 20
-               });
-             }
+            console.warn(`[STOCK-INTEL] No future options data found for ${symbol}, falling back to mock chain.`);
+            const mockAtm = Math.round(price / 50) * 50;
+            for (let i = -5; i <= 5; i++) {
+              const strike = mockAtm + (i * 50);
+              chain.push({
+                strike,
+                ce_oi: 50000 + Math.random() * 20000,
+                ce_oi_change: (Math.random() - 0.5) * 5000,
+                pe_oi: 55000 + Math.random() * 20000,
+                pe_oi_change: (Math.random() - 0.5) * 5000,
+                ce_price: Math.max(2, 60 - (strike - price) * 0.4),
+                pe_price: Math.max(2, 60 + (strike - price) * 0.4),
+                iv: 20
+              });
+            }
           }
         }
       } catch (err) {
@@ -1472,7 +1459,6 @@ async function startServer() {
       }
     }
 
-    // Fallback/Mock enhancements
     if (!isLive) {
       price = 1500 + (Math.random() * 500);
       change = (Math.random() - 0.4) * 20;
@@ -1493,7 +1479,7 @@ async function startServer() {
       }
       rsi = 45 + Math.random() * 20;
     }
-    
+
     const stockContext = {
       symbol,
       price,
@@ -1555,7 +1541,8 @@ async function startServer() {
     res.json({ success: true, message: "Test trade logged. Check Audit Logs." });
   });
 
-  // Vite/SPA Middleware
+  // ─── Vite / SPA Middleware ────────────────────────────────────────────────────
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1580,11 +1567,13 @@ async function startServer() {
     res.status(500).json({ error: "Internal server error", message: err.message });
   });
 
+  // ─── Start Listening ──────────────────────────────────────────────────────────
+
   try {
     const server = app.listen(PORT, "0.0.0.0", () => {
-      console.log(`[V5.4.3] Quantum Server listening on PORT ${PORT}`);
+      console.log(`[V5.5.0] Quantum Server listening on PORT ${PORT}`);
     });
-    
+
     server.on('error', (err: any) => {
       if (err.code === 'EADDRINUSE') {
         console.error(`[FATAL] Port ${PORT} is already in use.`);
@@ -1593,19 +1582,17 @@ async function startServer() {
       }
     });
 
-    // Load persisted data in background (Unwaited) after listener is up
+    // Load persisted data in background after listener is up
     loadKiteSession().then(data => {
       if (data && apiKey && !kiteInstance) {
-          kiteInstance = new KiteConnect({ api_key: apiKey });
-          if (accessToken) {
-            kiteInstance.setAccessToken(accessToken);
-            setDataMode('LIVE');
-            marketEngine.syncMode();
-            console.log("[SYSTEM] Background: Kite session restored.");
-            
-            // Initialize Kite Ticker WebSocket connection
-            initKiteTicker();
-          }
+        kiteInstance = new KiteConnect({ api_key: apiKey });
+        if (accessToken) {
+          kiteInstance.setAccessToken(accessToken);
+          setDataMode('LIVE');
+          marketEngine.syncMode();
+          console.log("[SYSTEM] Background: Kite session restored.");
+          initKiteTicker();
+        }
       }
       loadRiskConfig();
       loadMarketStructure();
@@ -1621,6 +1608,8 @@ async function startServer() {
     console.error("FATAL: Failed to start server listener:", err);
   }
 }
+
+// ─── Process Guards ───────────────────────────────────────────────────────────
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
