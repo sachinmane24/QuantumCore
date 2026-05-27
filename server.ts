@@ -716,8 +716,9 @@ async function startServer() {
              console.warn("[AUTH] Session appears invalid. Clearing token to allow re-login.");
              accessToken = null;
              lastFetchError = "Session Expired or Invalid API Key. Please re-authenticate.";
-             setDataMode('MOCK');
-             marketEngine.syncMode();
+             // Safety: Do NOT fall back to MOCK engine automatically to avoid generating phantom trades
+             // Force stop autonomous trading to prevent erratic behavior on stale data
+             config.AUTO_MODE = false;
           }
         }
       }
@@ -746,11 +747,11 @@ async function startServer() {
             await executionEngine.exitAll(`Auto Square-off (${config.END_TIME})`);
           }
 
-          const isLiveClosed = config.DATA_SOURCE === 'LIVE' && marketEngine.isMarketClosed();
+          const isClosed = marketEngine.isMarketClosed();
 
-          if (isLiveClosed) {
+          if (isClosed) {
             if (loopCount % 30 === 0) {
-              console.log("[AUTO] Live market is closed (Weekend, Holiday, or Off-Market Hours). Suspended core intelligence analysis and trade execution.");
+              console.log("[AUTO] Market is closed (Weekend, Holiday, or Off-Market Hours). Suspended core intelligence analysis and trade execution.");
             }
           } else {
             const decision = strategyEngine.calculateScore();

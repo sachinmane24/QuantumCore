@@ -3771,11 +3771,11 @@ export default function App() {
                               <td className="p-5">
                                  <div className="flex flex-col gap-1">
                                     <div className="flex gap-2 items-center">
-                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-8">BUY:</span>
+                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-10">DEBIT:</span>
                                        <span className="text-[10px] terminal-value text-emerald-400">{log.buyPrice ? `₹${log.buyPrice.toFixed(1)}` : '---'}</span>
                                     </div>
                                     <div className="flex gap-2 items-center">
-                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-8">SELL:</span>
+                                       <span className="text-[8px] font-bold text-slate-500 uppercase w-10">CREDIT:</span>
                                        <span className="text-[10px] terminal-value text-rose-400">{log.sellPrice ? `₹${log.sellPrice.toFixed(1)}` : '---'}</span>
                                     </div>
                                  </div>

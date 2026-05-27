@@ -79,8 +79,8 @@ class ExecutionEngine {
   private async executeTradeInternal(bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL', isManual: boolean = false) {
     if (this.activePositions.length > 0) return;
 
-    // Market Closed Protection: Prohibit executing any live trades when the market is closed
-    if (config.DATA_SOURCE === 'LIVE' && marketEngine.isMarketClosed()) {
+    // Market Closed Protection: Prohibit executing any auto trades when the market is closed
+    if (marketEngine.isMarketClosed()) {
       const reason = "Live market is closed (Weekend, Holiday, or Off-Market Hours)";
       if (isManual) {
         throw new Error(`Execution Blocked: ${reason}`);
