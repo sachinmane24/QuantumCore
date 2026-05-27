@@ -27,7 +27,7 @@ import { strategyEngine } from "./src/engine/strategy.ts";
 import { executionEngine } from "./src/engine/execution.ts";
 import { riskEngine } from "./src/engine/risk.ts";
 import { aiEngine } from "./src/engine/aiModel.ts";
-import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig } from "./src/engine/config.ts";
+import { config, setDataMode, setExecutionMode, setAutoMode, updateConfig, getStrikeStep } from "./src/engine/config.ts";
 import { tradeLogger } from "./src/engine/logger.ts";
 import { savePersistentData, loadPersistentData } from "./src/engine/persistence.ts";
 import { NotificationService } from "./src/engine/notifications.ts";
@@ -136,6 +136,14 @@ async function startServer() {
   let lastNfoRefresh: number = 0;
   let stockMetadataCache: Map<string, { token: number, lotSize: number }> = new Map();
   let baselineOIMap = new Map<string, number>();
+
+  // VWAP accumulators — reset each IST calendar day
+  let vwapCumPV = 0;       // cumulative (price × volume)
+  let vwapCumVol = 0;      // cumulative volume
+  let lastVwapResetDate = "";
+
+  // OI baseline persistence — saves to Firestore at first capture each day
+  let oiBaselineSavedDate = "";
 
   // Kite Ticker and real-time WebSocket state
   let tickerInstance: any = null;
@@ -416,7 +424,8 @@ async function startServer() {
 
     if (niftyInstruments && niftyInstruments.length > 0) {
       const currentSpot = marketEngine.getSpotPrice();
-      const atmStrike = currentSpot > 0 ? Math.round(currentSpot / 50) * 50 : 24300;
+      const _step = getStrikeStep();
+      const atmStrike = currentSpot > 0 ? Math.round(currentSpot / _step) * _step : 24300;
 
       for (let i = -7; i <= 7; i++) {
         const strike = atmStrike + (i * 50);
@@ -545,7 +554,8 @@ async function startServer() {
 
           let optionSymbols: string[] = [];
           const currentSpot = marketEngine.getSpotPrice();
-          const atmStrike = Math.round(currentSpot / 50) * 50;
+          const strikeStep = getStrikeStep();
+          const atmStrike = Math.round(currentSpot / strikeStep) * strikeStep;
 
           if (niftyInstruments.length > 1) {
             for (let i = -5; i <= 5; i++) {
@@ -637,6 +647,36 @@ async function startServer() {
             const prevClose = spotQuote.ohlc.close;
             const netChange = spotQuote.net_change !== undefined ? spotQuote.net_change : (spot - prevClose);
             const changePercent = prevClose > 0 ? (netChange / prevClose) * 100 : 0;
+
+            // ── Live VWAP — cumulative (price×volume) / volume, resets each IST day ──
+            const todayISTStr = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+            if (todayISTStr !== lastVwapResetDate) {
+              vwapCumPV = 0;
+              vwapCumVol = 0;
+              lastVwapResetDate = todayISTStr;
+              // Also reset OI baseline at day start so OI changes are session-accurate
+              baselineOIMap.clear();
+              oiBaselineSavedDate = "";
+              console.log(`[MARKET] New day (${todayISTStr}): VWAP and OI baseline reset.`);
+            }
+            const tickVol = spotQuote.volume || 0;
+            if (tickVol > 0) {
+              vwapCumPV += spot * tickVol;
+              vwapCumVol += tickVol;
+            }
+            const liveVwap = vwapCumVol > 0 ? vwapCumPV / vwapCumVol : spot;
+
+            // ── Persist OI baseline to Firestore once at market open (9:15–9:20 IST) ──
+            // This means a server restart mid-session can reload it and OI changes stay accurate
+            const istMins = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+            const istTotalMins = istMins.getUTCHours() * 60 + istMins.getUTCMinutes();
+            if (istTotalMins >= 555 && istTotalMins <= 560 && oiBaselineSavedDate !== todayISTStr && baselineOIMap.size > 0) {
+              const baselineObj: Record<string, number> = {};
+              baselineOIMap.forEach((v, k) => { baselineObj[k] = v; });
+              savePersistentData("system", "oi_baseline", { date: todayISTStr, data: baselineObj })
+                .then(() => { oiBaselineSavedDate = todayISTStr; console.log(`[OI] Baseline saved to Firestore (${baselineOIMap.size} symbols).`); })
+                .catch(e => console.error("[OI] Baseline save failed:", e));
+            }
 
             // ── Resolve active expiry string for DTE calculations ──────────────
             // Use server-level selectedExpiry first; fall back to marketEngine's stored value
@@ -737,7 +777,7 @@ async function startServer() {
               vix,
               spotQuote.ohlc,
               changePercent,
-              undefined,  // vwap — computed by engine internally
+              liveVwap,
               activeExpiry
             );
 
@@ -828,6 +868,13 @@ async function startServer() {
 
   // Start the loop
   marketLoop();
+
+  // Wire trade-exit callback so tradeLogsCache is invalidated the moment a trade closes
+  executionEngine.onTradeExit = () => {
+    tradeLogsCache = null;
+    lastTradeLogsFetch = 0;
+    console.log("[CACHE] tradeLogsCache invalidated on trade exit.");
+  };
 
   // ─── API Routes ───────────────────────────────────────────────────────────────
 
@@ -1042,8 +1089,18 @@ async function startServer() {
 
   apiRouter.post("/debug/reset", async (req, res) => {
     try {
+      // Reset execution engine first (awaited — persists to Firestore)
       await executionEngine.resetState();
-      riskEngine.reset();
+      // Risk engine reset second — if this throws, execution is already reset
+      // which is safe (no open positions). Log the discrepancy but don't rollback.
+      try {
+        riskEngine.reset();
+      } catch (riskErr: any) {
+        console.error("[RESET] riskEngine.reset() failed after executionEngine reset:", riskErr);
+      }
+      // Invalidate trade log cache so the UI reflects the reset immediately
+      tradeLogsCache = null;
+      lastTradeLogsFetch = 0;
       res.json({ success: true, message: "Engine and risk states successfully reset!" });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1412,15 +1469,28 @@ async function startServer() {
                   totalCE_OI += ce_oi;
                   totalPE_OI += pe_oi;
 
+                  const cePrice_s = ceQ?.last_price || 0;
+                  const pePrice_s = peQ?.last_price || 0;
+                  // Real BSM IV from option price — same solver used for NIFTY chain
+                  const stockExpiryStr = nearestExpiry
+                    ? new Date(nearestExpiry).toISOString().split('T')[0]
+                    : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                  const T_stock = dteYears(stockExpiryStr);
+                  const ceIv_s = cePrice_s > 0.5 ? calcIV(cePrice_s, price, strike, T_stock, RISK_FREE_RATE, 'CE') : 0.20;
+                  const peIv_s = pePrice_s > 0.5 ? calcIV(pePrice_s, price, strike, T_stock, RISK_FREE_RATE, 'PE') : 0.20;
+                  const midIv_s = ((ceIv_s + peIv_s) / 2) * 100; // as percentage
+
                   chain.push({
                     strike,
                     ce_oi,
                     ce_oi_change: (ceQ?.oi_day_high || ce_oi) - (ceQ?.oi_day_low || ce_oi),
                     pe_oi,
                     pe_oi_change: (peQ?.oi_day_high || pe_oi) - (peQ?.oi_day_low || pe_oi),
-                    ce_price: ceQ?.last_price || 0,
-                    pe_price: peQ?.last_price || 0,
-                    iv: ceQ?.iv || 22
+                    ce_price: cePrice_s,
+                    pe_price: pePrice_s,
+                    ce_iv: ceIv_s * 100,
+                    pe_iv: peIv_s * 100,
+                    iv: midIv_s || 22,
                   });
                 }
               } catch (qErr) {
@@ -1598,6 +1668,23 @@ async function startServer() {
       loadMarketStructure();
       executionEngine.loadState().catch(e => console.error("Execution load state failed", e));
       riskEngine.loadState().catch(e => console.error("Risk load state failed", e));
+      // Restore OI baseline if saved today — keeps OI change data accurate after mid-session restart
+      loadPersistentData("system", "oi_baseline").then((saved: any) => {
+        if (saved && saved.date) {
+          const todayStr = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+          if (saved.date === todayStr && saved.data) {
+            let count = 0;
+            for (const [k, v] of Object.entries(saved.data)) {
+              baselineOIMap.set(k, v as number);
+              count++;
+            }
+            oiBaselineSavedDate = todayStr;
+            console.log(`[OI] Baseline restored from Firestore: ${count} symbols for ${todayStr}.`);
+          } else {
+            console.log(`[OI] Firestore baseline is from ${saved.date}, today is ${new Date(Date.now() + 5.5*60*60*1000).toISOString().split('T')[0]} — skipping restore.`);
+          }
+        }
+      }).catch(e => console.error("[OI] Baseline load failed:", e));
       marketLoop();
     }).catch(err => {
       console.error("[INIT] Background load failed:", err);
