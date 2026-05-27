@@ -592,6 +592,62 @@ class ExecutionEngine {
     this.activePositions = newPositions;
     this.dailyTradeCount++;
 
+    // ── Premium-aware SL/Target override ─────────────────────────────────────
+    // The intelligence engine derives SL/Target from ATR points on spot.
+    // For credit spreads, the realistic P&L range is bounded by collected premium
+    // and max spread width — so we override with premium-anchored values.
+    if (this.currentTradeParams) {
+      const sellLegs = newPositions.filter(p => p.side === 'SELL');
+      const buyLegs  = newPositions.filter(p => p.side === 'BUY');
+
+      if (sellLegs.length > 0) {
+        // Credit spread / Iron Condor / Iron Fly
+        const totalSellPrem = sellLegs.reduce((s, p) => s + p.entryPrice * p.qty, 0);
+        const totalBuyPrem  = buyLegs.reduce((s, p)  => s + p.entryPrice * p.qty, 0);
+        const netCredit = totalSellPrem - totalBuyPrem; // total ₹ received
+
+        if (netCredit > 0) {
+          // Target: capture 60% of net credit (realistic for spread strategies)
+          const premiumTarget = Math.round(netCredit * 0.60);
+          // SL: lose no more than 2× net credit (standard credit spread risk rule)
+          const premiumSL     = Math.round(netCredit * 2.0);
+
+          // Only use premium-based values if they are tighter than ATR-derived ones
+          // This prevents the ATR model from setting a ₹4,000 target on a ₹400 credit trade
+          if (premiumTarget < this.currentTradeParams.targetRupees) {
+            console.log(
+              `[EXECUTION] Premium-aware target override: ₹${this.currentTradeParams.targetRupees} → ₹${premiumTarget} ` +
+              `(60% of ₹${Math.round(netCredit)} net credit)`
+            );
+            this.currentTradeParams = { ...this.currentTradeParams, targetRupees: premiumTarget };
+          }
+          if (premiumSL < this.currentTradeParams.stopLossRupees) {
+            console.log(
+              `[EXECUTION] Premium-aware SL override: ₹${this.currentTradeParams.stopLossRupees} → ₹${premiumSL} ` +
+              `(2× net credit)`
+            );
+            this.currentTradeParams = { ...this.currentTradeParams, stopLossRupees: premiumSL };
+          }
+          // Re-set active SL after potential override
+          this.currentActiveSL = -this.currentTradeParams.stopLossRupees;
+        }
+      } else if (buyLegs.length > 0) {
+        // Naked buy / debit spread — SL = premium paid, Target = 2× premium paid
+        const totalDebit = buyLegs.reduce((s, p) => s + p.entryPrice * p.qty, 0);
+        if (totalDebit > 0) {
+          const debitTarget = Math.round(totalDebit * 2.0);   // 2R target
+          const debitSL     = Math.round(totalDebit * 0.5);   // 50% of premium
+          if (debitTarget < this.currentTradeParams.targetRupees) {
+            this.currentTradeParams = { ...this.currentTradeParams, targetRupees: debitTarget };
+          }
+          if (debitSL < this.currentTradeParams.stopLossRupees) {
+            this.currentTradeParams = { ...this.currentTradeParams, stopLossRupees: debitSL };
+          }
+          this.currentActiveSL = -this.currentTradeParams.stopLossRupees;
+        }
+      }
+    }
+
     console.log(
       `[EXECUTION] AI AUTO-DECIDE: Structure [${score.strategyType}] selected based on VIX ${this.currentVixAtEntry.toFixed(2)} and Score ${score.total}.`
     );
@@ -690,19 +746,26 @@ class ExecutionEngine {
       const { totalMin } = nowIST();
       const expiryStatus = marketEngine.getExpiryStatus();
 
-      // Monthly expiry 1:30 PM exit
+      // Monthly expiry 1:30 PM exit — minimum 5 min hold to avoid instant-flip exits
+      const tradeAgeMins = this.currentEntryTime > 0
+        ? (Date.now() - this.currentEntryTime) / 60000
+        : 999;
+
       if (expiryStatus.isMonthlyExpiry && totalMin >= 810) {
-        if (this.pnl > 0 && this.activePositions.length > 0) {
-          console.log('[EXECUTION] Monthly Expiry Afternoon Shift: Securing profits before roll-over volatility.');
+        if (this.activePositions.length > 0 && tradeAgeMins >= 5) {
+          // Exit whether profitable or not — gamma risk at monthly expiry is too high to hold
+          console.log(`[EXECUTION] Monthly Expiry 1:30 PM: Closing after ${tradeAgeMins.toFixed(1)}m (P&L ₹${this.pnl}).`);
           await this.exitAllInternal('Monthly Expiry 1:30 PM Protective Exit');
           return;
+        } else if (this.activePositions.length > 0 && tradeAgeMins < 5) {
+          console.log(`[EXECUTION] Monthly Expiry 1:30 PM: Skipping early exit — trade is only ${tradeAgeMins.toFixed(1)}m old (min 5m required).`);
         }
       }
 
-      // Weekly expiry 2:45 PM exit
+      // Weekly expiry 2:45 PM exit — minimum 5 min hold
       if (expiryStatus.isWeekly && totalMin >= 885) {
-        if (this.activePositions.length > 0) {
-          console.log('[EXECUTION] Weekly Expiry 2:45 PM: Closing positions to avoid settlement spikes.');
+        if (this.activePositions.length > 0 && tradeAgeMins >= 5) {
+          console.log(`[EXECUTION] Weekly Expiry 2:45 PM: Closing after ${tradeAgeMins.toFixed(1)}m.`);
           await this.exitAllInternal('Weekly Expiry 2:45 PM Protective Exit');
           return;
         }
@@ -1060,7 +1123,15 @@ class ExecutionEngine {
     ).catch(err => console.error('Notify failed:', err));
 
     this.activePositions = [];
-    this.lastTradeEndTime = Date.now();
+    // For protective expiry exits, block re-entry for 30 minutes to prevent
+    // the auto-mode loop from immediately re-entering into high-gamma conditions
+    const isProtectiveExit = reason.includes('Protective Exit') || reason.includes('Kill Switch');
+    this.lastTradeEndTime = isProtectiveExit
+      ? Date.now() + (30 * 60 * 1000)  // 30-min forward block
+      : Date.now();
+    if (isProtectiveExit) {
+      console.log(`[EXECUTION] Protective exit (${reason}): re-entry blocked for 30 minutes.`);
+    }
     this.pnl = 0;
     this.capitalDeployed = 0;
     this.currentTradeBias = null;
