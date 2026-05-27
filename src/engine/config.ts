@@ -54,7 +54,7 @@ export const config: Config = {
   GEMINI_API_KEY: isValidKey ? GEMINI_KEY : undefined,
   DATA_SOURCE: 'MOCK',
   EXECUTION_MODE: 'PAPER',
-  AUTO_MODE: true,
+  AUTO_MODE: false, // SAFETY: always starts OFF — must be explicitly enabled via UI or /toggle-auto-mode
   TRADING_SYMBOL: 'NIFTY',
   LOT_SIZE: 65,
   SL_RUPEES: 2000,
@@ -97,3 +97,20 @@ export const setAutoMode = (mode: boolean) => {
 export const updateConfig = (newConfig: Partial<Config>) => {
   Object.assign(config, newConfig);
 };
+
+/**
+ * Strike interval (points between adjacent strikes) per underlying.
+ * Used everywhere Math.round(spot / 50) * 50 appeared — now symbol-aware.
+ * NIFTY: 50 | BANKNIFTY: 100 | FINNIFTY: 50 | MIDCPNIFTY: 25
+ */
+export const STRIKE_STEP: Record<string, number> = {
+  NIFTY:      50,
+  BANKNIFTY:  100,
+  FINNIFTY:   50,
+  MIDCPNIFTY: 25,
+};
+
+/** Returns the correct strike step for the currently configured TRADING_SYMBOL. */
+export function getStrikeStep(): number {
+  return STRIKE_STEP[config.TRADING_SYMBOL] ?? 50;
+}

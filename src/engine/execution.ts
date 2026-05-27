@@ -24,7 +24,7 @@
  *  persistence, notifications — is IDENTICAL to original.
  */
 
-import { config } from './config.ts';
+import { config, getStrikeStep } from './config.ts';
 import { marketEngine } from './market.ts';
 import { tradeLogger } from './logger.ts';
 import { strategyEngine } from './strategy.ts';
@@ -95,6 +95,12 @@ class ExecutionEngine {
   private hedgeLogs: string[] = [];
   private lastRiskValidation: { allowed: boolean; reason: string | null } | null = null;
   private isProcessing: boolean = false;
+
+  /**
+   * Optional callback invoked after every exitAllInternal().
+   * Used by server.ts to invalidate tradeLogsCache immediately.
+   */
+  public onTradeExit: (() => void) | null = null;
 
   // ── NEW: Daily risk gate fields ─────────────────────────────────────────────
 
@@ -182,6 +188,15 @@ class ExecutionEngine {
       return `Max trades per day reached (${config.MAX_TRADES_PER_DAY}).`;
     }
 
+    // 4. Consecutive loss limit — pause after N losses in a row regardless of rupee amount
+    if (!isManual) {
+      const riskStats = riskEngine.getStats();
+      const consecutiveLosses = (riskStats as any).consecutiveLosses ?? 0;
+      if (consecutiveLosses >= config.CONSECUTIVE_LOSS_LIMIT) {
+        return `Consecutive loss limit reached (${consecutiveLosses} losses in a row). Pausing entries — reset risk engine to resume.`;
+      }
+    }
+
     return null;
   }
 
@@ -250,7 +265,8 @@ class ExecutionEngine {
       return;
     }
 
-    const atmStrike = Math.round(spot / 50) * 50;
+    const strikeStep = getStrikeStep();
+    const atmStrike = Math.round(spot / strikeStep) * strikeStep;
 
     // Derive Dynamic SL/Target
     const derivation = intelligenceEngine.deriveParams(
@@ -339,8 +355,13 @@ class ExecutionEngine {
       let closest = sourceChain[0];
       let minDiff = Infinity;
       sourceChain.forEach(opt => {
-        let delta = (type === 'CE' ? opt.delta : (opt as any).pe_delta) || 0.5;
-        if (type === 'PE' && delta < 0) delta = Math.abs(delta);
+        let delta = (type === 'CE' ? opt.delta : (opt as any).pe_delta);
+        // Fallback: if chain delta is missing/zero, compute from BSM rather than defaulting to 0.5
+        if (!delta || delta === 0) {
+          delta = Math.abs(marketEngine.calculateDelta(spot, opt.strike, type));
+        } else if (type === 'PE' && delta < 0) {
+          delta = Math.abs(delta);
+        }
         const diff = Math.abs(delta - targetDelta);
         if (diff < minDiff) { minDiff = diff; closest = opt; }
       });
@@ -718,6 +739,7 @@ class ExecutionEngine {
    */
   private calculatePortfolioGreeks() {
     const chain = marketEngine.getOptionChain();
+    const spot = marketEngine.getSpotPrice();
     let d = 0, g = 0, t = 0, v = 0;
 
     this.activePositions.forEach(pos => {
@@ -732,7 +754,13 @@ class ExecutionEngine {
         const units = pos.qty / config.LOT_SIZE;
 
         // Delta: CE in [0,1], PE in [-1,0]. Chain stores signed deltas.
-        let delta = pos.type === 'CE' ? (opt.delta || 0.5) : ((opt as any).pe_delta || -0.5);
+        // Use real BSM delta from chain; if missing compute via calculateDelta
+        let delta: number;
+        if (pos.type === 'CE') {
+          delta = opt.delta || marketEngine.calculateDelta(spot, pos.strike, 'CE');
+        } else {
+          delta = (opt as any).pe_delta || marketEngine.calculateDelta(spot, pos.strike, 'PE');
+        }
 
         // Gamma is always positive from BSM; sign comes from buy/sell
         const gamma = opt.gamma || 0;
@@ -1038,6 +1066,8 @@ class ExecutionEngine {
     this.currentTradeBias = null;
     this.currentEntryTime = 0;
     this.currentTradeParams = null;
+    // Notify server to invalidate trade log cache immediately
+    if (this.onTradeExit) this.onTradeExit();
     await this.saveState();
   }
 
