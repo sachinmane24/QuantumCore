@@ -2283,6 +2283,117 @@ export default function App() {
                 </section>
               )}
 
+              {/* ── NIFTY Movement Forecast Panel ──────────────────────────────
+                  Reads movementPrediction from /api/execution-state.
+                  Data is live during market hours; shows loading state otherwise.  */}
+              {(() => {
+                const pred = (execution as any)?.movementPrediction;
+                if (!pred) return (
+                  <section className="terminal-card bg-slate-900/35 p-4 border border-white/5 flex items-center gap-2">
+                    <Activity className="w-3 h-3 text-slate-600 animate-pulse" />
+                    <span className="text-[8px] font-black uppercase tracking-widest text-slate-600">
+                      Movement Forecast — Awaiting first market tick...
+                    </span>
+                  </section>
+                );
+
+                const rows: { dir: 'DOWN' | 'SIDEWAYS' | 'UP'; prob: number; icon: string; col: string }[] = [
+                  { dir: 'DOWN',     prob: pred.down,     icon: '▼', col: 'rose' },
+                  { dir: 'SIDEWAYS', prob: pred.sideways, icon: '→', col: 'amber' },
+                  { dir: 'UP',       prob: pred.up,       icon: '▲', col: 'emerald' },
+                ].sort((a, b) => b.prob - a.prob);
+
+                const colClass = (col: string, dominant: boolean) => dominant
+                  ? col === 'rose' ? 'text-rose-400' : col === 'amber' ? 'text-amber-400' : 'text-emerald-400'
+                  : 'text-slate-500';
+                const barClass = (col: string, dominant: boolean) => dominant
+                  ? col === 'rose' ? 'bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]'
+                  : col === 'amber' ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.5)]'
+                  : 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]'
+                  : 'bg-white/10';
+                const confBadge = pred.confidence === 'HIGH'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  : pred.confidence === 'MEDIUM'
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+                const magBadge = pred.magnitude === 'EXPLOSIVE'
+                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                  : pred.magnitude === 'MODERATE'
+                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                  : 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+
+                return (
+                  <section className="terminal-card bg-slate-900/35 p-5 flex flex-col gap-4 border border-white/5">
+                    {/* Header */}
+                    <div className="flex justify-between items-center border-b border-white/5 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Brain className="w-4 h-4 text-blue-400" />
+                        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-white">NIFTY Movement Forecast</h3>
+                        <span className="text-[7px] font-bold text-slate-600 uppercase tracking-widest">AI · MULTI-SIGNAL</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn("text-[7.5px] font-black uppercase px-2 py-0.5 rounded border tracking-widest", confBadge)}>
+                          {pred.confidence}
+                        </span>
+                        <span className={cn("text-[7.5px] font-black uppercase px-2 py-0.5 rounded border tracking-widest", magBadge)}>
+                          {pred.magnitude}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Probability bars */}
+                    <div className="flex flex-col gap-2.5">
+                      {rows.map(({ dir, prob, icon, col }) => {
+                        const dominant = dir === pred.direction;
+                        return (
+                          <div key={dir} className="flex items-center gap-3">
+                            <span className={cn("text-[9px] font-black uppercase font-mono w-[72px] shrink-0", colClass(col, dominant))}>
+                              {icon} {dir}
+                            </span>
+                            <span className={cn("text-[11px] font-black font-mono w-8 text-right shrink-0 tabular-nums", colClass(col, dominant))}>
+                              {prob}%
+                            </span>
+                            <div className="flex-1 bg-white/5 rounded-full h-[5px] overflow-hidden">
+                              <div
+                                className={cn("h-full rounded-full transition-all duration-700", barClass(col, dominant))}
+                                style={{ width: `${prob}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Active signals */}
+                    {pred.signals && pred.signals.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-2 border-t border-white/[0.04]">
+                        <span className="text-[7.5px] font-black uppercase text-slate-600 tracking-widest self-center mr-1">
+                          Signals:
+                        </span>
+                        {pred.signals.map((s: any, i: number) => (
+                          <span
+                            key={i}
+                            className={cn(
+                              "text-[7px] font-black uppercase px-1.5 py-0.5 rounded tracking-wide",
+                              s.vote === 'UP'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            )}
+                          >
+                            {s.vote === 'UP' ? '▲' : '▼'} {s.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Disclaimer */}
+                    <p className="text-[6.5px] text-slate-700 font-medium leading-relaxed">
+                      ⚠ {pred.disclaimer}
+                    </p>
+                  </section>
+                );
+              })()}
+
             </div>
           </motion.main>
         ) : activeTab === 'chain' ? (
