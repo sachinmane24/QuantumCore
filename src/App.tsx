@@ -9,7 +9,8 @@ import {
   ShieldCheck, LayoutDashboard, History, Zap,
   BarChart3, Brain, ArrowUpRight, ArrowDownRight,
   Shield, Target, Crosshair, Menu, Bell, Search, Cpu, Layers, Filter,
-  Globe, Moon, Info, ShieldAlert, LogOut, Settings, Timer
+  Globe, Moon, Info, ShieldAlert, LogOut, Settings, Timer,
+  Save, CheckCircle, Loader2, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -31,8 +32,8 @@ const RiskInput = ({ label, value, onChange, type = "number" }: { label: string,
     <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{label}</label>
     <input 
       type={type}
-      defaultValue={value}
-      onBlur={(e) => onChange(e.target.value)}
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value)}
       className="bg-black/40 border border-white/5 rounded px-3 py-1.5 text-[10px] font-mono text-blue-400 focus:border-blue-500/50 outline-none transition-all w-full"
     />
   </div>
@@ -245,6 +246,10 @@ export default function App() {
   // Telegram Integration State
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
+  const [editedConfig, setEditedConfig] = useState<any>(null);
+  const [riskSaving,   setRiskSaving]   = useState(false);
+  const [riskSaveMsg,  setRiskSaveMsg]  = useState<{ ok: boolean | null; text: string }>({ ok: null, text: '' });
+
   const [telegramSaveStatus, setTelegramSaveStatus] = useState<{
     success: boolean | null;
     message?: string | null;
@@ -274,8 +279,35 @@ export default function App() {
     if (appConfig) {
       if (appConfig.TELEGRAM_BOT_TOKEN) setTelegramToken(appConfig.TELEGRAM_BOT_TOKEN);
       if (appConfig.TELEGRAM_CHAT_ID) setTelegramChatId(appConfig.TELEGRAM_CHAT_ID);
+      if (!editedConfig) setEditedConfig({ ...appConfig });
     }
   }, [appConfig]);
+
+  const handleSaveRiskConfig = async () => {
+    if (!editedConfig) return;
+    setRiskSaving(true);
+    setRiskSaveMsg({ ok: null, text: '' });
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editedConfig)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAppConfig(data.config);
+        setEditedConfig({ ...data.config });
+        setRiskSaveMsg({ ok: true, text: 'All parameters saved and persisted to database.' });
+        setTimeout(() => setRiskSaveMsg({ ok: null, text: '' }), 5000);
+      } else {
+        setRiskSaveMsg({ ok: false, text: 'Save failed — server rejected the update.' });
+      }
+    } catch (e: any) {
+      setRiskSaveMsg({ ok: false, text: e?.message || 'Network error.' });
+    } finally {
+      setRiskSaving(false);
+    }
+  };
 
   const handleSaveTelegramConfig = async () => {
     setTelegramSaveStatus({ success: null });
@@ -3080,18 +3112,18 @@ export default function App() {
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Capital Base (₹)" 
-                            value={appConfig.CAPITAL_BASE} 
-                            onChange={(val) => updateConfigAtServer({ CAPITAL_BASE: Number(val) })} 
+                            value={editedConfig?.CAPITAL_BASE ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, CAPITAL_BASE: Number(val) }))}
                           />
                           <RiskInput 
                             label="Max Portfolio Heat (%)" 
-                            value={appConfig.MAX_PORTFOLIO_HEAT} 
-                            onChange={(val) => updateConfigAtServer({ MAX_PORTFOLIO_HEAT: Number(val) })} 
+                            value={editedConfig?.MAX_PORTFOLIO_HEAT ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, MAX_PORTFOLIO_HEAT: Number(val) }))}
                           />
                           <RiskInput 
                             label="Max Risk Per Trade (%)" 
-                            value={appConfig.MAX_RISK_PER_TRADE_PCT} 
-                            onChange={(val) => updateConfigAtServer({ MAX_RISK_PER_TRADE_PCT: Number(val) })} 
+                            value={editedConfig?.MAX_RISK_PER_TRADE_PCT ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, MAX_RISK_PER_TRADE_PCT: Number(val) }))}
                           />
                        </div>
                     </div>
@@ -3101,18 +3133,18 @@ export default function App() {
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Daily Loss Limit (₹)" 
-                            value={appConfig.DAILY_LOSS_LIMIT} 
-                            onChange={(val) => updateConfigAtServer({ DAILY_LOSS_LIMIT: Number(val) })} 
+                            value={editedConfig?.DAILY_LOSS_LIMIT ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, DAILY_LOSS_LIMIT: Number(val) }))}
                           />
                           <RiskInput 
                             label="Profit Lock Threshold (₹)" 
-                            value={appConfig.DAILY_PROFIT_LOCK} 
-                            onChange={(val) => updateConfigAtServer({ DAILY_PROFIT_LOCK: Number(val) })} 
+                            value={editedConfig?.DAILY_PROFIT_LOCK ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, DAILY_PROFIT_LOCK: Number(val) }))}
                           />
                           <RiskInput 
                             label="Consecutive Loss Limit" 
-                            value={appConfig.CONSECUTIVE_LOSS_LIMIT} 
-                            onChange={(val) => updateConfigAtServer({ CONSECUTIVE_LOSS_LIMIT: Number(val) })} 
+                            value={editedConfig?.CONSECUTIVE_LOSS_LIMIT ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, CONSECUTIVE_LOSS_LIMIT: Number(val) }))}
                           />
                        </div>
                     </div>
@@ -3122,23 +3154,51 @@ export default function App() {
                        <div className="grid grid-cols-1 gap-4">
                           <RiskInput 
                             label="Max Trades Per Day" 
-                            value={appConfig.MAX_TRADES_PER_DAY} 
-                            onChange={(val) => updateConfigAtServer({ MAX_TRADES_PER_DAY: Number(val) })} 
+                            value={editedConfig?.MAX_TRADES_PER_DAY ?? ''} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, MAX_TRADES_PER_DAY: Number(val) }))}
                           />
                           <RiskInput 
                             label="Start Time (Market)" 
-                            value={appConfig.START_TIME} 
+                            value={editedConfig?.START_TIME ?? ''} 
                             type="text"
-                            onChange={(val) => updateConfigAtServer({ START_TIME: val })} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, START_TIME: val }))}
                           />
                           <RiskInput 
                             label="End Time (Manual Square-off)" 
-                            value={appConfig.END_TIME} 
+                            value={editedConfig?.END_TIME ?? ''} 
                             type="text"
-                            onChange={(val) => updateConfigAtServer({ END_TIME: val })} 
+                            onChange={(val) => setEditedConfig((c: any) => ({ ...c, END_TIME: val }))}
                           />
                        </div>
                     </div>
+                  </div>
+
+                  {/* Save & Persist to DB */}
+                  <div className="flex flex-wrap items-center gap-4 mt-8 pt-6 border-t border-white/5">
+                    <button
+                      onClick={handleSaveRiskConfig}
+                      disabled={riskSaving}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[10px] font-black uppercase tracking-[0.15em] rounded transition-all shadow-[0_0_20px_rgba(37,99,235,0.25)]"
+                    >
+                      {riskSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                      {riskSaving ? 'Saving...' : 'Save & Persist to DB'}
+                    </button>
+                    <button
+                      onClick={() => appConfig && setEditedConfig({ ...appConfig })}
+                      disabled={riskSaving}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-slate-400 text-[10px] font-black uppercase tracking-[0.15em] rounded transition-all"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Reset
+                    </button>
+                    {riskSaveMsg.ok !== null && (
+                      <div className={`flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest ${
+                        riskSaveMsg.ok ? 'text-emerald-400' : 'text-rose-400'
+                      }`}>
+                        {riskSaveMsg.ok ? <CheckCircle className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                        {riskSaveMsg.text}
+                      </div>
+                    )}
                   </div>
                 )}
 
