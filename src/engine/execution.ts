@@ -637,18 +637,23 @@ class ExecutionEngine {
           this.currentActiveSL = -this.currentTradeParams.stopLossRupees;
         }
       } else if (buyLegs.length > 0) {
-        // Naked buy / debit spread — SL = premium paid, Target = 2× premium paid
+        // Naked buy / debit — ALWAYS use premium-based SL/Target.
+        // The ATR spot-points model is not calibrated for option premium: it can produce
+        // absurd targets (e.g. 94% gain required) or a tiny SL that creates 1:6.7 RR by
+        // accident.  For longs: Target = 2× premium paid, SL = 50% of premium paid.
         const totalDebit = buyLegs.reduce((s, p) => s + p.entryPrice * p.qty, 0);
         if (totalDebit > 0) {
           const debitTarget = Math.round(totalDebit * 2.0);   // 2R target
-          const debitSL     = Math.round(totalDebit * 0.5);   // 50% of premium
-          if (debitTarget < this.currentTradeParams.targetRupees) {
-            this.currentTradeParams = { ...this.currentTradeParams, targetRupees: debitTarget };
-          }
-          if (debitSL < this.currentTradeParams.stopLossRupees) {
-            this.currentTradeParams = { ...this.currentTradeParams, stopLossRupees: debitSL };
-          }
-          this.currentActiveSL = -this.currentTradeParams.stopLossRupees;
+          const debitSL     = Math.round(totalDebit * 0.5);   // 50% of premium paid
+          console.log(
+            `[EXECUTION] Debit SL/Target override: ` +
+            `Target ₹${this.currentTradeParams.targetRupees}→₹${debitTarget} (2× ₹${Math.round(totalDebit)} debit), ` +
+            `SL ₹${this.currentTradeParams.stopLossRupees}→₹${debitSL} (50% of premium)`
+          );
+          // Always replace — never just tighten — so both SL and Target are
+          // premium-based regardless of what the ATR model produced.
+          this.currentTradeParams = { ...this.currentTradeParams, targetRupees: debitTarget, stopLossRupees: debitSL };
+          this.currentActiveSL = -debitSL;
         }
       }
     }
@@ -683,6 +688,49 @@ class ExecutionEngine {
     this.calculateCapitalDeployed();
     this.currentEntryNetDelta = this.netDelta;
     this.currentEntryNetGamma = this.netGamma;
+
+    // ── Entry journal record (exitReason='OPEN') ──────────────────────────
+    // Written immediately so the trade is visible in the journal from the
+    // moment it fires — even if the instance is recycled before exit.
+    // The exit path writes a separate record with final PnL + exitReason.
+    try {
+      const _eBuy  = this.activePositions.filter(p => p.side === 'BUY');
+      const _eSell = this.activePositions.filter(p => p.side === 'SELL');
+      const _eBuyPrice  = _eBuy.length  ? _eBuy.reduce((s, p)  => s + p.entryPrice, 0) : 0;
+      const _eSellPrice = _eSell.length ? _eSell.reduce((s, p) => s + p.entryPrice, 0) : 0;
+      const _lots = (this.activePositions[0]?.qty || config.LOT_SIZE) / config.LOT_SIZE;
+      const _eInvestment = _eSell.length > 0
+        ? (38_000 * _lots)
+        : _eBuy.reduce((s, p) => s + p.entryPrice * p.qty, 0);
+      await tradeLogger.logTrade({
+        timestamp: new Date().toISOString(),
+        score: this.lastTradeScore?.total || 0,
+        mode: this.lastTradeScore?.mode || 'MOMENTUM_SNIPER',
+        strategyType: this.deriveActiveSetupLabel(),
+        gamma: this.lastTradeScore?.gamma || 0,
+        oi_bias: this.lastTradeScore?.oiBias || 0,
+        trap: this.lastTradeScore?.trap === 0,
+        pnl: 0,
+        win: false,
+        bias: this.currentTradeBias || undefined,
+        vix: this.currentVixAtEntry,
+        spot: this.currentSpotAtEntry,
+        isExpiryDay: this.currentIsExpiryDay,
+        isMonthlyExpiry: this.currentIsMonthlyExpiry,
+        entryNetDelta: this.currentEntryNetDelta,
+        entryNetGamma: this.currentEntryNetGamma,
+        phase: 'ENTRY_OPEN',
+        duration: 0,
+        entryTime: new Date(this.currentEntryTime).toISOString(),
+        buyPrice: _eBuyPrice,
+        sellPrice: _eSellPrice,
+        totalInvestment: _eInvestment,
+        strike: this.currentStrikeAtEntry,
+        exitReason: 'OPEN',
+      });
+    } catch (logErr) {
+      console.error('[EXECUTION] Entry journal log failed (non-fatal):', logErr);
+    }
 
     riskEngine.recordTradeEntry();
     this.lastTradeSuppression = null;
@@ -1251,8 +1299,38 @@ class ExecutionEngine {
 
   // ─── State getter (updated with new daily fields) ─────────────────────────────
 
+  // ─── Derive display label from actual live leg structure ─────────────────
+  // Source of truth is the leg array, not the strategy score that triggered entry.
+  // Prevents e.g. a naked long PE from being displayed as "BEAR PUT SPREAD".
+  private deriveActiveSetupLabel(): string {
+    const pos = this.activePositions;
+    if (pos.length === 0) return 'IDLE';
+    const buyLegs  = pos.filter(p => p.side === 'BUY' && !(p as any).isHedge);
+    const sellLegs = pos.filter(p => p.side === 'SELL' && !(p as any).isHedge);
+
+    if (sellLegs.length === 0 && buyLegs.length === 1) {
+      return `NAKED LONG ${buyLegs[0].type}`;   // "NAKED LONG PE" / "NAKED LONG CE"
+    }
+    if (sellLegs.length === 1 && buyLegs.length === 0) {
+      return `NAKED SHORT ${sellLegs[0].type}`;
+    }
+    if (buyLegs.length === 1 && sellLegs.length === 1) {
+      const b = buyLegs[0], s = sellLegs[0];
+      if (b.type === 'PE' && s.type === 'PE')
+        return b.strike > s.strike ? 'BEAR PUT SPREAD' : 'BULL PUT SPREAD';
+      if (b.type === 'CE' && s.type === 'CE')
+        return b.strike < s.strike ? 'BULL CALL SPREAD' : 'BEAR CALL SPREAD';
+    }
+    if (sellLegs.length === 2 && buyLegs.length === 2) return 'IRON CONDOR';
+    if (sellLegs.length === 2 && buyLegs.length === 0) return 'SHORT STRANGLE';
+    // Fallback to scored type (strip underscores)
+    return (this.lastTradeScore?.strategyType || 'SPREAD').replace(/_/g, ' ');
+  }
+
   getState() {
     return {
+      // Derived from actual leg structure, not the strategy score label
+      activeSetupLabel: this.deriveActiveSetupLabel(),
       positions: this.activePositions,
       pnl: Math.round(this.pnl),
       peakPnL: Math.round(this.peakPnL),
