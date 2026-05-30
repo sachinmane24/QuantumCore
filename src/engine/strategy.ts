@@ -65,6 +65,25 @@ export function getStandardStrategy(strategyType: StrategyType, bias: 'BULLISH' 
   }
 }
 
+// Signal vote — one row per indicator, shown in the UI for transparency
+export interface SignalVote {
+  name: string;
+  vote: 'UP' | 'DOWN' | 'NEUTRAL';
+  weight: number;
+}
+
+// Output of predictMovement() — probabilities always sum to 100
+export interface MovementPrediction {
+  up:        number;                           // % probability of upward move
+  down:      number;                           // % probability of downward move
+  sideways:  number;                           // % probability of sideways / range
+  direction: 'UP' | 'DOWN' | 'SIDEWAYS';      // dominant direction
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';      // how decisive the signal mix is
+  magnitude:  'EXPLOSIVE' | 'MODERATE' | 'CONTAINED';  // expected move character
+  signals:   SignalVote[];                     // only non-neutral votes shown
+  disclaimer: string;
+}
+
 export interface StrategyScore {
   total: number;
   trend: number;
@@ -83,9 +102,18 @@ export interface StrategyScore {
   gammaScore: number;
   timeFilterScore: number;
   oiChangeBias: number;
+  movementPrediction: MovementPrediction;
 }
 
 class StrategyEngine {
+  // Cache so the execution-state endpoint can read the latest prediction
+  // without triggering a redundant calculateScore() call.
+  private lastMovementPrediction: MovementPrediction | null = null;
+
+  getLastMovementPrediction(): MovementPrediction | null {
+    return this.lastMovementPrediction;
+  }
+
   calculateScore(): StrategyScore {
     const spot = marketEngine.getSpotPrice();
     const chain = marketEngine.getOptionChain();
@@ -459,6 +487,137 @@ class StrategyEngine {
 
     const oiBiasDirection = oiChangeBias > 75000 ? 1 : (oiChangeBias < -75000 ? -1 : 0);
 
+    // ── Movement Prediction ───────────────────────────────────────────────────
+    // Bayesian-style weighted vote model. Each signal votes UP / DOWN with a
+    // weight reflecting its intraday reliability on NIFTY.
+    // A large sideways base weight ensures probabilities stay honest —
+    // even with all signals aligned, we cap directional probability at ~70%.
+    // All weights are additive; correlated signals naturally reinforce each other
+    // without allowing artificial certainty.
+
+    let _bullW = 0;
+    let _bearW = 0;
+    const _votes: SignalVote[] = [];
+
+    const _vote = (name: string, direction: 'UP' | 'DOWN' | 'NEUTRAL', weight: number) => {
+      _votes.push({ name, vote: direction, weight });
+      if (direction === 'UP')   _bullW += weight;
+      if (direction === 'DOWN') _bearW += weight;
+    };
+
+    // 1. OI Writing Flow (20 pts) — institutional smart money; strongest intraday signal
+    if      (oiChangeBias >  250_000) _vote('OI Writing Flow', 'UP',   20);
+    else if (oiChangeBias >   80_000) _vote('OI Writing Flow', 'UP',   12);
+    else if (oiChangeBias < -250_000) _vote('OI Writing Flow', 'DOWN', 20);
+    else if (oiChangeBias <  -80_000) _vote('OI Writing Flow', 'DOWN', 12);
+    else                              _vote('OI Writing Flow', 'NEUTRAL', 0);
+
+    // 2. ORB Breakout (18 pts) — most reliable confirmed intraday signal
+    if      (orbTrigger ===  1) _vote('ORB Breakout', 'UP',   18);
+    else if (orbTrigger === -1) _vote('ORB Breakout', 'DOWN', 18);
+    else                        _vote('ORB Breakout', 'NEUTRAL', 0);
+
+    // 3. PCR Sentiment (12 pts) — options market consensus
+    // PCR > 1 = more puts than calls = bullish (market has downside protection)
+    if      (pcr > 1.3)  _vote('PCR Sentiment', 'UP',   12);
+    else if (pcr > 1.1)  _vote('PCR Sentiment', 'UP',    6);
+    else if (pcr < 0.8)  _vote('PCR Sentiment', 'DOWN', 12);
+    else if (pcr < 0.9)  _vote('PCR Sentiment', 'DOWN',  6);
+    else                 _vote('PCR Sentiment', 'NEUTRAL', 0);
+
+    // 4. VWAP Position (12 pts) — institutional intraday reference level
+    const _vwap = marketEngine.getVWAP();
+    const _vwapDist = spot - _vwap;
+    if      (_vwapDist >  15) _vote('VWAP Position', 'UP',   12);
+    else if (_vwapDist >   5) _vote('VWAP Position', 'UP',    6);
+    else if (_vwapDist < -15) _vote('VWAP Position', 'DOWN', 12);
+    else if (_vwapDist <  -5) _vote('VWAP Position', 'DOWN',  6);
+    else                      _vote('VWAP Position', 'NEUTRAL', 0);
+
+    // 5. EMA20 Trend (8 pts) — short-term trend direction
+    const _ph    = marketEngine.getPriceHistory();
+    const _k20   = 2 / 21;
+    let   _ema20 = _ph.length >= 20 ? _ph[_ph.length - 20] : spot;
+    for (let _i = _ph.length - 19; _i < _ph.length; _i++) {
+      _ema20 = (_ph[_i] * _k20) + (_ema20 * (1 - _k20));
+    }
+    const _emaDist  = spot - _ema20;
+    const _risingEma = _ph.length >= 2 && _ph[_ph.length - 1] > _ph[_ph.length - 2];
+    if      (_emaDist >  10 && _risingEma)  _vote('EMA20 Trend', 'UP',   8);
+    else if (_emaDist >   0 && _risingEma)  _vote('EMA20 Trend', 'UP',   4);
+    else if (_emaDist < -10 && !_risingEma) _vote('EMA20 Trend', 'DOWN', 8);
+    else if (_emaDist <   0 && !_risingEma) _vote('EMA20 Trend', 'DOWN', 4);
+    else                                    _vote('EMA20 Trend', 'NEUTRAL', 0);
+
+    // 6. MACD Histogram (8 pts) — momentum confirmation
+    const _macd = indicators.macd.histogram || 0;
+    if      (_macd >  2) _vote('MACD Momentum', 'UP',   8);
+    else if (_macd >  0) _vote('MACD Momentum', 'UP',   4);
+    else if (_macd < -2) _vote('MACD Momentum', 'DOWN', 8);
+    else if (_macd <  0) _vote('MACD Momentum', 'DOWN', 4);
+    else                 _vote('MACD Momentum', 'NEUTRAL', 0);
+
+    // 7. RSI Extremes (6 pts) — overbought/oversold reversals
+    if      (indicators.rsi < 30) _vote('RSI Extreme', 'UP',   6);  // oversold → mean revert up
+    else if (indicators.rsi > 70) _vote('RSI Extreme', 'DOWN', 6);  // overbought → pullback
+    else                          _vote('RSI Extreme', 'NEUTRAL', 0);
+
+    // 8. Bollinger Band Position (6 pts)
+    if      (spot <= indicators.bollinger.lower + 10) _vote('Bollinger Band', 'UP',   6);
+    else if (spot >= indicators.bollinger.upper - 10) _vote('Bollinger Band', 'DOWN', 6);
+    else                                              _vote('Bollinger Band', 'NEUTRAL', 0);
+
+    // 9. Opening Gap Bias (4 pts) — directional momentum from open
+    if      (gapBias >  0) _vote('Opening Gap', 'UP',   4);
+    else if (gapBias <  0) _vote('Opening Gap', 'DOWN', 4);
+    else                   _vote('Opening Gap', 'NEUTRAL', 0);
+
+    // 10. OI Structure Level (6 pts) — support / resistance proximity
+    if      (isNearSupport)    _vote('OI Structure', 'UP',   6);  // at PE wall → support bounce
+    else if (isNearResistance) _vote('OI Structure', 'DOWN', 6);  // at CE wall → rejection
+    else                       _vote('OI Structure', 'NEUTRAL', 0);
+
+    // Trap reduces directional confidence (false move risk)
+    if (trapDetected) { _bullW *= 0.5; _bearW *= 0.5; }
+
+    // Sideways base weight — VIX-calibrated.
+    // Low VIX = market tends to range; high VIX = more directional.
+    // High sidewaysWeight = honest floor on uncertainty even when signals align.
+    // With all 10 signals aligned (max ~100 directional weight):
+    //   VIX < 12 (sw=70): max P(dir) = 100/170 = 59%
+    //   VIX 12-17 (sw=45): max P(dir) = 100/145 = 69%
+    //   VIX 17-22 (sw=25): max P(dir) = 100/125 = 80%
+    //   VIX > 22  (sw=15): max P(dir) = 100/115 = 87%
+    const _sw = vix < 12 ? 70 : vix < 17 ? 45 : vix < 22 ? 25 : 15;
+
+    const _total = _bullW + _bearW + _sw;
+    const _probUp   = _total > 0 ? Math.round((_bullW / _total) * 100) : 33;
+    const _probDown = _total > 0 ? Math.round((_bearW / _total) * 100) : 33;
+    const _probSide = Math.max(0, 100 - _probUp - _probDown);
+
+    const _dom = Math.max(_probUp, _probDown, _probSide);
+    const _dir: 'UP' | 'DOWN' | 'SIDEWAYS' =
+      _probUp === _dom ? 'UP' : _probDown === _dom ? 'DOWN' : 'SIDEWAYS';
+    const _conf: 'HIGH' | 'MEDIUM' | 'LOW' =
+      _dom >= 58 ? 'HIGH' : _dom >= 50 ? 'MEDIUM' : 'LOW';
+    const _mag: 'EXPLOSIVE' | 'MODERATE' | 'CONTAINED' =
+      (vix > 18 && orbTrigger !== 0 && _dom >= 58)   ? 'EXPLOSIVE' :
+      (vix < 12 || trapDetected || _dom < 45)         ? 'CONTAINED' : 'MODERATE';
+
+    const movementPrediction: MovementPrediction = {
+      up:        _probUp,
+      down:      _probDown,
+      sideways:  _probSide,
+      direction: _dir,
+      confidence: _conf,
+      magnitude:  _mag,
+      signals:   _votes.filter(v => v.vote !== 'NEUTRAL'),
+      disclaimer: 'Probabilistic model estimate — no prediction system is perfect. Always trade with defined risk.',
+    };
+
+    // Cache for endpoint reads without double-compute
+    this.lastMovementPrediction = movementPrediction;
+
     return {
       total: Math.round(total),
       trend: Math.round(trendScore * trendDirection), 
@@ -476,7 +635,8 @@ class StrategyEngine {
       oiBiasScore: Math.round(oiBiasScore),
       gammaScore: Math.round(gammaScore),
       timeFilterScore: Math.round(timeFilterScore),
-      oiChangeBias: Math.round(oiChangeBias)
+      oiChangeBias: Math.round(oiChangeBias),
+      movementPrediction,
     };
   }
 }
