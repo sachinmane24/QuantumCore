@@ -117,6 +117,21 @@ async function loadMarketStructure() {
 
 // ─── Server Bootstrap ─────────────────────────────────────────────────────────
 
+// ── Utility: wraps a promise in a hard timeout ──────────────────────────────
+// Prevents hung Kite REST/WS awaits from locking isSyncing indefinitely.
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`[TIMEOUT] ${label} did not resolve within ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
+// Ensures marketLoop is started exactly once even when multiple async init
+// callbacks complete concurrently (prevents dual-engine / split-brain state).
+let loopStarted = false;
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -529,14 +544,25 @@ async function startServer() {
   // ─── Market Loop ──────────────────────────────────────────────────────────────
 
   let isSyncing = false;
+  let isSyncingStartedAt = 0;   // watchdog: tracks when isSyncing was set
   let liveFailureCount = 0;
 
   async function marketLoop() {
     if (isSyncing) {
-      setTimeout(marketLoop, 500);
-      return;
+      // Watchdog: if the lock has been held for >30 s, a network await has hung.
+      // Force-release so the loop can recover. The hung call will eventually
+      // reject via withTimeout() and be caught by the outer try/catch.
+      if (isSyncingStartedAt > 0 && Date.now() - isSyncingStartedAt > 30_000) {
+        console.error('[LOOP] isSyncing held >30s — force-releasing (hung network await detected). Resetting.');
+        isSyncing = false;
+        isSyncingStartedAt = 0;
+      } else {
+        setTimeout(marketLoop, 500);
+        return;
+      }
     }
     isSyncing = true;
+    isSyncingStartedAt = Date.now();
     try {
       const now = new Date();
       const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
@@ -599,7 +625,11 @@ async function startServer() {
           if (needsRestFetch) {
             try {
               const fetchSymbols = [...symbols, ...optionSymbols];
-              const restQuotes = await kiteInstance.getQuote(fetchSymbols);
+              const restQuotes = await withTimeout(
+                kiteInstance.getQuote(fetchSymbols),
+                8_000,
+                'kiteInstance.getQuote'
+              );
               lastRawQuotes = { ...(lastRawQuotes || {}), ...restQuotes };
               lastFetchTimestamp = new Date().toISOString();
               lastFetchError = null;
@@ -848,13 +878,17 @@ async function startServer() {
               console.log(`[DIAG] Trade bypass: Significant move (${marketEngine.getLatestTick()?.change?.toFixed(2)}%) but Strategy returned NEUTRAL. Reason: ${decision.biasReason}`);
             }
 
-            // Simple Auto-Exit if profit target or SL reached
-            if (state.pnl >= config.TARGET_RUPEES) {
-              console.log("[AUTO] Target hit. Exiting...");
-              await executionEngine.exitAll("Target Hit");
-            } else if (state.pnl <= -config.SL_RUPEES) {
-              console.log("[AUTO] SL hit. Exiting...");
-              await executionEngine.exitAll("SL Hit");
+            // Auto-Exit: use per-trade params when available, fall back to global config.
+            // This prevents the global config.TARGET_RUPEES / SL_RUPEES from fighting
+            // the per-trade premium-aware SL/Target set in execution.ts.
+            const _tradeTarget = state.params?.targetRupees   ?? config.TARGET_RUPEES;
+            const _tradeSL     = state.params?.stopLossRupees ?? config.SL_RUPEES;
+            if (state.pnl >= _tradeTarget && state.positions.length > 0) {
+              console.log(`[AUTO] Target hit (₹${state.pnl} >= ₹${_tradeTarget}). Exiting...`);
+              await executionEngine.exitAll('Target Hit');
+            } else if (state.pnl <= -_tradeSL && state.positions.length > 0) {
+              console.log(`[AUTO] SL hit (₹${state.pnl} <= -₹${_tradeSL}). Exiting...`);
+              await executionEngine.exitAll('SL Hit');
             }
 
             // Entry Logic
@@ -870,12 +904,14 @@ async function startServer() {
       console.error("[LOOP] Critical error:", err);
     } finally {
       isSyncing = false;
+      isSyncingStartedAt = 0;
       setTimeout(marketLoop, 1000);
     }
   }
 
-  // Start the loop
-  marketLoop();
+  // Start the loop — guarded so only ONE instance of the loop ever runs,
+  // even if multiple async init callbacks try to call marketLoop().
+  if (!loopStarted) { loopStarted = true; marketLoop(); }
 
   // Wire trade-exit callback so tradeLogsCache is invalidated the moment a trade closes
   executionEngine.onTradeExit = () => {
@@ -1688,10 +1724,10 @@ async function startServer() {
           }
         }
       }).catch(e => console.error("[OI] Baseline load failed:", e));
-      marketLoop();
+      if (!loopStarted) { loopStarted = true; marketLoop(); }
     }).catch(err => {
       console.error("[INIT] Background load failed:", err);
-      marketLoop();
+      if (!loopStarted) { loopStarted = true; marketLoop(); }
     });
 
   } catch (err) {
