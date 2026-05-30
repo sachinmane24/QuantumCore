@@ -1160,7 +1160,10 @@ async function startServer() {
 
   apiRouter.post("/config", async (req, res) => {
     updateConfig(req.body);
-    await saveRiskConfig(req.body);
+    // Save the FULL merged config (not just req.body which may be partial).
+    // Saving req.body was overwriting Firestore with a single-field object,
+    // wiping all other settings on the next server restart.
+    await saveRiskConfig(config);
     res.json({ success: true, config });
   });
 
