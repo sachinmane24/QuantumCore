@@ -202,6 +202,43 @@ class ExecutionEngine {
 
   // ─── Public entry point ───────────────────────────────────────────────────────
 
+  private calculateQty(
+    estimatedPremiumPerUnit: number,
+    signalScore: number,
+    vix: number,
+    consecutiveLosses: number,
+    isNakedLong: boolean,
+  ): number {
+    const LOT = config.LOT_SIZE;
+    const maxLotsCap = isNakedLong ? 3 : 5;
+
+    // Risk budget → max lots by SL
+    const riskBudget = (config.CAPITAL_BASE * config.MAX_RISK_PER_TRADE_PCT) / 100;
+    const slPerLot   = Math.max(1, estimatedPremiumPerUnit * LOT * 0.30);
+    const maxLotsByRisk = Math.floor(riskBudget / slPerLot);
+
+    // VIX scaling: < 13 → 1.0 | 13-17 → 0.75 | 17-22 → 0.50 | > 22 → 0.25
+    const vixFactor = vix < 13 ? 1.0 : vix < 17 ? 0.75 : vix < 22 ? 0.50 : 0.25;
+
+    // Score scaling: > 80 → 1.0 | 70-80 → 0.75 | 60-70 → 0.50 | < 60 → min 1 lot
+    const scoreFactor = signalScore > 80 ? 1.0 : signalScore > 70 ? 0.75 : signalScore > 60 ? 0.50 : 0;
+    if (scoreFactor === 0) return LOT;  // low conviction → 1 lot only
+
+    // Anti-martingale: 0 losses → 1.0 | 1 → 0.75 | 2+ → 0.50
+    const lossFactor = consecutiveLosses === 0 ? 1.0 : consecutiveLosses === 1 ? 0.75 : 0.50;
+
+    const rawLots = Math.max(1, Math.min(
+      maxLotsCap,
+      Math.max(1, Math.floor(maxLotsByRisk * vixFactor * scoreFactor * lossFactor))
+    ));
+    console.log(
+      `[LOT SIZE] Budget:₹${Math.round(riskBudget)} SL/lot:₹${Math.round(slPerLot)} ` +
+      `MaxByRisk:${maxLotsByRisk} VIX×${vixFactor} Score×${scoreFactor} Losses×${lossFactor} ` +
+      `→ ${rawLots} lot(s) / ${rawLots * LOT} qty`
+    );
+    return rawLots * LOT;
+  }
+
   async executeTrade(bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL', isManual: boolean = false) {
     return await this.withLock(async () => {
       await this.executeTradeInternal(bias, isManual);
@@ -303,8 +340,20 @@ class ExecutionEngine {
       }
     }
 
+    // Pre-estimate lot size + premium-based SL for accurate risk validation.
+    const _atmType   = bias === 'BULLISH' ? 'CE' : 'PE';
+    const _atmLTP    = getLTP(atmStrike, _atmType);
+    const _rStats    = riskEngine.getStats();
+    const _consLoss  = (_rStats as any).consecutiveLosses ?? 0;
+    const _isNaked   = score.strategyType === 'NAKED_BUY';
+    const computedQty = isManual
+      ? config.LOT_SIZE
+      : this.calculateQty(_atmLTP, score.total, marketEngine.getVix(), _consLoss, _isNaked);
+    const _estSL = Math.round(_atmLTP * computedQty * 0.30);
+    const _slForVal = _isNaked ? _estSL : derivation.stopLossRupees;
+
     // Risk Engine validation
-    const validation = riskEngine.validateEntry(config.LOT_SIZE, derivation.stopLossRupees);
+    const validation = riskEngine.validateEntry(computedQty, _slForVal);
     this.lastRiskValidation = validation;
 
     if (!validation.allowed) {
@@ -405,7 +454,7 @@ class ExecutionEngine {
           strike,
           type: bias === 'BULLISH' ? 'CE' : 'PE',
           entryPrice: getLTP(strike, bias === 'BULLISH' ? 'CE' : 'PE'),
-          qty: config.LOT_SIZE,
+          qty: computedQty,  // dynamic lot sizing
           side: 'BUY',
         });
         break;
@@ -650,9 +699,15 @@ class ExecutionEngine {
             `Target ₹${this.currentTradeParams.targetRupees}→₹${debitTarget} (2× ₹${Math.round(totalDebit)} debit), ` +
             `SL ₹${this.currentTradeParams.stopLossRupees}→₹${debitSL} (50% of premium)`
           );
-          // Always replace — never just tighten — so both SL and Target are
-          // premium-based regardless of what the ATR model produced.
-          this.currentTradeParams = { ...this.currentTradeParams, targetRupees: debitTarget, stopLossRupees: debitSL };
+          // Always replace. trailT1Rupees = 30% of debit = T1 breakeven trigger.
+          const trailT1 = Math.round(totalDebit * 0.30);
+          this.currentTradeParams = {
+            ...this.currentTradeParams,
+            targetRupees:      debitTarget,
+            stopLossRupees:    debitSL,
+            trailT1Rupees:     trailT1,
+            trailingSlTrigger: trailT1,
+          };
           this.currentActiveSL = -debitSL;
         }
       }
@@ -776,7 +831,7 @@ class ExecutionEngine {
         );
       }
 
-      riskEngine.updatePnL(this.pnl, this.activePositions);
+      riskEngine.updatePnL(this.pnl, this.activePositions, this.currentTradeParams?.stopLossRupees);
       this.calculatePortfolioGreeks();
       this.calculateCapitalDeployed();
 
@@ -904,8 +959,9 @@ class ExecutionEngine {
   private calculateCapitalDeployed() {
     if (this.activePositions.length === 0) {
       this.capitalDeployed = 0;
-      this.maxRisk = 0;
-      this.maxReward = 0;
+      this.maxRisk    = 0;
+      this.maxReward  = 0;
+      this.netPremium = 0;  // prevent stale ₹8 display when no position open
       return;
     }
 
@@ -940,12 +996,15 @@ class ExecutionEngine {
         this.maxRisk   = Math.round(netCredit > 0 ? width * primaryQty - netCredit : Math.abs(netCredit));
       }
     } else if (this.activePositions.length === 1) {
-      this.maxReward = this.activePositions.reduce(
-        (sum, p) => sum + (p.side === 'SELL' ? p.entryPrice * p.qty : 5000), 0
-      );
-      this.maxRisk = this.activePositions.reduce(
-        (sum, p) => sum + (p.side === 'BUY' ? p.entryPrice * p.qty : 1000 * p.qty), 0
-      );
+      const _p = this.activePositions[0];
+      if (_p.side === 'BUY') {
+        const prem = _p.entryPrice * _p.qty;
+        this.maxRisk   = this.currentTradeParams?.stopLossRupees ?? Math.round(prem * 0.30);
+        this.maxReward = this.currentTradeParams?.targetRupees   ?? Math.round(prem * 0.60);
+      } else {
+        this.maxRisk   = Math.round(_p.entryPrice * _p.qty * 3);
+        this.maxReward = Math.round(_p.entryPrice * _p.qty);
+      }
     }
   }
 

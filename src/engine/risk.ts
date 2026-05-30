@@ -54,7 +54,9 @@ class RiskEngine {
 
   private lastResetDate: string | null = null;
 
-  updatePnL(currentPnL: number, positions: Position[]) {
+  // tradeSL: the per-trade stop-loss amount from currentTradeParams (premium-based).
+  // Falls back to config.SL_RUPEES if not provided (e.g., on startup with no position).
+  updatePnL(currentPnL: number, positions: Position[], tradeSL?: number) {
     this.checkForDailyReset();
     this.stats.dailyPnL = currentPnL;
     
@@ -65,8 +67,11 @@ class RiskEngine {
     const drawdown = this.stats.peakPnLToday - currentPnL;
     this.stats.maxDrawdownToday = Math.max(this.stats.maxDrawdownToday, drawdown);
 
-    // Calculate Portfolio Heat
-    const totalRisk = positions.length * config.SL_RUPEES;
+    // Portfolio Heat: % of capital currently at risk in the open position.
+    // Use the per-trade SL amount (premium-based after our fix) so heat reflects
+    // actual worst-case loss, not the global config.SL_RUPEES placeholder.
+    const slAmount = (tradeSL != null && tradeSL > 0) ? tradeSL : config.SL_RUPEES;
+    const totalRisk = positions.length > 0 ? slAmount : 0;
     this.stats.portfolioHeat = Number(((totalRisk / config.CAPITAL_BASE) * 100).toFixed(2));
 
     this.calculateRiskScore(positions);
@@ -226,6 +231,13 @@ class RiskEngine {
     // Heat check
     if (this.stats.portfolioHeat > config.MAX_PORTFOLIO_HEAT) {
        return { allowed: false, reason: `Portfolio Heat (${this.stats.portfolioHeat}%) too high`, score: this.stats.riskScore };
+    }
+
+    // Safety score gate — block new entries when system health is critically low.
+    // Score < 30 means: maxDrawdown near limit AND heat high AND consecutive losses.
+    // The score is displayed on the Risk Core UI and now also gates entries.
+    if (this.stats.riskScore < 30) {
+      return { allowed: false, reason: `Safety Score critically low (${this.stats.riskScore}/100). Pausing entries for system health.`, score: this.stats.riskScore };
     }
 
     return { allowed: true, reason: null, score: this.stats.riskScore };

@@ -18,6 +18,9 @@ export interface TradeParams {
   pop?: number;
   maxProfit?: number;
   maxLoss?: number;
+  // Set for debit/naked longs: P&L at which SL moves to breakeven.
+  // = 30% of total debit paid (T1 level). Trail to B/E at T1, exit at T2 (targetRupees).
+  trailT1Rupees?: number;
 }
 
 class IntelligenceEngine {
@@ -188,6 +191,25 @@ class IntelligenceEngine {
   ): number {
     let sl = -params.stopLossRupees;
 
+    // ── Debit / naked long trail (3-stage) ──────────────────────────────────
+    // trailT1Rupees is set when the position is a debit/naked buy.
+    // T1 = 30% of total debit → SL moves to exact breakeven (₹0 P&L)
+    // T2 = targetRupees = 60% of total debit → exit triggered by updatePnL target check
+    // Between T1 and T2, SL stays at breakeven — can't lose money from that point.
+    if (params.trailT1Rupees != null && params.trailT1Rupees > 0) {
+      if (peakPnL >= params.targetRupees) {
+        // At or beyond T2: lock 80% of target as safety SL
+        // (normal exit fires first via target check; this is a backstop)
+        sl = Math.round(params.targetRupees * 0.80);
+      } else if (peakPnL >= params.trailT1Rupees) {
+        // Between T1 and T2: SL moves to breakeven — can't lose money now
+        sl = 0;
+      }
+      // Below T1: stays at -stopLossRupees (hard stop, 30% of premium)
+      return sl;
+    }
+
+    // ── Credit / spread trail (original 3-stage) ──────────────────────────
     // Stage 3: Move to 70% lock once 90% target reached
     if (peakPnL >= params.targetRupees * 0.90) {
       sl = params.targetRupees * 0.70;
@@ -196,7 +218,7 @@ class IntelligenceEngine {
     else if (peakPnL >= params.targetRupees * 0.60) {
       sl = params.targetRupees * 0.40;
     }
-    // Stage 1: Move to Break-even (locks in 15%) once 30% target reached
+    // Stage 1: Move to near-breakeven once 30% target reached
     else if (peakPnL >= params.targetRupees * 0.30) {
       sl = params.targetRupees * 0.15;
     }
