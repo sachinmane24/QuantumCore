@@ -1065,6 +1065,8 @@ async function startServer() {
       error: lastFetchError,
       dataSource: config.DATA_SOURCE,
       selectedExpiry,
+      // Movement prediction — cached from last marketLoop tick; zero extra compute cost
+      movementPrediction: strategyEngine.getLastMovementPrediction(),
     });
   });
 
@@ -1087,7 +1089,8 @@ async function startServer() {
       ...executionEngine.getState(),
       dataSource: config.DATA_SOURCE,
       executionMode: config.EXECUTION_MODE,
-      autoMode: config.AUTO_MODE
+      autoMode: config.AUTO_MODE,
+      movementPrediction: strategyEngine.getLastMovementPrediction(),
     });
   });
 
