@@ -3217,6 +3217,7 @@ export default function App() {
                 </div>
                 
                 {appConfig && (
+                  <>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     <div className="space-y-4">
                        <h4 className="text-[8px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Capital & Allocation</h4>
@@ -3311,6 +3312,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  </>
                 )}
 
                 {/* Risk Persistence Audit Table */}
